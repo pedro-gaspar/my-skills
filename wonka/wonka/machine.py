@@ -19,6 +19,12 @@ SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
 AUTO_DONE = ("xs", "s")  # Inbox tickets this small need no human approval
 
+
+def review_budget(t, max_rounds):
+    """Review rounds this ticket may use: the max_review_rounds setting, plus one per clean round that rebaked."""
+    return max_rounds + t.get("extra_rounds", 0)
+
+
 VALID = {
     "inbox": {"pending", "awaiting", "done"},
     "drafting": {"pending", "progress", "awaiting"},
