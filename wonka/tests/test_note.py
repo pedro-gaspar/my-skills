@@ -114,6 +114,28 @@ class NoteTest(unittest.TestCase):
         self.assertIn("Round C?", note.get_section(body, "questions"))
         self.assertEqual(body.count("## ✅ Answers"), 1)
 
+    def test_new_questions_archives_a_round_with_only_free_text(self):
+        cases = {
+            "under the question": ("- **Q1. Round A?**", "- **Q1. Round A?**\n    I'd use Postgres instead"),
+            "under an unticked Other": ("  - [ ] Other (write below)",
+                                        "  - [ ] Other (write below)\n    I'd use Postgres instead"),
+        }
+        for name, (old, new) in cases.items():
+            with self.subTest(name):
+                body = note.set_section("", "idea", "an idea")
+                body = note.set_section(body, "log", "> - event")
+                body = note.new_questions(body, note.render_questions([{"q": "Round A?", "options": ["a1", "a2"]}]))
+                body = body.replace(old, new)
+                self.assertNotIn("[x]", body)
+                body = note.new_questions(body, note.render_questions([{"q": "Round B?", "options": ["b1"]}]))
+                answers = note.get_section(body, "answers")
+                self.assertTrue(answers.startswith("### Round 1\n"))
+                self.assertIn("Round A?", answers)
+                self.assertIn("I'd use Postgres instead", answers)
+                open_round = note.get_section(body, "questions")
+                self.assertIn("Round B?", open_round)
+                self.assertNotIn("Round A?", open_round)
+
     def test_new_questions_replaces_an_unanswered_round(self):
         body = note.set_section("", "idea", "an idea")
         body = note.new_questions(body, note.render_questions([{"q": "Round A?", "options": ["a1"]}]))
@@ -121,6 +143,12 @@ class NoteTest(unittest.TestCase):
         self.assertIsNone(note.get_section(body, "answers"))
         self.assertNotIn("Round A?", body)
         self.assertIn("Round B?", note.get_section(body, "questions"))
+
+        body = body.replace("- **Q1. Round B?**", "- **Q1. Round B?**\n   \n\n\t")
+        body = note.new_questions(body, note.render_questions([{"q": "Round C?", "options": ["c1"]}]))
+        self.assertIsNone(note.get_section(body, "answers"))
+        self.assertNotIn("Round B?", body)
+        self.assertIn("Round C?", note.get_section(body, "questions"))
 
     def test_sections_replace_and_append(self):
         body = note.set_section("", "idea", "an idea")

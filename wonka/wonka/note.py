@@ -181,9 +181,10 @@ def render_questions(items):
 
 
 def new_questions(body, rendered):
-    """Open a new questions round; an answered previous round moves to the Answers history first."""
+    """Open a new questions round; an answered previous round (any tick or any free text) moves to the
+    Answers history first."""
     old = get_section(body, "questions")
-    if old and any(c for q in questions(old) for c, _ in q["options"]):
+    if old and (any(c for q in questions(old) for c, _ in q["options"]) or _free_text(old)):
         history = get_section(body, "answers") or ""
         n = len(re.findall(r"^### Round \d+", history, re.M)) + 1
         entry = f"### Round {n}\n{old.strip()}"
@@ -199,6 +200,12 @@ def questions(section):
         elif (m := _OPT.match(line)) and qs:
             qs[-1]["options"].append((m.group(1) != " ", m.group(2)))
     return qs
+
+
+def _free_text(section):
+    """True when the section holds a non-blank line that is neither a question nor an option: human text."""
+    return any(line.strip() and not _Q.match(line) and not _OPT.match(line)
+               for line in (section or "").splitlines())
 
 
 def all_recommended(section, skip=()):
