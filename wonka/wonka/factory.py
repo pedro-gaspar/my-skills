@@ -345,6 +345,7 @@ class Factory:
             qs.append({"q": note.DRAFT_Q, "options": ["Yes", "No"], "recommended": 0, "why": "; ".join(why["draft"]), "other": False})
         if qs:
             self.set_section(tid, "review-questions", note.render_questions(qs))
+            t["round_issues"] = len(issues)
             self.move(tid, ("reviewing", "awaiting"), "squirrels", f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: the squirrels have questions")
             return f"{tid}: review questions for a human"
         if issues:
@@ -353,8 +354,8 @@ class Factory:
         self.move(tid, ("shipped", "pending"), "wonka")
         return f"{tid}: clean review, off to ship"
 
-    def _back_to_baking(self, tid, why):
-        if self.ticket(tid)["review_round"] >= MAX_REVIEW_ROUNDS:
+    def _back_to_baking(self, tid, why, kill=True):
+        if kill and self.ticket(tid)["review_round"] >= MAX_REVIEW_ROUNDS:
             self.move(tid, KILLED, "wonka", f"Bad nut: {MAX_REVIEW_ROUNDS} review rounds without a clean bill, rolled away")
             return f"{tid}: killed after {MAX_REVIEW_ROUNDS} review rounds"
         self.move(tid, ("baking", "pending"), "wonka", why)
@@ -427,6 +428,7 @@ class Factory:
         elif last == ("reviewing", "awaiting"):
             sec = note.get_section(body, "review-questions")
             if note.all_answered(sec):
+                issues = t.pop("round_issues", 1)  # tickets that were already waiting keep the old path
                 if note.picked_yes(sec, note.CLOSE_Q):
                     self.move(tid, KILLED, "human", "Closed after review")
                     return f"{tid}: closed after review"
@@ -434,6 +436,14 @@ class Factory:
                     t["review_round"] = 0
                     self.move(tid, ("drafting", "pending"), "human", "Back to drafting after review")
                     return f"{tid}: back to drafting"
+                if not issues:
+                    if note.all_recommended(sec, skip=(note.CLOSE_Q, note.DRAFT_Q)):
+                        self.move(tid, ("reviewing", "done"), "human", "Review answers in, all as recommended: a good nut")
+                        self.move(tid, ("shipped", "pending"), "wonka")
+                        return f"{tid}: clean review answered, off to ship"
+                    return self._back_to_baking(
+                        tid, f"Review answers in, a clean round but the answers change the plan, back to baking "
+                             f"(round {t['review_round']}/{MAX_REVIEW_ROUNDS})", kill=False)
                 return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{MAX_REVIEW_ROUNDS})")
         elif last == ("shipped", "awaiting") and t["pr_url"]:
             pr = gh("pr", "view", t["pr_url"], "--json", "state", "-q", ".state")

@@ -132,6 +132,27 @@ def questions(section):
     return qs
 
 
+def all_recommended(section, skip=()):
+    """True when every question (except those whose text contains a string in `skip`) has only its
+    ⭐ recommended option ticked and no free text written under it."""
+    found, cur = False, None  # cur: {"ticked": bool, "ok": bool} for the current non-skipped question
+    for line in (section or "").splitlines():
+        if m := _Q.match(line):
+            if cur is not None and not (cur["ticked"] and cur["ok"]):
+                return False
+            found = True
+            cur = None if any(s in m.group(1) for s in skip) else {"ticked": False, "ok": True}
+        elif m := _OPT.match(line):
+            if cur is not None and m.group(1) != " ":
+                cur["ticked"] = True
+                cur["ok"] = cur["ok"] and "⭐ recommended" in m.group(2)
+        elif line.strip() and cur is not None:
+            cur["ok"] = False
+    if cur is not None and not (cur["ticked"] and cur["ok"]):
+        return False
+    return found
+
+
 def all_answered(section):
     qs = questions(section)
     return bool(qs) and all(any(c for c, _ in q["options"]) for q in qs)
