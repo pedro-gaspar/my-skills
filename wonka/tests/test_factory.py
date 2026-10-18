@@ -309,6 +309,38 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", events)
         self.assertEqual(self.state(tid), ("wontdo", "done"))
 
+    def test_deleted_note_with_dirty_worktree_does_not_wedge_the_tick(self):
+        tid = self.add()
+        self.to_ready(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        wt = Path(job["worktree"])
+        (wt / "scratch.txt").write_text("wip\n")
+        with self.f() as f:
+            path = f.path(tid)
+        path.unlink()
+
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertTrue(wt.exists())
+        with self.f() as f:
+            history = f.ticket(tid)["history"]
+        self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in history))
+        self.tick()
+
+    def test_one_unreadable_note_does_not_block_other_tickets(self):
+        a = self.add("Add a hello script")
+        b = self.add("Add a bye script")
+        with self.f() as f:
+            path = f.path(a)
+        path.unlink()
+        path.mkdir()
+        tick = self.tick()
+        self.assertTrue(any(e.startswith(f"{a}: ⚠️") for e in tick["events"]), tick["events"])
+        self.assertIn(b, [j["id"] for j in tick["jobs"]])
+        self.assertFalse(any("not a Wonka ticket" in e for e in tick["events"]))
+
     def test_baking_starts_from_the_latest_origin_base(self):
         tid = self.add()
         other = self.tmp / "other"
