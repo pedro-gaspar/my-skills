@@ -20,6 +20,12 @@ case "$1 $2" in
 esac
 """
 
+FAILING_GH = """#!/bin/sh
+echo "$@" >> "$WONKA_FAKE_PR_STATE.calls"
+echo "gh: HTTP 401: Bad credentials" >&2
+exit 1
+"""
+
 
 def sh(*cmd, cwd):
     return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
@@ -59,6 +65,9 @@ class FactoryTest(unittest.TestCase):
     def add(self, idea="Add a hello script", **kw):
         with self.f() as f:
             return f.add(idea, repo=str(self.repo), pr_repo="acme/app", **kw)
+
+    def set_gh(self, script):
+        (self.tmp / "gh").write_text(script)
 
     def tick(self):
         with self.f() as f:
@@ -584,6 +593,62 @@ class FactoryTest(unittest.TestCase):
                          f"{tid}: stuck, waiting for a human to tick Retry")
         self.assertEqual(self.ticket(tid)["retries"], before["retries"])
         self.assertEqual(self.state(tid), ("inbox", "pending"))
+
+    def test_failed_pr_is_retried_each_tick_then_stuck_until_a_human_ticks_retry(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+
+        self.set_gh(FAILING_GH)
+        tick = self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertTrue(any(e.startswith(f"{tid}: PR failed") for e in tick["events"]), tick["events"])
+        self.assertEqual(tick["stale"], [])
+        with self.f() as f:
+            self.assertEqual(f.ticket(tid)["retries"], 1)
+            self.assertNotIn("job_started_at", f.ticket(tid))
+        body = self.note(tid)[1]
+        self.assertIn("Retry 1/3", body)
+        self.assertIn("Bad credentials", body)
+
+        self.tick()
+        events = self.tick()["events"]
+        self.assertTrue(any("stuck after 3 tries" in e for e in events), events)
+        with self.f() as f:
+            self.assertTrue(f.ticket(tid).get("stuck"))
+        stuck = note.get_section(self.note(tid)[1], "stuck")
+        self.assertTrue(stuck.startswith("- [ ] Retry"), stuck)
+        self.assertIn("Bad credentials", stuck)
+        self.assertEqual(len(stuck.splitlines()), 1, "the Retry checkbox stays on one line")
+
+        calls = Path(f"{self.pr_state}.calls")
+        n = len(calls.read_text().splitlines())
+        self.tick()
+        self.assertEqual(len(calls.read_text().splitlines()), n, "a stuck ticket is not shipped")
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+
+        self.set_gh(FAKE_GH)
+        self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
+        tick = self.tick()
+        self.assertIn(f"{tid}: unstuck by a human", tick["events"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertIn("pull/7", self.note(tid)[1])
+
+    def test_missing_pr_repo_is_retried_too(self):
+        tid = self.add()
+        with self.f() as f:
+            f.ticket(tid)["pr_repo"] = None
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        events = self.tick()["events"]
+        self.assertTrue(any(e.startswith(f"{tid}: PR failed: no pr_repo") for e in events), events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        with self.f() as f:
+            self.assertEqual(f.ticket(tid)["retries"], 1)
 
     def test_deleted_and_foreign_notes(self):
         tid = self.add()

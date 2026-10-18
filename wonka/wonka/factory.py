@@ -405,9 +405,9 @@ class Factory:
                      "--title", f"{tid}: {meta.get('title', '')}",
                      "--body", pr_body(tid, meta, spec))
         except WonkaError as e:
-            self.log_event(tid, f"Could not open the PR: {e}")
-            t["job_started_at"] = _iso(now())
-            return f"{tid}: PR failed: {e}"
+            err = " ".join(str(e).split())
+            outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
+            return f"{tid}: PR failed: {err}; {outcome}"
         t["pr_url"] = out.splitlines()[-1]
         self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
@@ -522,20 +522,22 @@ class Factory:
                 "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_ref": self.base_ref(tid),
                 "review_round": t["review_round"]}
 
-    def retry(self, tid):
+    def retry(self, tid, why="the last job did not finish"):
         t, s = self.ticket(tid), self.state(tid)
         retries = t.get("retries", 0) + 1
+        why = " ".join(str(why).split())
+        why = why if len(why) <= 200 else why[:199] + "…"
         if s[1] == "progress":
             if s[0] == "reviewing":
                 t["review_round"] -= 1
                 t.pop("reports", None)
                 t.pop("finished", None)
-            self.move(tid, (s[0], "pending"), "wonka", f"Retry {retries}/{MAX_RETRIES}: the last job did not finish")
+            self.move(tid, (s[0], "pending"), "wonka", f"Retry {retries}/{MAX_RETRIES}: {why}")
         t.pop("job_started_at", None)
         t["retries"] = retries
         if retries >= MAX_RETRIES:
             t["stuck"] = True
-            self.set_section(tid, "stuck", f"- [ ] Retry (the last {retries} jobs did not finish: see ~/.wonka/factory.log)")
+            self.set_section(tid, "stuck", f"- [ ] Retry ({retries} tries failed, the last one: {why}. See ~/.wonka/factory.log)")
             notify(tid, "stuck: tick Retry when it's fixed")
             return f"{tid}: stuck after {retries} tries"
         return f"{tid}: back in the queue"
@@ -602,10 +604,10 @@ class Factory:
         jobs = []
         for k in self.live():
             t, s = self.ticket(k), self.state(k)
+            if t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
+                continue
             if s == ("shipped", "pending"):
                 events.append(self._safe(k, self.ship))
-            elif t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
-                continue
             elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
                     or (s == ("drafting", "progress") and t.get("resume")):
                 job = self._safe(k, self.start)
