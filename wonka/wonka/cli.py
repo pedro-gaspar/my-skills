@@ -161,8 +161,10 @@ def parser():
     s = sub.add_parser("init", help="point the factory at an Obsidian vault")
     s.add_argument("--vault", required=True)
     s.add_argument("--folder", default="wonka")
-    s.add_argument("--drafting", help="tickets drafted at the same time (default 1)")
-    s.add_argument("--baking", help="tickets baked at the same time (default 2)")
+    s.add_argument("--drafting", help="tickets the analyst works on at once; "
+                                      "tickets waiting on your answers don't count (default 1)")
+    s.add_argument("--baking", help="tickets the builder works on at once; "
+                                    "reviewing and shipped tickets don't count (default 2)")
     s.add_argument("--archive-days", help="days before Done tickets are archived (default 7)")
     s.add_argument("--stale-hours", help="hours before a running job is offered for retry (default 2)")
     s = sub.add_parser("config", help="show settings, or change one: wonka config wip.baking 3")
