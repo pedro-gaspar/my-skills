@@ -65,6 +65,13 @@ class CliTest(unittest.TestCase):
             "suggest": "draft", "why": "the spec missed the API",
             "followups": [{"title": "Cache lookups", "idea": "memoise the user lookup"}]})
 
+    def test_finished_needs_an_agent(self):
+        a = cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend"])
+        self.assertEqual((a.cmd, a.id, a.agent),
+                         ("finished", "WONKA-00001", "wonka:squirrel-backend"))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parser().parse_args(["finished", "WONKA-00001"])
+
     def test_agent_commands_never_need_json(self):
         """Claude Code blocks '{"' in background agents' Bash commands, so agent docs must not use it."""
         root = Path(cli.__file__).resolve().parent.parent

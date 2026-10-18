@@ -130,6 +130,8 @@ def run(a, f):
         print(f.report(a.id, a.squirrel, _report(a)))
     elif c == "retry":
         print(f.retry(a.id))
+    elif c == "finished":
+        print(f.finished(a.id, a.agent))
     elif c == "move":
         f.move(a.id, (_key(a.status, machine.STATUSES), _key(a.phase, machine.PHASES)), "human", a.why)
         print(f.summary(a.id))
@@ -211,6 +213,9 @@ def parser():
     s.add_argument("--stdin", action="store_true", help="read the whole report as JSON from stdin instead")
     s = sub.add_parser("retry", help="give a stuck job back to the queue")
     s.add_argument("id")
+    s = sub.add_parser("finished", help="manager: an agent finished; retry only if it left no result")
+    s.add_argument("id")
+    s.add_argument("--agent", required=True, help="the agent dispatched, e.g. wonka:squirrel-backend")
     s = sub.add_parser("move", help="a manual move, still checked by the state machine")
     s.add_argument("id")
     s.add_argument("status")
