@@ -85,8 +85,7 @@ class FactoryTest(unittest.TestCase):
         jobs = self.tick()["jobs"]
         self.assertEqual([j["job"] for j in jobs if j["id"] == tid], ["draft"])
         with self.f() as f:
-            f.plan_path(tid).parent.mkdir(parents=True, exist_ok=True)
-            f.plan_path(tid).write_text("# plan\n")
+            f.write_plan(tid, "# plan\n")
             f.set_section(tid, "spec", "Add hello.sh")
             f.drafted(tid, size, list(reviewers))
         self.assertEqual(self.state(tid), ("ready", "pending"))
@@ -113,7 +112,7 @@ class FactoryTest(unittest.TestCase):
     def test_xs_ticket_goes_from_inbox_to_archive(self):
         tid = self.add()
         self.assertEqual(tid, "WONKA-00001")
-        self.assertEqual(self.tick()["jobs"][0]["agents"], ["grandpa-joe"])
+        self.assertEqual(self.tick()["jobs"][0]["agents"], ["wonka:grandpa-joe"])
         self.to_ready(tid, reviewers=("architect", "security"))
         self.assertIn("[[WONKA-00001-plan]]", note.get_section(self.note(tid)[1], "spec"))
 
@@ -121,7 +120,7 @@ class FactoryTest(unittest.TestCase):
         job = self.review(tid, architect={"verdict": "good nut"},
                           security={"verdict": "bad nut", "issues": ["hello.sh:1: no shebang → add one"],
                                     "followups": [{"title": "Add a bye script", "idea": "bye.sh"}]})
-        self.assertEqual(job["agents"], ["squirrel-architect", "squirrel-security"])
+        self.assertEqual(job["agents"], ["wonka:squirrel-architect", "wonka:squirrel-security"])
         self.assertEqual(self.state(tid), ("baking", "pending"))
         self.assertEqual(self.state("WONKA-00002"), ("inbox", "pending"))
         with self.f() as f:
@@ -140,13 +139,19 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "done"))
         self.assertFalse(wt.exists())
-        meta = self.note(tid)[0]
-        self.assertEqual((meta["status"], meta["sub-status"]), ("🛗-Shipped", "🌟-Done"))
+        meta, body = self.note(tid)
+        self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
+        self.assertTrue(body.startswith("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7."))
+        self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
+        self.assertEqual(body.count("> [!"), 2, "one banner, one log, nothing piled up")
 
         later = factory.now() + dt.timedelta(days=8)
         with mock.patch.object(factory, "now", lambda: later):
             self.assertIn(f"{tid}: archived", self.tick()["events"])
-        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive" / f"{tid}.md").exists())
+        archive = Path(self.cfg["vault"]) / "wonka/archive"
+        self.assertTrue((archive / f"{tid}.md").exists())
+        self.assertTrue((archive / f"{tid}-plan.md").exists(), "plans are archived with their tickets")
+        self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-plan.md").exists())
 
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
@@ -164,6 +169,10 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"], "recommended": 0}])
         self.assertEqual(self.state(tid), ("inbox", "awaiting"))
+        body = self.note(tid)[1]
+        self.assertTrue(body.startswith("> [!question] 🙋 Your turn: approve it\n> Grandpa Joe sized it **m**"))
+        self.assertIn("· grandpa-joe · ✉️-Inbox 🕰️-Pending → ✉️-Inbox 🙋-Awaiting-Human", body)
+        self.assertGreater(body.index("## 🎩 Factory log"), body.index("## ❓ Questions"), "log stays last")
         self.edit_note(tid, lambda t: t.replace("- [ ] Approve", "- [x] Approve"))
         self.tick()
         self.assertEqual(self.state(tid), ("inbox", "awaiting"), "a question is still open")
@@ -245,6 +254,44 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.retry(tid)
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["bake"])
+
+    def test_three_failed_jobs_get_stuck_until_a_human_ticks_retry(self):
+        tid = self.add()
+        self.tick()
+        for _ in range(3):
+            with self.f() as f:
+                msg = f.retry(tid)
+        self.assertIn("stuck", msg)
+        self.assertEqual(self.tick()["jobs"], [], "stuck tickets get no jobs")
+        self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
+        tick = self.tick()
+        self.assertIn(f"{tid}: unstuck by a human", tick["events"])
+        self.assertEqual([j["id"] for j in tick["jobs"]], [tid])
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+
+    def test_deleted_and_foreign_notes(self):
+        tid = self.add()
+        with self.f() as f:
+            path = f.path(tid)
+        path.unlink()
+        (path.parent / "my scribble.md").write_text("hi\n")
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
+        self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", events)
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+
+    def test_baking_starts_from_the_latest_origin_base(self):
+        tid = self.add()
+        other = self.tmp / "other"
+        sh("git", "clone", "-q", "-b", "main", str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / "new.txt").write_text("upstream\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "upstream", cwd=other)
+        sh("git", "push", "-q", "origin", "main", cwd=other)
+        self.to_ready(tid)
+        job = self.tick()["jobs"][0]
+        self.assertEqual(job["base_ref"], "origin/main")
+        self.assertTrue((Path(job["worktree"]) / "new.txt").exists())
 
 
 if __name__ == "__main__":

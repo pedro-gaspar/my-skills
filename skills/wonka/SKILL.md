@@ -11,13 +11,20 @@ You run the factory floor. You never write product code, specs or reviews yourse
 or `~/.wonka/golden_ticket_status.json` by hand. Everything goes through the `wonka` CLI; its state machine rejects
 illegal moves, so if a command fails, report the error instead of working around it.
 
-CLI: `"${CLAUDE_PLUGIN_ROOT}/bin/wonka"` (also linked as `wonka` in `~/.local/bin` after init).
+CLI: `wonka` (the plugin's `bin/` is on your Bash PATH; it's also linked into `~/.local/bin` for the terminal).
 
 Arguments: `$ARGUMENTS`
 
 ## init
-`wonka init --vault <vault path>` (default folder `wonka`). Then tell the user to open `<vault>/wonka/Wonka.base`
-in Obsidian 1.14+.
+1. Ask the user (AskUserQuestion, one call) for: the Obsidian vault path (offer vaults found with
+   `find ~ -maxdepth 4 -name .obsidian -type d`), tickets drafted at once (recommend 1), tickets baked at once
+   (recommend 2) and days before Done tickets are archived (recommend 7).
+2. `wonka init --vault <path> --drafting <n> --baking <n> --archive-days <n>`, then `wonka doctor`; show both.
+3. Tell the user to open `<vault>/wonka/Wonka.base` in Obsidian 1.14+, and to apply any permission snippet the
+   doctor prints. Settings can be changed any time with `wonka config <key> <value>`.
+
+## config
+`wonka config` shows the settings; `wonka config wip.baking 3` changes one.
 
 ## add
 `wonka add "<idea, verbatim>"` from the repo the ticket is for. Pass `--repo <path>`, `--pr-repo owner/name`,
@@ -29,16 +36,18 @@ in Obsidian 1.14+.
 ## tick
 1. Run `wonka tick`. It returns JSON: `events` (what changed), `jobs` (already claimed for you), `awaiting_human`,
    `stale`.
-2. For each job, dispatch its agents **in the background** (Agent tool, `run_in_background: true`), all jobs in one
-   message. Give each agent the job JSON verbatim plus one line naming its task:
-   - `triage` → `grandpa-joe`
-   - `draft` → `charlie`
-   - `bake` → `oompa-loompa`
-   - `review` → one agent per name in `agents` (e.g. `squirrel-architect`, `squirrel-security`)
+2. For each job, dispatch one background agent per name in its `agents` list (Agent tool, `subagent_type` = that
+   name exactly, e.g. `wonka:charlie`, `run_in_background: true`), all in one message. The prompt is the job JSON
+   verbatim plus one line: `Work golden ticket <id> (<job>).`
 3. When an agent finishes, check `wonka show <id>`. If the ticket did not move on (still In-Progress, or a squirrel
    never reported), run `wonka retry <id>` and say so.
 4. For each `stale` id with no agent of yours still running, run `wonka retry <id>`.
-5. Reply with a short factory report: events, jobs dispatched, and tickets awaiting a human (🙋, they tick
-   checkboxes in the note).
+5. Reply with a short factory report, Wonka-style: open with one line of film flavour (🎩🍫🎫🐿️), then events,
+   jobs dispatched, and tickets awaiting a human (🙋 they tick checkboxes in the note). Keep the facts plain; the
+   humour is one line, never in the way. Nothing happened? Say so in one line ("🍫 All quiet on the chocolate
+   river.").
 
-Run the factory continuously with `/loop /wonka tick`.
+## Under /loop
+Run the factory continuously with `/loop /wonka tick`. Pace yourself: when agents are running you are woken when they
+finish, so schedule a long fallback (~1800s). When nothing is running, wake in ~1200s so ticked checkboxes and merged
+PRs are picked up.

@@ -1,6 +1,8 @@
 """~/.wonka: config, the golden ticket status JSON (locked, atomic) and paths."""
 
 import contextlib
+import copy
+import datetime
 import fcntl
 import json
 import os
@@ -10,10 +12,29 @@ STATE_FILE = "golden_ticket_status.json"
 DEFAULT_CONFIG = {
     "vault": None,
     "folder": "wonka",
-    "wip": {"drafting": 1, "baking": 2},
-    "archive_after_days": 7,
-    "stale_hours": 2,
+    "wip": {"drafting": 1, "baking": 2},  # tickets worked on at the same time
+    "archive_after_days": 7,  # Done tickets (and their plans) move to archive/ after this
+    "stale_hours": 2,  # a job running longer than this is offered for retry
 }
+SETTINGS = {  # wonka config <key> <value>
+    "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
+}
+
+
+def set_setting(cfg, key, raw):
+    if key not in SETTINGS:
+        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}")
+    try:
+        value = SETTINGS[key](raw)
+    except ValueError:
+        raise WonkaError(f"{key} must be a number")
+    if value < (1 if key.startswith("wip.") else 0):
+        raise WonkaError(f"{key} is too small")
+    *parents, leaf = key.split(".")
+    node = cfg
+    for k in parents:
+        node = node.setdefault(k, {})
+    node[leaf] = value
 
 
 class WonkaError(Exception):
@@ -28,7 +49,9 @@ def load_config():
     path = home() / "config.json"
     if not path.exists():
         raise WonkaError("No ~/.wonka/config.json. Run: wonka init --vault <obsidian vault>")
-    return {**DEFAULT_CONFIG, **json.loads(path.read_text())}
+    cfg = {**copy.deepcopy(DEFAULT_CONFIG), **json.loads(path.read_text())}
+    cfg["wip"] = {**DEFAULT_CONFIG["wip"], **cfg["wip"]}
+    return cfg
 
 
 def save_config(cfg):
@@ -41,7 +64,7 @@ def board(cfg):
 
 
 def tickets_dir(cfg):
-    return board(cfg) / "tickets"
+    return board(cfg) / "golden-tickets"
 
 
 def plans_dir(cfg):
@@ -54,6 +77,16 @@ def archive_dir(cfg):
 
 def worktrees_dir():
     return home() / "worktrees"
+
+
+def log(*lines):
+    """One line per event in ~/.wonka/factory.log, the place to look when a ticket gets stuck."""
+    if not lines:
+        return
+    home().mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    with open(home() / "factory.log", "a") as fh:
+        fh.writelines(f"{stamp} {line}\n" for line in lines)
 
 
 @contextlib.contextmanager

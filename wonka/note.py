@@ -3,7 +3,7 @@
 import json
 import re
 
-FIELDS = ("id", "title", "status", "sub-status", "size", "jira")
+FIELDS = ("id", "title", "status", "phase", "size", "jira")
 
 HEADINGS = {
     "idea": "💡 Idea",
@@ -12,6 +12,8 @@ HEADINGS = {
     "spec": "📜 Spec",
     "toobig": "🫐 Too big",
     "review-questions": "🐿️ Review Questions",
+    "stuck": "🎩 Stuck",
+    "log": "🎩 Factory log",
 }
 
 CLOSE_Q = "🫐 Close this ticket?"
@@ -20,6 +22,11 @@ DRAFT_Q = "🧪 Send it back to Drafting?"
 _Q = re.compile(r"^- \*\*(.+?)\*\*")
 _OPT = re.compile(r"^\s+- \[([ xX])\] (.*)$")
 _APPROVED = re.compile(r"^- \[[xX]\] Approve", re.M)
+_RETRY = re.compile(r"^- \[[xX]\] Retry", re.M)
+
+
+class Raw(str):
+    """A frontmatter entry Wonka doesn't own (e.g. a tags list), kept byte for byte."""
 
 
 def read(path):
@@ -28,17 +35,21 @@ def read(path):
     if text.startswith("---\n"):
         end = text.find("\n---", 4)
         if end != -1:
+            key = None
             for line in text[4:end].splitlines():
-                key, sep, value = line.partition(":")
-                if sep and not line.startswith((" ", "-", "#")):
-                    meta[key.strip()] = _unquote(value.strip())
+                k, sep, value = line.partition(":")
+                if sep and not line.startswith((" ", "\t", "-", "#")):
+                    key = k.strip()
+                    meta[key] = _unquote(value.strip()) if key in FIELDS else Raw(line)
+                elif key and key not in FIELDS:
+                    meta[key] = Raw(meta[key] + "\n" + line)
             body = text[end + 4:].lstrip("\n")
     return meta, body
 
 
 def write(path, meta, body):
-    keys = list(FIELDS) + [k for k in meta if k not in FIELDS]
-    lines = [f"{k}: {_quote(meta.get(k))}".rstrip() for k in keys if k in meta or k in FIELDS]
+    lines = [f"{k}: {_quote(meta.get(k))}".rstrip() for k in FIELDS]
+    lines += [v if isinstance(v, Raw) else f"{k}: {_quote(v)}".rstrip() for k, v in meta.items() if k not in FIELDS]
     path.write_text("---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n")
 
 
@@ -71,11 +82,15 @@ def get_section(body, key):
 
 
 def set_section(body, key, content):
+    """Replace a section in place, or add it at the end (but always above the factory log)."""
     heading = HEADINGS.get(key, key)
     block = f"## {heading}\n{content.strip()}\n\n"
     b = _bounds(body, heading)
     if b:
         return body[:b[0]] + block + body[b[1]:].lstrip("\n")
+    log = _bounds(body, HEADINGS["log"])
+    if log:
+        return body[:log[0]] + block + body[log[0]:]
     return body.rstrip("\n") + "\n\n" + block
 
 
@@ -84,9 +99,12 @@ def drop_section(body, key):
     return body[:b[0]] + body[b[1]:].lstrip("\n") if b else body
 
 
-def add_note(body, line):
-    """One-line factory notes sit in a blockquote above the first section."""
-    return f"> 🎩 {line}\n\n" + body
+def set_banner(body, callout):
+    """The banner is the callout above the first section; it is replaced wholesale."""
+    first = re.search(r"^## ", body, re.M)
+    head = body[:first.start()] if first else body
+    kept = "\n".join(line for line in head.splitlines() if not line.startswith(">")).strip()
+    return callout + "\n\n" + (kept + "\n\n" if kept else "") + (body[first.start():] if first else "")
 
 
 def render_questions(items):
@@ -128,3 +146,7 @@ def picked_yes(section, question):
 
 def approved(section):
     return bool(section and _APPROVED.search(section))
+
+
+def approved_retry(section):
+    return bool(section and _RETRY.search(section))

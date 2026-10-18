@@ -22,8 +22,8 @@ class MachineTest(unittest.TestCase):
         self.assertEqual(machine.parse("🐿️-Reviewing", machine.STATUSES), "reviewing")
         self.assertEqual(machine.parse("🐿-Reviewing", machine.STATUSES), "reviewing")
         self.assertEqual(machine.parse("Wont-Do", machine.STATUSES), "wontdo")
-        self.assertEqual(machine.parse("awaiting", machine.SUBS), "awaiting")
-        self.assertIsNone(machine.parse("Done-ish", machine.SUBS))
+        self.assertEqual(machine.parse("awaiting", machine.PHASES), "awaiting")
+        self.assertIsNone(machine.parse("Done-ish", machine.PHASES))
 
 
 if __name__ == "__main__":

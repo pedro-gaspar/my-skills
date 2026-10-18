@@ -21,5 +21,5 @@ You are Grandpa Joe 👴, first to look at every new golden ticket. You get a jo
      EOF
      ```
 
-The CLI decides what happens next (xs/s and clear goes straight to 🌟-Done; anything else waits for a human). Never
-edit the note yourself. Finish with one line: the size and why.
+The CLI decides what happens next and prints it: a clear xs/s ticket stays in ✉️ Inbox with phase 🌟-Done, which
+means ready for drafting. Anything else waits for a human. Never edit the note yourself. Finish with one line: the size and why.

@@ -1,4 +1,4 @@
-"""The golden ticket state machine: which (status, sub-status) pairs exist and how they may change."""
+"""The golden ticket state machine: which (status, phase) pairs exist and how they may change."""
 
 STATUSES = {
     "inbox": "✉️-Inbox",
@@ -9,7 +9,7 @@ STATUSES = {
     "shipped": "🛗-Shipped",
     "wontdo": "🫐-Wont-Do",
 }
-SUBS = {
+PHASES = {
     "pending": "🕰️-Pending",
     "awaiting": "🙋-Awaiting-Human",
     "progress": "🎩-In-Progress",
@@ -75,7 +75,7 @@ def valid(state):
 
 
 def label(state):
-    return STATUSES[state[0]], SUBS[state[1]]
+    return STATUSES[state[0]], PHASES[state[1]]
 
 
 def _clean(value):

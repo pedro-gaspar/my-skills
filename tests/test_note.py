@@ -6,15 +6,24 @@ from wonka import note
 
 
 class NoteTest(unittest.TestCase):
-    def test_frontmatter_round_trip_keeps_unknown_keys_and_quotes(self):
+    def test_frontmatter_round_trip_quotes_titles(self):
         path = Path(tempfile.mkdtemp()) / "t.md"
-        meta = {"id": "WONKA-00001", "title": "Fix: the thing", "status": "✉️-Inbox", "sub-status": "🕰️-Pending",
-                "size": "s", "jira": "", "tags": "x"}
+        meta = {"id": "WONKA-00001", "title": "Fix: the thing", "status": "✉️-Inbox", "phase": "🕰️-Pending",
+                "size": "s", "jira": ""}
         note.write(path, meta, "## 💡 Idea\nhello\n")
         back, body = note.read(path)
         self.assertEqual(back, meta)
         self.assertIn('title: "Fix: the thing"', path.read_text())
         self.assertEqual(body, "## 💡 Idea\nhello\n")
+
+    def test_frontmatter_keeps_obsidian_lists_byte_for_byte(self):
+        path = Path(tempfile.mkdtemp()) / "t.md"
+        text = "---\nid: WONKA-00001\ntitle: T\nstatus: ✉️-Inbox\nphase: 🕰️-Pending\nsize: s\njira:\ntags:\n  - a\n  - b\ncssclasses: wide\n---\nbody\n"
+        path.write_text(text)
+        meta, body = note.read(path)
+        meta["size"] = "m"
+        note.write(path, meta, body)
+        self.assertEqual(path.read_text(), text.replace("size: s", "size: m"))
 
     def test_sections_replace_and_append(self):
         body = note.set_section("", "idea", "an idea")
@@ -39,9 +48,11 @@ class NoteTest(unittest.TestCase):
         self.assertTrue(note.picked_yes(sec, note.CLOSE_Q))
         self.assertFalse(note.picked_yes(sec, note.DRAFT_Q))
 
-    def test_approval(self):
+    def test_approval_and_retry_checkboxes(self):
         self.assertFalse(note.approved("- [ ] Approve (size m)"))
         self.assertTrue(note.approved("- [x] Approve (size m)"))
+        self.assertFalse(note.approved_retry("- [ ] Retry"))
+        self.assertTrue(note.approved_retry("- [X] Retry (stuck)"))
 
 
 if __name__ == "__main__":

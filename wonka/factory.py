@@ -7,12 +7,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import machine, note, store
+from . import banner, machine, note, store
 from .machine import KILLED
 from .store import WonkaError
 
 SQUIRRELS = ("architect", "backend", "frontend", "security")
 MAX_REVIEW_ROUNDS = 3
+MAX_RETRIES = 3
 
 
 def now():
@@ -67,8 +68,12 @@ def repo_info(path):
     return top, base, origin
 
 
+def _ref_exists(repo, ref):
+    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo, capture_output=True).returncode == 0
+
+
 def fmt(state):
-    return "/".join(machine.label(state)) if machine.valid(state) else "/".join(map(str, state))
+    return " · ".join(machine.label(state)) if machine.valid(state) else "/".join(map(str, state))
 
 
 def notify(tid, title):
@@ -100,11 +105,25 @@ class Factory:
         return note.read(self.path(tid))
 
     def write(self, tid, meta, body):
+        """Every write re-renders the banner and the factory log from the JSON state."""
+        t = self.ticket(tid)
+        body = note.set_banner(body, banner.render(tid, t, meta, self.cfg))
+        body = note.set_section(body, "log", banner.log(t))
         note.write(self.path(tid), meta, body)
+
+    def summary(self, tid):
+        """What a human or agent should read after a command: where the ticket is and what comes next."""
+        return f"{tid}: {fmt(self.state(tid))}: {banner.headline(tid, self.ticket(tid), self.read(tid)[0], self.cfg)}"
+
+    def log_event(self, tid, why, by="wonka"):
+        self.ticket(tid)["history"].append({"at": _iso(now()), "by": by, "why": why})
+        store.log(f"{tid} {by}: {why}")
+        meta, body = self.read(tid)
+        self.write(tid, meta, body)
 
     def state(self, tid):
         lv = self.ticket(tid)["last_valid"]
-        return lv["status"], lv["sub_status"]
+        return lv["status"], lv["phase"]
 
     def expect(self, tid, *states):
         if self.state(tid) not in states:
@@ -114,14 +133,19 @@ class Factory:
         t, src = self.ticket(tid), self.state(tid)
         if not machine.allowed(src, dst):
             raise WonkaError(f"{tid}: {fmt(src)} → {fmt(dst)} is not a legal move")
-        meta, body = self.read(tid)
-        meta["status"], meta["sub-status"] = machine.label(dst)
-        self.write(tid, meta, note.add_note(body, why) if why else body)
-        t["last_valid"] = {"status": dst[0], "sub_status": dst[1]}
-        t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by})
+        t["last_valid"] = {"status": dst[0], "phase": dst[1]}
+        t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
+                             **({"why": why} if why else {})})
         t.pop("job_started_at", None)
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             t["entered_done_at"] = _iso(now())
+        meta, body = self.read(tid)
+        meta["status"], meta["phase"] = machine.label(dst)
+        self.write(tid, meta, body)
+        store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
+        if by != "wonka":
+            t.pop("retries", None)
+        if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             self.drop_worktree(tid)
         if dst[1] == "awaiting":
             notify(tid, meta.get("title", ""))
@@ -136,13 +160,13 @@ class Factory:
         self.db["next_id"] += 1
         title = title or idea.strip().splitlines()[0][:60]
         meta = {"id": tid, "title": title, "size": size or "", "jira": jira or ""}
-        meta["status"], meta["sub-status"] = machine.label(("inbox", "pending"))
+        meta["status"], meta["phase"] = machine.label(("inbox", "pending"))
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
             "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
             "review_round": 0, "parent": parent, "children": [],
-            "last_valid": {"status": "inbox", "sub_status": "pending"},
+            "last_valid": {"status": "inbox", "phase": "pending"},
             "created_at": _iso(now()), "history": [],
         }
         self.write(tid, meta, note.set_section("", "idea", idea))
@@ -170,10 +194,10 @@ class Factory:
         meta["size"] = size
         if title:
             meta["title"] = title
-        if questions:
-            body = note.set_section(body, "questions", note.render_questions(questions))
         if size not in machine.AUTO_DONE:
             body = note.set_section(body, "approval", f"- [ ] Approve (size **{size}**: tick to send it to Drafting)")
+        if questions:
+            body = note.set_section(body, "questions", note.render_questions(questions))
         self.write(tid, meta, body)
         if size in machine.AUTO_DONE and not questions:
             self.move(tid, ("inbox", "done"), "grandpa-joe")
@@ -192,7 +216,13 @@ class Factory:
         self.move(tid, ("drafting", "awaiting"), "charlie", "Charlie has questions: tick an answer for each")
 
     def plan_path(self, tid):
-        return store.plans_dir(self.cfg) / f"{tid}-plan.md"
+        folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
+        return folder(self.cfg) / f"{tid}-plan.md"
+
+    def write_plan(self, tid, text):
+        self.expect(tid, ("drafting", "progress"))
+        self.plan_path(tid).parent.mkdir(parents=True, exist_ok=True)
+        self.plan_path(tid).write_text(text.rstrip("\n") + "\n")
 
     def drafted(self, tid, size, reviewers=()):
         self.expect(tid, ("drafting", "progress"))
@@ -212,7 +242,7 @@ class Factory:
             raise WonkaError(f"unknown reviewers {bad}; pick from {', '.join(SQUIRRELS)}")
         plan = self.plan_path(tid)
         if not plan.exists():
-            raise WonkaError(f"write the detailed plan to {plan} first")
+            raise WonkaError(f"write the detailed plan first: wonka plan {tid} < plan.md")
         spec = note.get_section(body, "spec")
         if not spec:
             raise WonkaError(f"add the Spec first: wonka section {tid} spec < spec.md")
@@ -232,13 +262,23 @@ class Factory:
         path = store.worktrees_dir() / t["project"] / tid
         branch = t["branch"] or f"wonka/{tid}-{slug(title)}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        exists = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
-                                cwd=t["repo"], capture_output=True).returncode == 0
-        if exists:
+        if _ref_exists(t["repo"], f"refs/heads/{branch}"):
             git("worktree", "add", str(path), branch, cwd=t["repo"])
         else:
-            git("worktree", "add", "-b", branch, str(path), t["base_branch"], cwd=t["repo"])
+            start = t["base_branch"]
+            try:
+                git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
+                if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
+                    start = f"origin/{t['base_branch']}"
+            except WonkaError:
+                pass  # offline or no origin: bake from the local base branch
+            git("worktree", "add", "--no-track", "-b", branch, str(path), start, cwd=t["repo"])
+            t["base_ref"] = start
         t["worktree"], t["branch"] = str(path), branch
+
+    def base_ref(self, tid):
+        t = self.ticket(tid)
+        return t.get("base_ref") or t["base_branch"]
 
     def drop_worktree(self, tid):
         t = self.ticket(tid)
@@ -248,8 +288,7 @@ class Factory:
             try:
                 git("worktree", "remove", t["worktree"], cwd=t["repo"])
             except WonkaError as e:
-                meta, body = self.read(tid)
-                self.write(tid, meta, note.add_note(body, f"Worktree kept, it has local changes: {t['worktree']} ({e})"))
+                self.log_event(tid, f"Worktree kept, it has local changes: {t['worktree']} ({e})")
                 return
         t["worktree"] = None
 
@@ -258,7 +297,7 @@ class Factory:
         t = self.ticket(tid)
         if git("status", "--porcelain", cwd=t["worktree"]):
             raise WonkaError("the worktree has uncommitted changes: commit them first")
-        if git("rev-list", "--count", f"{t['base_branch']}..HEAD", cwd=t["worktree"]) == "0":
+        if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
             raise WonkaError(f"no commits on {t['branch']} yet")
         self.move(tid, ("baking", "done"), "oompa-loompa")
         self.move(tid, ("reviewing", "pending"), "wonka")
@@ -327,12 +366,12 @@ class Factory:
             head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
             meta, body = self.read(tid)
             spec = (note.get_section(body, "spec") or note.get_section(body, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
-            out = gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
+            out = gh("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
+                     "--json", "url", "-q", ".[0].url") or gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
                      "--title", f"{tid}: {meta.get('title', '')}",
                      "--body", f"🎫 **{tid}**\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory")
         except WonkaError as e:
-            meta, body = self.read(tid)
-            self.write(tid, meta, note.add_note(body, f"Could not open the PR: {e}"))
+            self.log_event(tid, f"Could not open the PR: {e}")
             t["job_started_at"] = _iso(now())
             return f"{tid}: PR failed: {e}"
         t["pr_url"] = out.splitlines()[-1]
@@ -345,18 +384,29 @@ class Factory:
         """Put illegal board edits back and act on ticked checkboxes and merged PRs."""
         t = self.ticket(tid)
         if not self.path(tid).exists():
-            return f"{tid}: note is missing"
+            src = self.state(tid)
+            t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "done"}, True, True
+            t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/done", "by": "human"})
+            self.drop_worktree(tid)
+            return f"{tid}: note was deleted, ticket dropped"
         meta, body = self.read(tid)
-        seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("sub-status"), machine.SUBS))
+        seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("phase"), machine.PHASES))
         last = self.state(tid)
         if seen != last:
             if seen[0] == "wontdo" and last != KILLED:
                 self.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
                 return f"{tid}: killed by a human"
-            shown = f"{meta.get('status')}/{meta.get('sub-status')}"
-            meta["status"], meta["sub-status"] = machine.label(last)
-            self.write(tid, meta, note.add_note(body, f"Reverted {shown}: not a legal move, back to {fmt(last)}"))
+            shown = f"{meta.get('status')}/{meta.get('phase')}"
+            meta["status"], meta["phase"] = machine.label(last)
+            why = f"Reverted {shown}: not a legal move, back to {fmt(last)}"
+            t["history"].append({"at": _iso(now()), "by": "wonka", "why": why})
+            store.log(f"{tid} wonka: {why}")
+            self.write(tid, meta, body)
             return f"{tid}: reverted illegal {shown}"
+        if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
+            t.pop("stuck"), t.pop("retries", None)
+            self.write(tid, meta, note.drop_section(body, "stuck"))
+            return f"{tid}: unstuck by a human"
         if last == ("inbox", "awaiting"):
             appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
             if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
@@ -394,10 +444,13 @@ class Factory:
             return None
         if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
             return None
-        src = self.path(tid)
+        src, plan = self.path(tid), self.plan_path(tid)
         store.archive_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         t["archived"] = True
         shutil.move(src, self.path(tid))
+        if plan.exists():
+            shutil.move(plan, self.plan_path(tid))
+            t["plan"] = str(self.plan_path(tid))
         return f"{tid}: archived"
 
     def start(self, tid):
@@ -410,6 +463,7 @@ class Factory:
             self.ensure_worktree(tid)
             self.move(tid, ("baking", "progress"), "wonka")
         elif s == ("reviewing", "pending"):
+            self.ensure_worktree(tid)
             t["review_round"] += 1
             t["reports"] = {}
             self.move(tid, ("reviewing", "progress"), "wonka")
@@ -417,18 +471,27 @@ class Factory:
         t["job_started_at"] = _iso(now())
         agents = {"triage": ["grandpa-joe"], "draft": ["charlie"], "bake": ["oompa-loompa"],
                   "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]]}[job]
+        agents = [f"wonka:{a}" for a in agents]
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
-                "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_branch": t["base_branch"],
+                "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_ref": self.base_ref(tid),
                 "review_round": t["review_round"]}
 
     def retry(self, tid):
         t, s = self.ticket(tid), self.state(tid)
+        retries = t.get("retries", 0) + 1
         if s[1] == "progress":
             if s[0] == "reviewing":
                 t["review_round"] -= 1
                 t.pop("reports", None)
-            self.move(tid, (s[0], "pending"), "wonka", "Retrying: the last job did not finish")
+            self.move(tid, (s[0], "pending"), "wonka", f"Retry {retries}/{MAX_RETRIES}: the last job did not finish")
         t.pop("job_started_at", None)
+        t["retries"] = retries
+        if retries >= MAX_RETRIES:
+            t["stuck"] = True
+            self.set_section(tid, "stuck", f"- [ ] Retry (the last {retries} jobs did not finish: see ~/.wonka/factory.log)")
+            notify(tid, "stuck: tick Retry when it's fixed")
+            return f"{tid}: stuck after {retries} tries"
+        return f"{tid}: back in the queue"
 
     def _count(self, status):
         return sum(1 for k in self.live() if self.state(k) in ((status, "pending"), (status, "progress")))
@@ -444,6 +507,9 @@ class Factory:
 
     def tick(self):
         events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
+        folder = store.tickets_dir(self.cfg)
+        events += [f"{p.name}: not a Wonka ticket, use /wonka add instead" for p in sorted(folder.glob("*.md"))
+                   if p.stem not in self.db["tickets"]] if folder.exists() else []
         for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
                                 (("ready", "pending"), ("baking", "pending"), "baking")):
             for k in self.live():
@@ -455,7 +521,7 @@ class Factory:
             t, s = self.ticket(k), self.state(k)
             if s == ("shipped", "pending"):
                 events.append(self.ship(k))
-            elif t.get("job_started_at") and not t.get("resume"):
+            elif t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
                 continue
             elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
                     or (s == ("drafting", "progress") and t.get("resume")):

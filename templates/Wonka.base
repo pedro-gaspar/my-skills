@@ -1,14 +1,14 @@
 filters:
   and:
-    - file.inFolder("{{folder}}/tickets")
+    - file.inFolder("{{folder}}/golden-tickets")
     - file.ext == "md"
 properties:
   note.id:
     displayName: Ticket
   note.title:
     displayName: Title
-  note.sub-status:
-    displayName: Now
+  note.phase:
+    displayName: Phase
 views:
   - type: kanban
     name: 🏭 Factory floor
@@ -26,7 +26,20 @@ views:
     order:
       - id
       - title
-      - sub-status
+      - phase
+    sort:
+      - property: file.name
+        direction: ASC
+  - type: table
+    name: 🙋 Your turn
+    filters:
+      and:
+        - phase == "🙋-Awaiting-Human"
+    order:
+      - id
+      - title
+      - status
+      - size
     sort:
       - property: file.name
         direction: ASC
@@ -36,7 +49,7 @@ views:
       - id
       - title
       - status
-      - sub-status
+      - phase
       - size
       - jira
     sort:
