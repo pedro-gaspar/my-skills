@@ -72,6 +72,13 @@ def _ref_exists(repo, ref):
     return subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo, capture_output=True).returncode == 0
 
 
+def pr_body(tid, meta, spec):
+    ids = [f"🎫 **Golden ticket:** {tid}"]
+    if meta.get("jira"):
+        ids.append(f"🎟️ **Jira:** {meta['jira']}")
+    return "  \n".join(ids) + f"\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory"
+
+
 def fmt(state):
     return " · ".join(machine.label(state)) if machine.valid(state) else "/".join(map(str, state))
 
@@ -369,7 +376,7 @@ class Factory:
             out = gh("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
                      "--json", "url", "-q", ".[0].url") or gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
                      "--title", f"{tid}: {meta.get('title', '')}",
-                     "--body", f"🎫 **{tid}**\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory")
+                     "--body", pr_body(tid, meta, spec))
         except WonkaError as e:
             self.log_event(tid, f"Could not open the PR: {e}")
             t["job_started_at"] = _iso(now())

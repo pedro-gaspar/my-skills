@@ -15,7 +15,7 @@ from wonka.store import WonkaError
 
 FAKE_GH = """#!/bin/sh
 case "$1 $2" in
-  "pr create") echo "https://github.com/acme/app/pull/7" ;;
+  "pr create") printf '%s\\n' "$@" > "$WONKA_FAKE_PR_STATE.args"; echo "https://github.com/acme/app/pull/7" ;;
   "pr view") cat "$WONKA_FAKE_PR_STATE" ;;
 esac
 """
@@ -153,6 +153,26 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((archive / f"{tid}.md").exists())
         self.assertTrue((archive / f"{tid}-plan.md").exists(), "plans are archived with their tickets")
         self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-plan.md").exists())
+
+    def test_pr_description_carries_the_wonka_and_jira_ids(self):
+        tid = self.add(jira="CALC-42")
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        args = Path(f"{self.pr_state}.args").read_text()
+        self.assertIn(f"🎫 **Golden ticket:** {tid}  \n🎟️ **Jira:** CALC-42\n\nAdd hello.sh", args)
+        self.assertIn(f"{tid}: Add a hello script", args)
+
+    def test_pr_description_without_jira_has_only_the_wonka_id(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        args = Path(f"{self.pr_state}.args").read_text()
+        self.assertIn(f"🎫 **Golden ticket:** {tid}\n\nAdd hello.sh", args)
+        self.assertNotIn("Jira", args)
 
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
