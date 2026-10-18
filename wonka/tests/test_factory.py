@@ -284,6 +284,48 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             self.assertNotIn("reviewed_head", f.ticket(b), "redrafting clears the reviewed head")
 
+    def test_redraft_keeps_earlier_review_rounds(self):
+        tid = self.add()
+        self.to_ready(tid)
+        with self.f() as f:
+            plan = f.plan_path(tid)
+        self.assertEqual(plan.read_text(), "# plan\n", "a plan without reviews is written as given")
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["no shebang"], "suggest": "draft",
+                                    "why": "wrong approach"})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+
+        with self.f() as f:
+            f.write_plan(tid, "# plan v2\n")
+        text = plan.read_text()
+        self.assertTrue(text.startswith("# plan v2\n"))
+        self.assertIn("## 🐿️ Earlier review round 1", text)
+        self.assertIn("no shebang", text)
+        self.assertNotRegex(text, r"(?m)^## 🐿️ Review round")
+
+        with self.f() as f:
+            f.write_plan(tid, "# plan v3\n")
+        text = plan.read_text()
+        self.assertEqual(text.count("Earlier review round 1"), 1, "rewriting keeps the log once")
+        self.assertNotIn("plan v2", text)
+
+        with self.f() as f:
+            f.write_plan(tid, "# plan v4\n\n## 🐿️ Review round 1\n### squirrel-architect: bad nut\n- no shebang\n")
+        text = plan.read_text()
+        self.assertEqual(text.count("no shebang"), 1, "pasted rounds are dropped")
+        self.assertNotRegex(text, r"(?m)^## 🐿️ Review round")
+
+        with self.f() as f:
+            f.drafted(tid, "s", ["architect"])
+        self.bake(tid, "fix.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["new issue"]})
+        text = plan.read_text()
+        earlier, current = text.find("## 🐿️ Earlier review round 1"), text.find("\n## 🐿️ Review round 1")
+        self.assertTrue(0 < earlier < current, text)
+        self.assertIn("new issue", text[current:])
+
     QUESTION = {"q": "Rename it?", "options": ["Keep hello", "Rename to hi"], "recommended": 0}
 
     def bad_rounds(self, tid, n=2):
