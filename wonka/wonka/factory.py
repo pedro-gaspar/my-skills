@@ -174,7 +174,14 @@ class Factory:
         if size and size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
         parent_t = self.ticket(parent) if parent else None  # fail before touching anything
-        top, base, origin = repo_info(repo or os.getcwd())
+        top, base, origin = repo_info(repo or (parent_t and parent_t["repo"]) or os.getcwd())
+        if parent_t:
+            # A child defaults to its parent's repo, PR target and Jira key. The PR target only
+            # carries over when the child builds in the parent's repo; elsewhere it means nothing.
+            if pr_repo is None and top == parent_t["repo"]:
+                pr_repo = parent_t["pr_repo"]
+            if jira is None:
+                jira = self.read(parent)[0].get("jira") or None
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
         title = title or idea.strip().splitlines()[0][:60]
