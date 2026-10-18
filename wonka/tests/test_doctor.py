@@ -72,5 +72,22 @@ class OrphansTest(unittest.TestCase):
         self.assertEqual(list(doctor._orphans(self.cfg)), [("ok", "notes: no unknown ## sections (0 notes)")])
 
 
+
+class NpxCheckTest(unittest.TestCase):
+    def npx_lines(self):
+        with mock.patch.object(doctor.store, "load_config", side_effect=doctor.store.WonkaError("no config")):
+            return [c for c in doctor.checks() if c[1].startswith("npx")]
+
+    def test_missing_npx_warns(self):
+        with mock.patch.dict(doctor.os.environ), mock.patch.object(doctor.shutil, "which", return_value=None), \
+                mock.patch.object(doctor, "_ok", return_value=True):
+            doctor.os.environ.pop("WONKA_MDLINT", None)
+            self.assertEqual([lv for lv, _ in self.npx_lines()], ["warn"])
+
+    def test_no_npx_line_with_a_custom_linter(self):
+        with mock.patch.dict(doctor.os.environ, {"WONKA_MDLINT": "off"}), mock.patch.object(doctor, "_ok", return_value=True):
+            self.assertEqual(self.npx_lines(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

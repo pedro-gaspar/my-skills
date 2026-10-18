@@ -1,6 +1,7 @@
 """wonka doctor: is this machine ready to run the factory unattended?"""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,8 @@ def checks():
     yield ("ok" if _ok(["gh", "auth", "status"]) else "fail"), "gh installed and logged in (opens PRs, checks merges)"
     yield ("ok" if shutil.which("notify-send") else "warn"), "notify-send (desktop pings when a ticket needs you)"
     yield ("ok" if shutil.which("xdg-open") else "warn"), "xdg-open (clicking a PR notification opens the PR)"
+    if "WONKA_MDLINT" not in os.environ:
+        yield ("ok" if shutil.which("npx") else "warn"), "npx (markdownlint checks Idea and Spec sections; without it they are written unchecked)"
     try:
         cfg = store.load_config()
     except store.WonkaError as e:

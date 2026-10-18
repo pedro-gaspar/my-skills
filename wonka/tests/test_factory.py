@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import factory, note, store
+from wonka import factory, mdlint, note, store
 from wonka.factory import Factory
 from wonka.store import WonkaError
 
@@ -51,7 +51,7 @@ class FactoryTest(unittest.TestCase):
         gh.chmod(0o755)
         self.pr_state = self.tmp / "pr_state"
         self.pr_state.write_text("OPEN")
-        env = {"WONKA_HOME": str(self.tmp / "home"), "WONKA_NO_NOTIFY": "1", "WONKA_GH": str(gh),
+        env = {"WONKA_HOME": str(self.tmp / "home"), "WONKA_NO_NOTIFY": "1", "WONKA_GH": str(gh), "WONKA_MDLINT": "off",
                "WONKA_FAKE_PR_STATE": str(self.pr_state),
                "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
         patcher = mock.patch.dict(os.environ, env)
@@ -605,6 +605,50 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: unstuck by a human", tick["events"])
         self.assertEqual([j["id"] for j in tick["jobs"]], [tid])
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+
+    def failing_mdlint(self):
+        lint = self.tmp / "mdlint"
+        lint.write_text("#!/bin/sh\necho 'stdin:1 error MD041/first-line-heading/first-line-h1 First line' >&2\nexit 1\n")
+        lint.chmod(0o755)
+        patcher = mock.patch.dict(os.environ, {"WONKA_MDLINT": str(lint)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_flagged_idea_and_spec_are_kept_as_raw_text(self):
+        self.failing_mdlint()
+        tid = self.add("bad idea")
+        body = self.note(tid)[1]
+        self.assertTrue(note.get_section(body, "idea").startswith(mdlint.MARK))
+        self.assertIn("```text\nbad idea\n```", note.get_section(body, "idea"))
+        self.assertIn("## 🎩 Factory log", body)
+        self.assertTrue(body.lstrip().startswith("# 🎫 bad idea"), "banner intact")
+        self.assertEqual(self.note(tid)[0]["title"], "bad idea")
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+        spec = note.get_section(self.note(tid)[1], "spec")
+        self.assertTrue(spec.startswith(mdlint.MARK))
+        with self.f() as f:
+            f.drafted(tid, "s", ["architect"])
+        self.assertEqual(self.state(tid), ("ready", "pending"))
+        spec = note.get_section(self.note(tid)[1], "spec")
+        self.assertTrue(spec.endswith(f"```\n\n📋 Plan: [[{tid}-plan]]"), spec)
+        self.assertEqual(spec.count(mdlint.MARK), 1)
+
+    def test_wonka_rendered_sections_are_never_linted(self):
+        self.failing_mdlint()
+        tid = self.add()
+        with self.f() as f:
+            f.set_section(tid, "stuck", "- [x] Retry (3 tries failed)")
+            f.set_section(tid, "review-questions", "- **Q1. Close?**\n  - [ ] Yes")
+        body = self.note(tid)[1]
+        self.assertNotIn(mdlint.MARK, note.get_section(body, "stuck"))
+        self.assertTrue(note.approved_retry(note.get_section(body, "stuck")))
+        self.assertNotIn(mdlint.MARK, note.get_section(body, "review-questions"))
 
     def finished(self, tid, agent, dispatch=None):
         with self.f() as f:

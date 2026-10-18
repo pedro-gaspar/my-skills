@@ -15,7 +15,7 @@ from wonka import cli, factory, store
 class CliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        for patcher in (mock.patch.dict(os.environ, {"WONKA_HOME": str(self.tmp / "home")}),
+        for patcher in (mock.patch.dict(os.environ, {"WONKA_HOME": str(self.tmp / "home"), "WONKA_MDLINT": "off"}),
                         mock.patch.object(cli, "LINK", self.tmp / "bin" / "wonka")):
             patcher.start()
             self.addCleanup(patcher.stop)
