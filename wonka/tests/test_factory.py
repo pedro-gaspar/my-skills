@@ -149,6 +149,21 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "done"))
         self.assertFalse(wt.exists())
 
+        meta, body = self.note(tid)
+        self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
+        self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
+        self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
+        self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
+        self.assertEqual(body.count("> [!"), 2, "one banner, one log, nothing piled up")
+
+        later = factory.now() + dt.timedelta(days=8)
+        with mock.patch.object(factory, "now", lambda: later):
+            self.assertIn(f"{tid}: archived", self.tick()["events"])
+        archive = Path(self.cfg["vault"]) / "wonka/archive"
+        self.assertTrue((archive / f"{tid}.md").exists())
+        self.assertTrue((archive / f"{tid}-plan.md").exists(), "plans are archived with their tickets")
+        self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-plan.md").exists())
+
     def test_repeated_followup_across_rounds_is_not_duplicated(self):
         tid = self.add()
         self.to_ready(tid, reviewers=("architect", "security"))
@@ -177,20 +192,6 @@ class FactoryTest(unittest.TestCase):
     def f_ticket(self, tid):
         with self.f() as f:
             return f.ticket(tid)
-        meta, body = self.note(tid)
-        self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
-        self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
-        self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
-        self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
-        self.assertEqual(body.count("> [!"), 2, "one banner, one log, nothing piled up")
-
-        later = factory.now() + dt.timedelta(days=8)
-        with mock.patch.object(factory, "now", lambda: later):
-            self.assertIn(f"{tid}: archived", self.tick()["events"])
-        archive = Path(self.cfg["vault"]) / "wonka/archive"
-        self.assertTrue((archive / f"{tid}.md").exists())
-        self.assertTrue((archive / f"{tid}-plan.md").exists(), "plans are archived with their tickets")
-        self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-plan.md").exists())
 
     def test_pr_description_carries_the_wonka_and_jira_ids(self):
         tid = self.add(jira="CALC-42")
