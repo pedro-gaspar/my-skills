@@ -85,8 +85,19 @@ class CliTest(unittest.TestCase):
         a = cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend"])
         self.assertEqual((a.cmd, a.id, a.agent),
                          ("finished", "WONKA-00001", "wonka:squirrel-backend"))
+        self.assertIsNone(a.dispatch)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli.parser().parse_args(["finished", "WONKA-00001"])
+
+    def test_finished_and_report_take_a_dispatch_number(self):
+        a = cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend", "--dispatch", "3"])
+        self.assertEqual(a.dispatch, 3)
+        args = ["report", "WONKA-00001", "--squirrel", "architect", "--verdict", "good"]
+        plain, numbered = cli.parser().parse_args(args), cli.parser().parse_args(args + ["--dispatch", "3"])
+        self.assertIsNone(plain.dispatch)
+        self.assertEqual(numbered.dispatch, 3)
+        self.assertEqual(cli._report(numbered), cli._report(plain))
+        self.assertNotIn("dispatch", cli._report(numbered))
 
     def test_agent_commands_never_need_json(self):
         """Claude Code blocks '{"' in background agents' Bash commands, so agent docs must not use it."""

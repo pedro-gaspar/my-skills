@@ -362,10 +362,18 @@ class Factory:
 
     # -- reviewing --------------------------------------------------------
 
-    def report(self, tid, reviewer, rep):
-        self.expect(tid, ("reviewing", "progress"))
+    def _stale_dispatch(self, tid, dispatch):
+        """True when an agent's dispatch number is from an earlier hand-out than the current one."""
+        cur = self.ticket(tid).get("dispatch")
+        return dispatch is not None and cur is not None and dispatch != cur
+
+    def report(self, tid, reviewer, rep, dispatch=None):
         if reviewer not in REVIEWERS:
             raise WonkaError(f"unknown squirrel {reviewer}; one of {', '.join(REVIEWERS)}")
+        if self._stale_dispatch(tid, dispatch):
+            return (f"{tid}: squirrel-{reviewer} report is from an earlier dispatch "
+                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+        self.expect(tid, ("reviewing", "progress"))
         t = self.ticket(tid)
         t.setdefault("reports", {})[reviewer] = rep
         missing = [r for r in t["reviewers"] if r not in t["reports"]]
@@ -557,12 +565,13 @@ class Factory:
             self.move(tid, ("reviewing", "progress"), "wonka")
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
+        t["dispatch"] = t.get("dispatch", 0) + 1  # only ever goes up: tells a late agent from the live one
         agents = {"triage": ["oompa-loompa-triage"], "draft": ["oompa-loompa-analyst"], "bake": ["oompa-loompa-builder"],
                   "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]]}[job]
         agents = [f"wonka:{a}" for a in agents]
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
                 "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_ref": self.base_ref(tid),
-                "review_round": t["review_round"]}
+                "review_round": t["review_round"], "dispatch": t["dispatch"]}
 
     def retry(self, tid, why="the last job did not finish"):
         t, s = self.ticket(tid), self.state(tid)
@@ -586,7 +595,7 @@ class Factory:
             return f"{tid}: stuck after {retries} tries"
         return f"{tid}: back in the queue"
 
-    def finished(self, tid, agent):
+    def finished(self, tid, agent, dispatch=None):
         """An agent finished: retry its job only if it left no result, else do nothing. Says which."""
         name = agent.removeprefix("wonka:")
         squirrel = name.removeprefix("squirrel-") if name.startswith("squirrel-") else None
@@ -600,6 +609,8 @@ class Factory:
             known = [f"wonka:{a}" for a in JOB_AGENTS] + [f"wonka:squirrel-{r}" for r in REVIEWERS]
             raise WonkaError(f"unknown agent {agent}; one of {', '.join(known)}")
         t, s = self.ticket(tid), self.state(tid)
+        if self._stale_dispatch(tid, dispatch):
+            return f"{tid}: {agent} is from an earlier dispatch ({dispatch}, now {t['dispatch']}), ignored"
         if t.get("stuck"):
             return f"{tid}: stuck, waiting for a human to tick Retry"
         if s != expected or not t.get("job_started_at"):

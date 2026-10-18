@@ -45,9 +45,10 @@ to the parent's (the PR repo only when the child builds in the parent's repo). T
 2. For each job, dispatch one background agent per name in its `agents` list (Agent tool, `subagent_type` = that
    name exactly, e.g. `wonka:oompa-loompa-analyst`, `run_in_background: true`), all in one message. The prompt is the job JSON
    verbatim plus one line: `Work golden ticket <id> (<job>).`
-3. When an agent finishes, run `wonka finished <id> --agent <the agent name you dispatched>` (e.g.
-   `wonka finished WONKA-00001 --agent wonka:squirrel-backend`) and pass on the line it prints. It retries only when
-   that agent left no result; never run `wonka retry` yourself for a finished agent.
+3. When an agent finishes, run `wonka finished <id> --agent <the agent name you dispatched> --dispatch <the job's
+   dispatch>` (e.g. `wonka finished WONKA-00001 --agent wonka:squirrel-backend --dispatch 3`) and pass on the line it
+   prints. It retries only when that agent left no result, and ignores a notice from an earlier dispatch; never run
+   `wonka retry` yourself for a finished agent.
 4. For each `stale` id with no agent of yours still running, run `wonka retry <id>`.
 5. Reply with a short factory report, Wonka-style: open with one line of film flavour (🎩🍫🎫🐿️), then events,
    jobs dispatched, and tickets awaiting a human (🙋 they tick checkboxes in the note). Keep the facts plain; the
