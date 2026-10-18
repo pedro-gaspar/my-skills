@@ -50,8 +50,8 @@ Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Done.
 
 Every note opens with a banner that says where the ticket is, what happens next and, when it's 🙋 your turn, exactly
 what to tick. It also lists size, project, plan, PR and review round. The board's **🙋 Your turn** view lists only
-tickets that wait for you. At the bottom, a folded **🎩 Factory log** holds the history. A job that fails 3 times
-shows **🎩 Stuck** with a Retry checkbox; details are in `~/.wonka/factory.log`.
+tickets that wait for you. At the bottom, a folded **🎩 Factory log** holds the history. A job (or opening the PR)
+that fails 3 times shows **🎩 Stuck** with a Retry checkbox; details are in `~/.wonka/factory.log`.
 
 **The state machine** (`wonka/machine.py`) is the only way a ticket moves. Drag a card anywhere other than Wont-Do
 and the next tick puts it back, with a note on the ticket. Notes keep only `id, title, status, phase, size,
