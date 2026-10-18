@@ -670,6 +670,38 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(tid, "WONKA-00001")
         self.assertFalse([e for e in self.tick()["events"] if "not a Wonka ticket" in e])
 
+    def test_child_inherits_repo_pr_repo_and_jira_from_parent(self):
+        tid = self.add(jira="CALC-42")
+        with mock.patch("os.getcwd", return_value=str(self.tmp)), self.f() as f:
+            child = f.add("Part", parent=tid)
+            self.assertEqual(f.ticket(child)["repo"], f.ticket(tid)["repo"])
+            self.assertEqual(f.ticket(child)["pr_repo"], "acme/app")
+            self.assertIn(child, f.ticket(tid)["children"])
+        self.assertEqual(self.note(child)[0]["jira"], "CALC-42")
+
+    def test_child_explicit_values_win_over_parent(self):
+        tid = self.add(jira="CALC-42")
+        with self.f() as f:
+            child = f.add("Part", repo=str(self.repo), pr_repo="other/fork", parent=tid, jira="CALC-7")
+            self.assertEqual(f.ticket(child)["pr_repo"], "other/fork")
+        self.assertEqual(self.note(child)[0]["jira"], "CALC-7")
+
+    def test_child_in_other_repo_does_not_inherit_pr_repo(self):
+        tid = self.add(jira="CALC-42")
+        other = self.tmp / "lib"
+        other.mkdir()
+        sh("git", "init", "-q", "-b", "main", cwd=other)
+        (other / "README.md").write_text("lib\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "init", cwd=other)
+        top, _, origin = factory.repo_info(str(other))
+        with self.f() as f:
+            child = f.add("Part", repo=str(other), parent=tid)
+            self.assertEqual(f.ticket(child)["repo"], top)
+            self.assertEqual(f.ticket(child)["pr_repo"], origin)
+            self.assertNotEqual(f.ticket(child)["pr_repo"], "acme/app")
+        self.assertEqual(self.note(child)[0]["jira"], "CALC-42")
+
     def test_deleted_note_with_dirty_worktree_does_not_wedge_the_tick(self):
         tid = self.add()
         self.to_ready(tid)

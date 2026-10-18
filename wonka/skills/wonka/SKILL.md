@@ -29,7 +29,8 @@ Arguments: `$ARGUMENTS`
 
 ## add
 `wonka add "<idea, verbatim>"` from the repo the ticket is for. Pass `--repo <path>`, `--pr-repo owner/name`,
-`--jira KEY-1` or `--title` when the user gives them. Then run a tick.
+`--jira KEY-1` or `--title` when the user gives them. With `--parent <id>` the repo, PR repo and Jira key default
+to the parent's (the PR repo only when the child builds in the parent's repo). Then run a tick.
 
 ## status
 `wonka status` and show the lines as they are.
