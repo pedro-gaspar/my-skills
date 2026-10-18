@@ -757,6 +757,13 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
         self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", events)
         self.assertEqual(self.state(tid), ("wontdo", "done"))
+        foreign = [e for e in self.tick()["events"] if "not a Wonka ticket" in e]
+        self.assertEqual(foreign, [], "a foreign note is reported only once")
+        (path.parent / "my scribble.md").unlink()
+        self.tick()
+        (path.parent / "my scribble.md").write_text("hi again\n")
+        self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", self.tick()["events"],
+                      "a note that comes back is reported again")
 
     def test_add_with_unknown_parent_leaves_nothing_behind(self):
         with self.assertRaises(WonkaError):

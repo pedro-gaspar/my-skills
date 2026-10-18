@@ -638,8 +638,10 @@ class Factory:
     def tick(self):
         events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
         folder = store.tickets_dir(self.cfg)
-        events += [f"{p.name}: not a Wonka ticket, use /wonka add instead" for p in sorted(folder.glob("*.md"))
-                   if p.stem not in self.db["tickets"]] if folder.exists() else []
+        foreign = sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"]) if folder.exists() else []
+        seen = set(self.db.get("foreign_notes", []))
+        events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
+        self.db["foreign_notes"] = foreign
         for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
                                 (("ready", "pending"), ("baking", "pending"), "baking")):
             for k in self.live():
