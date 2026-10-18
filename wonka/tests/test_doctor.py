@@ -33,6 +33,40 @@ class PermissionsTest(unittest.TestCase):
             self.assertEqual(doctor._permissions(), (["Bash(git *)"], []))
 
 
+class PermissionChecksTest(unittest.TestCase):
+    DIRS = ["/w/worktrees", "/v/wonka"]
+
+    def snippet(self, msg):
+        return json.loads(msg.split("\n", 1)[1])["permissions"]
+
+    def test_wonka_rule_and_dirs_are_ok(self):
+        for rule in ("Bash(wonka *)", "Bash(wonka:*)"):
+            with self.subTest(rule=rule):
+                result = list(doctor.permission_checks([rule], self.DIRS, self.DIRS))
+                self.assertEqual([lv for lv, _ in result], ["ok"])
+
+    def test_git_rule_is_no_longer_asked_for(self):
+        result = list(doctor.permission_checks([], [], self.DIRS))
+        self.assertEqual([lv for lv, _ in result], ["warn"])
+        perms = self.snippet(result[0][1])
+        self.assertEqual(perms, {"allow": ["Bash(wonka *)"], "additionalDirectories": self.DIRS})
+        self.assertFalse(any("git" in r for r in perms["allow"]))
+
+    def test_only_missing_keys_are_printed(self):
+        result = list(doctor.permission_checks(["Bash(wonka *)"], self.DIRS[:1], self.DIRS))
+        self.assertEqual(set(self.snippet(result[0][1])), {"additionalDirectories"})
+
+    def test_old_git_rules_warn(self):
+        allow = ["Bash(wonka *)", "Bash(git *)", "Bash(git -C * status)", "Bash(git:*)", "Bash(github-cli *)"]
+        result = list(doctor.permission_checks(allow, self.DIRS, self.DIRS))
+        self.assertEqual([lv for lv, _ in result], ["ok", "warn"])
+        msg = result[1][1]
+        self.assertNotIn("\n", msg)
+        for rule in ("Bash(git *)", "Bash(git -C * status)", "Bash(git:*)"):
+            self.assertIn(rule, msg)
+        self.assertNotIn("github-cli", msg)
+
+
 class OrphansTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

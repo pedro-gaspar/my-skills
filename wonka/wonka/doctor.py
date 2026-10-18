@@ -57,6 +57,25 @@ def _orphans(cfg):
                    + "\n".join(f"  {line}" for line in found))
 
 
+def permission_checks(allow, dirs, want_dirs):
+    """Yield (level, message) for Claude Code permissions (allow rules and additional directories)."""
+    missing = [] if "Bash(wonka *)" in allow or "Bash(wonka:*)" in allow else ["Bash(wonka *)"]
+    missing_dirs = [d for d in want_dirs if d not in dirs]
+    if missing or missing_dirs:
+        perms = {k: v for k, v in (("allow", missing), ("additionalDirectories", missing_dirs)) if v}
+        yield "warn", ("background agents will ask you before every wonka call; to run unattended add to "
+                       "~/.claude/settings.json (or settings.local.json):\n"
+                       + json.dumps({"permissions": perms}, indent=2))
+    else:
+        yield "ok", "Claude Code permissions for the CLI (agents run git through wonka git), worktrees and board"
+    broad = [r for r in allow if r == "Bash(git)" or r.startswith(("Bash(git ", "Bash(git:"))]
+    if broad:
+        yield "warn", ("git allow rules are no longer needed: background agents run git through 'wonka git', which "
+                       "is covered by Bash(wonka *). These rules let any session run git with any options "
+                       "(git -c core.pager=..., config, push --force); remove them from ~/.claude/settings.json "
+                       "unless you want them for your own sessions: " + ", ".join(broad))
+
+
 def checks():
     """Yield (level, message): level is ok, warn or fail."""
     yield ("ok" if sys.version_info >= (3, 11) else "fail"), f"python {sys.version.split()[0]} (needs 3.11+)"
@@ -82,16 +101,7 @@ def checks():
         yield "fail", f"state {path} is unreadable: {e}"
 
     allow, dirs = _permissions()
-    want_dirs = [str(store.worktrees_dir()), str(board)]
-    missing = [r for r in ("Bash(wonka *)", "Bash(git *)") if r not in allow and r.replace(" *", ":*") not in allow]
-    missing_dirs = [d for d in want_dirs if d not in dirs]
-    if missing or missing_dirs:
-        snippet = {"permissions": {"allow": missing, "additionalDirectories": missing_dirs}}
-        yield "warn", ("background agents will ask you before every wonka/git call; to run unattended add to ~/.claude/settings.json (or settings.local.json):\n"
-                       + json.dumps(snippet, indent=2))
-    else:
-        yield "ok", "Claude Code permissions for the CLI, git, worktrees and board"
-
+    yield from permission_checks(allow, dirs, [str(store.worktrees_dir()), str(board)])
 
 def doctor():
     icons = {"ok": "✅", "warn": "⚠️ ", "fail": "❌"}
