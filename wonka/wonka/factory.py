@@ -14,6 +14,13 @@ from .store import WonkaError
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 MAX_REVIEW_ROUNDS = 3
 MAX_RETRIES = 3
+REVIEW_LOG = re.compile(r"^## 🐿️ (?:Earlier review|Review) round \d+", re.M)
+
+
+def _split_reviews(text):
+    """Split a plan into (plan, review log): the log starts at the first review-round heading."""
+    m = REVIEW_LOG.search(text)
+    return (text, "") if not m else (text[:m.start()], text[m.start():])
 
 
 def now():
@@ -230,8 +237,17 @@ class Factory:
 
     def write_plan(self, tid, text):
         self.expect(tid, ("drafting", "progress"))
-        self.plan_path(tid).parent.mkdir(parents=True, exist_ok=True)
-        self.plan_path(tid).write_text(text.rstrip("\n") + "\n")
+        path = self.plan_path(tid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Keep the squirrels' review rounds from an earlier draft, renamed so the builder reads them as context,
+        # not as a fix round. Rounds the analyst pasted into the new text are dropped: the old file's copy wins.
+        _, log = _split_reviews(path.read_text() if path.exists() else "")
+        log = re.sub(r"^## 🐿️ Review round", "## 🐿️ Earlier review round", log, flags=re.M)
+        new, _pasted = _split_reviews(text)
+        out = new.rstrip("\n") + "\n"
+        if log.strip("\n"):
+            out += "\n" + log.strip("\n") + "\n"
+        path.write_text(out)
 
     def drafted(self, tid, size, reviewers=()):
         self.expect(tid, ("drafting", "progress"))
