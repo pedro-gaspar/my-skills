@@ -232,5 +232,22 @@ class NoteTest(unittest.TestCase):
                          "# 🎫 T\n\n> [!info] new\n\n## 💡 Idea\nidea\n")
 
 
+class UnknownSectionsTest(unittest.TestCase):
+    def test_orphan_reports_heading_above(self):
+        body = "## 💡 Idea\nx\n\n## 📜 Spec\ny\n## Changes\nz\n\n## 🎩 Factory log\n> log\n"
+        self.assertEqual(note.unknown_sections(body), [("Changes", "📜 Spec")])
+
+    def test_known_headings_and_other_levels_are_ignored(self):
+        body = "# 🎫 Title\n\n" + "".join(f"## {h}\ntext\n### Sub\n\n" for h in note.HEADINGS.values())
+        self.assertEqual(note.unknown_sections(body), [])
+
+    def test_consecutive_orphans_and_orphan_before_any_heading(self):
+        body = "## Stray\na\n## 📜 Spec\nb\n## One\nc\n## Two\nd\n"
+        self.assertEqual(note.unknown_sections(body), [("Stray", None), ("One", "📜 Spec"), ("Two", "One")])
+
+    def test_trailing_spaces_after_known_heading(self):
+        self.assertEqual(note.unknown_sections("## 📜 Spec  \nx\n## 🎩 Factory log\t\n"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

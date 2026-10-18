@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import store
+from . import note, store
 
 SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
 
@@ -31,6 +31,31 @@ def _permissions(paths=None):
     return allow, dirs
 
 
+def _orphans(cfg):
+    """(level, message) for notes holding a ## section Wonka doesn't know, or one ok line."""
+    found, n = [], 0
+    for folder in (store.tickets_dir(cfg), store.archive_dir(cfg)):
+        for path in sorted(folder.glob("*.md")) if folder.exists() else []:
+            if path.stem.endswith("-plan"):
+                continue
+            n += 1
+            try:
+                body = note.read(path)[1]
+            except (OSError, UnicodeDecodeError) as e:
+                found.append(f"{path}: unreadable ({e})")
+                continue
+            for heading, above in note.unknown_sections(body):
+                found.append(f"{path}: ## {heading}" + (f" (below ## {above})" if above else ""))
+    if not found:
+        yield "ok", f"notes: no unknown ## sections ({n} notes)"
+        return
+    yield "warn", ("notes with ## sections Wonka doesn't know. A section ends at the next '## ' line, so these are "
+                   "probably the tail of the section above, split off before headings in content were demoted. "
+                   "To merge one back, change its '## ' to '### ' (not below the Factory log: that section is "
+                   "rewritten on every update, so move the text above it first). Leave it if you added it on purpose:\n"
+                   + "\n".join(f"  {line}" for line in found))
+
+
 def checks():
     """Yield (level, message): level is ok, warn or fail."""
     yield ("ok" if sys.version_info >= (3, 11) else "fail"), f"python {sys.version.split()[0]} (needs 3.11+)"
@@ -45,6 +70,7 @@ def checks():
         return
     board = store.board(cfg)
     yield ("ok" if (board / "Wonka.base").exists() else "fail"), f"board {board / 'Wonka.base'}"
+    yield from _orphans(cfg)
     path = store.home() / store.STATE_FILE
     try:
         n = len(json.loads(path.read_text())["tickets"]) if path.exists() else 0

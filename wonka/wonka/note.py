@@ -145,6 +145,21 @@ def drop_section(body, key):
     return body[:b[0]] + body[b[1]:].lstrip("\n") if b else body
 
 
+_H2 = re.compile(r"^## (.*?)[ \t]*$", re.M)
+
+
+def unknown_sections(body):
+    """[(heading, heading above it or None)] for every ## heading that isn't one of Wonka's.
+    Notes written before _demote() existed may hold a section split in two by a ## line in its content."""
+    known, out, prev = set(HEADINGS.values()), [], None
+    for m in _H2.finditer(body):
+        heading = m.group(1)
+        if heading not in known:
+            out.append((heading, prev))
+        prev = heading
+    return out
+
+
 def set_banner(body, callout):
     """The banner (title heading + callout) sits above the first section; only the old one is replaced."""
     first = re.search(r"^## ", body, re.M)
