@@ -1324,5 +1324,152 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("rename it", plan)
         self.assertNotRegex(plan, r"(?m)^## (🔁 Change request|🐿️ Review round)")
 
+    # -- merge conflicts on an open PR ------------------------------------
+
+    def upstream_change(self, filename="hello.sh", text="echo upstream\n"):
+        """A commit on main, pushed to origin, that the PR branch has not seen."""
+        sh("git", "checkout", "-q", "main", cwd=self.repo)
+        (self.repo / filename).write_text(text)
+        sh("git", "add", filename, cwd=self.repo)
+        sh("git", "commit", "-qm", f"upstream {filename}", cwd=self.repo)
+        sh("git", "push", "-q", "origin", "main", cwd=self.repo)
+
+    def fixer_job(self, tid):
+        self.pr_state.write_text("OPEN CONFLICTING")
+        tick = self.tick()
+        self.assertIn(f"{tid}: PR has merge conflicts", tick["events"])
+        jobs = [j for j in tick["jobs"] if j["id"] == tid]
+        self.assertEqual(len(jobs), 1, tick)
+        return jobs[0]
+
+    def ticket(self, tid):
+        with self.f() as f:
+            return dict(f.ticket(tid))
+
+    def test_conflicting_pr_dispatches_a_fixer(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        job = self.fixer_job(tid)
+        self.assertEqual(job["job"], "conflicts")
+        self.assertEqual(job["agents"], ["wonka:oompa-loompa-fixer"])
+        self.assertEqual(job["base_ref"], "origin/main")
+        self.assertEqual(job["worktree"], str(wt))
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+        self.assertIn("fixing merge conflicts", self.note(tid)[1])
+        self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [], "one fixer at a time")
+
+    def test_fixer_merges_and_resolved_pushes(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        merge = subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True, text=True)
+        self.assertNotEqual(merge.returncode, 0, "the merge should conflict")
+        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+        sh("git", "add", "hello.sh", cwd=wt)
+        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        with self.f() as f:
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        t = self.ticket(tid)
+        self.assertNotIn("conflicts", t)
+        self.assertNotIn("merge_ref", t)
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
+        self.pr_state.write_text("OPEN MERGEABLE")
+        self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
+
+    def test_resolved_refuses_unfinished_merge(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "uncommitted"):
+            f.resolved(tid)
+        sh("git", "merge", "--abort", cwd=wt)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "not merged"):
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+
+    def test_resolved_needs_a_conflict_fix(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "expected"):
+            f.resolved(tid)
+
+    def test_mergeable_or_unknown_pr_dispatches_nothing(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        for state in ("OPEN MERGEABLE", "OPEN UNKNOWN"):
+            self.pr_state.write_text(state)
+            tick = self.tick()
+            self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [], state)
+            self.assertEqual(self.state(tid), ("shipped", "awaiting"), state)
+            self.assertNotIn("conflicts", self.ticket(tid))
+
+    def test_conflicts_fixed_by_hand_drop_the_flag(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        with self.f() as f:
+            f.reconcile(tid)
+            self.assertIn("The PR has merge conflicts", f.read(tid)[1])
+        self.pr_state.write_text("OPEN MERGEABLE")
+        self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
+        self.assertNotIn("conflicts", self.ticket(tid))
+        self.assertIn("merge the PR", self.note(tid)[1])
+
+    def test_failed_fixer_is_retried_through_ship(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.fixer_job(tid)
+        with self.f() as f:
+            out = f.finished(tid, "wonka:oompa-loompa-fixer")
+        self.assertIn("left no result, back in the queue", out)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertNotIn("conflicts", self.ticket(tid))
+        tick = self.tick()  # ship() runs again and finds the PR
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+        job = self.fixer_job(tid)  # the next tick sees the conflicts again
+        self.assertEqual(job["job"], "conflicts")
+        self.assertEqual(self.ticket(tid)["retries"], 1)
+
+    def test_leftover_merge_is_aborted_on_start(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True)
+        with self.f() as f:
+            f.finished(tid, "wonka:oompa-loompa-fixer")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.fixer_job(tid)
+        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
+
+    def test_finished_after_resolved_says_moved_on(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.upstream_change("other.txt", "upstream\n")  # no real conflict: the merge is clean
+        job = self.fixer_job(tid)
+        sh("git", "merge", "-q", "--no-edit", job["base_ref"], cwd=wt)
+        with self.f() as f:
+            f.resolved(tid)
+            self.assertIn("moved on", f.finished(tid, "wonka:oompa-loompa-fixer"))
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_failed_fetch_keeps_the_ticket_awaiting(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        sh("git", "remote", "set-url", "origin", str(self.tmp / "gone.git"), cwd=self.repo)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        tick = self.tick()
+        self.assertTrue(any(e.startswith(f"{tid}: ⚠️") for e in tick["events"]), tick["events"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertTrue(self.ticket(tid)["conflicts"])
+
+
 if __name__ == "__main__":
     unittest.main()

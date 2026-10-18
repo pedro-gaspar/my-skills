@@ -54,5 +54,18 @@ class BannerTest(unittest.TestCase):
              "review_round": 1, "reviewers": ["architect"], "pr_url": "https://github.com/acme/app/pull/7"}
         self.assertIn("🔁 Request changes", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
+    def test_conflict_fix_has_its_own_story(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "shipped", "phase": "progress"}, "project": "app", "history": [],
+             "review_round": 1, "conflicts": True, "merge_ref": "origin/main", "branch": "wonka/x", "worktree": "/wt"}
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("fixing merge conflicts", text)
+        self.assertIn("Merging origin/main into `wonka/x`", text)
+        self.assertIn(banner.QUIPS[("shipped", "progress")], text)
+        t["last_valid"]["phase"] = "awaiting"
+        self.assertIn("The PR has merge conflicts", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        t.pop("conflicts")
+        self.assertIn("merge the PR", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
 if __name__ == "__main__":
     unittest.main()
