@@ -5,6 +5,7 @@ import datetime as dt
 from . import machine
 
 ARCHIVE_DAYS_KEY = "archive_after_days"
+MAX_ROUNDS_KEY = "max_review_rounds"
 
 
 QUIPS = {
@@ -31,8 +32,8 @@ QUIPS = {
 STUCK_QUIP = "🌊 Augustus is stuck in the chocolate pipe again."
 
 
-def _round(t):
-    return f"review round {t['review_round']}/{machine.MAX_REVIEW_ROUNDS}" if t.get("review_round") else ""
+def _round(t, cfg):
+    return f"review round {t['review_round']}/{cfg[MAX_ROUNDS_KEY]}" if t.get("review_round") else ""
 
 
 def _reviewers(t):
@@ -76,15 +77,15 @@ def _story(tid, t, meta, cfg):
         ("ready", "pending"): ("info", "Spec done, waiting for an oven",
                                f"🍫 Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
         ("baking", "pending"): ("info", "Queued for baking", (
-            f"🍫 A fix round after {_round(t)}." if t.get("review_round") else "🍫 Baking starts on the next tick.")),
+            f"🍫 A fix round after {_round(t, cfg)}." if t.get("review_round") else "🍫 Baking starts on the next tick.")),
         ("baking", "progress"): ("info", "A builder Oompa-Loompa is baking",
                                  f"🍫 Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),
         ("baking", "done"): ("info", "Baked", "🐿️ Off to the squirrels."),
         ("reviewing", "pending"): ("info", "Waiting for the squirrels", f"🐿️ Squirrels: {_reviewers(t)}."),
         ("reviewing", "progress"): ("info", "The squirrels are testing every nut",
-                                    f"🐿️ {_reviewers(t)} ({_round(t)}). Nothing to do."),
+                                    f"🐿️ {_reviewers(t)} ({_round(t, cfg)}). Nothing to do."),
         ("reviewing", "awaiting"): ("question", "🙋 Your turn: the squirrels have questions", (
-            f"Tick one option per question in 🐿️ Review Questions ({_round(t)}). Then it goes back to baking, "
+            f"Tick one option per question in 🐿️ Review Questions ({_round(t, cfg)}). Then it goes back to baking, "
             "back to drafting, or is closed, as you choose.")),
         ("reviewing", "done"): ("success", "A good nut", "🛗 Off to ship."),
         ("shipped", "pending"): ("info", "Opening the pull request", "🛗 On the next tick."),

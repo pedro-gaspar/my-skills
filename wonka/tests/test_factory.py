@@ -323,6 +323,18 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("wontdo", "done"))
         self.assertIn("3 review rounds", self.note(tid)[1])
 
+    def test_max_review_rounds_setting_controls_the_kill(self):
+        self.cfg["max_review_rounds"] = 2
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid, "f0.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        self.bake(tid, "f1.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertIn("2 review rounds", self.note(tid)[1])
+
     def test_fix_round_needs_a_new_commit_before_baked(self):
         tid = self.add()
         self.to_ready(tid)

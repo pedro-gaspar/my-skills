@@ -28,10 +28,12 @@ class CliTest(unittest.TestCase):
 
     def test_init_writes_settings_board_and_link(self):
         code, out, _ = self.run_cli("init", "--vault", str(self.tmp / "vault"), "--drafting", "2", "--baking", "3",
-                                    "--archive-days", "14")
+                                    "--archive-days", "14", "--max-review-rounds", "4")
         self.assertEqual(code, 0)
         cfg = store.load_config()
         self.assertEqual((cfg["wip"], cfg["archive_after_days"]), ({"drafting": 2, "baking": 3}, 14))
+        self.assertEqual(cfg["max_review_rounds"], 4)
+        self.assertIn("🐿️ review rounds    : 4", out)
         base = (self.tmp / "vault/wonka/Wonka.base").read_text()
         self.assertIn('file.inFolder("wonka/golden-tickets")', base)
         self.assertTrue((self.tmp / "vault/wonka/golden-tickets").is_dir())
@@ -46,6 +48,12 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("too small", err)
         self.assertEqual(self.run_cli("config", "colour", "blue")[0], 1)
+        self.assertEqual(self.run_cli("config", "max_review_rounds", "5")[0], 0)
+        self.assertEqual(json.loads((self.tmp / "home/config.json").read_text())["max_review_rounds"], 5)
+        code, _, err = self.run_cli("config", "max_review_rounds", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("too small", err)
+        self.assertEqual(self.run_cli("config", "max_review_rounds", "x")[0], 1)
 
     def test_set_prints_the_summary(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
