@@ -232,10 +232,6 @@ class NoteTest(unittest.TestCase):
                          "# 🎫 T\n\n> [!info] new\n\n## 💡 Idea\nidea\n")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UnknownSectionsTest(unittest.TestCase):
     def test_orphan_reports_heading_above(self):
         body = "## 💡 Idea\nx\n\n## 📜 Spec\ny\n## Changes\nz\n\n## 🎩 Factory log\n> log\n"
@@ -251,3 +247,7 @@ class UnknownSectionsTest(unittest.TestCase):
 
     def test_trailing_spaces_after_known_heading(self):
         self.assertEqual(note.unknown_sections("## 📜 Spec  \nx\n## 🎩 Factory log\t\n"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -33,10 +33,6 @@ class PermissionsTest(unittest.TestCase):
             self.assertEqual(doctor._permissions(), (["Bash(git *)"], []))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class OrphansTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -74,3 +70,7 @@ class OrphansTest(unittest.TestCase):
 
     def test_missing_folders_are_ok(self):
         self.assertEqual(list(doctor._orphans(self.cfg)), [("ok", "notes: no unknown ## sections (0 notes)")])
+
+
+if __name__ == "__main__":
+    unittest.main()
