@@ -104,6 +104,7 @@ def run(a, f):
         print(f"🎫 {tid} has a golden ticket! It's in the ✉️ Inbox: {f.path(tid)}")
     elif c == "set":
         f.set_field(a.id, a.field, a.value)
+        print(f.summary(a.id))
     elif c == "triage":
         f.triage(a.id, a.size, a.title, _questions(a) or None)
         print(f.summary(a.id))

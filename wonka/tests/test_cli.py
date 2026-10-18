@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -45,6 +46,20 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("too small", err)
         self.assertEqual(self.run_cli("config", "colour", "blue")[0], 1)
+
+    def test_set_prints_the_summary(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = self.tmp / "app"
+        repo.mkdir()
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
+        with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
+            self.assertEqual(self.run_cli("add", "x", "--repo", str(repo))[0], 0)
+            code, out, _ = self.run_cli("set", "WONKA-00001", "title", "New title")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("WONKA-00001: "), out)
 
     def test_question_flags_mark_the_recommendation_with_a_star(self):
         q = cli.parse_question("Store sessions where? | Redis | *Postgres, already in the stack")

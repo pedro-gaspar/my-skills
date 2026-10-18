@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder) and the squirrel reviewers), show status, or init the Obsidian board. Use for /wonka add|tick|status|init.
-argument-hint: "add \"idea\" | tick | status | init --vault <path>"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder) and the squirrel reviewers), show status, change settings, check the setup, or init the Obsidian board. Use for /wonka add|tick|status|init|config|doctor.
+argument-hint: "add \"idea\" | tick | status | init --vault <path> | config [key value] | doctor"
 model: haiku
 ---
 
@@ -26,6 +26,10 @@ Arguments: `$ARGUMENTS`
 
 ## config
 `wonka config` shows the settings; `wonka config wip.baking 3` changes one.
+
+## doctor
+`wonka doctor` and show the lines as they are. If it prints a permission snippet, offer to add it to
+`~/.claude/settings.json`.
 
 ## add
 `wonka add "<idea, verbatim>"` from the repo the ticket is for. Pass `--repo <path>`, `--pr-repo owner/name`,

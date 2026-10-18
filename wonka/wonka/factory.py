@@ -8,11 +8,10 @@ import subprocess
 from pathlib import Path
 
 from . import banner, machine, note, store
-from .machine import KILLED
+from .machine import KILLED, MAX_REVIEW_ROUNDS
 from .store import WonkaError
 
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
-MAX_REVIEW_ROUNDS = 3
 MAX_RETRIES = 3
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
@@ -567,6 +566,8 @@ class Factory:
 
     def retry(self, tid, why="the last job did not finish"):
         t, s = self.ticket(tid), self.state(tid)
+        if s[1] not in ("pending", "progress"):
+            raise WonkaError(f"{tid} is {fmt(s)}: no job is running or queued, nothing to retry")
         retries = t.get("retries", 0) + 1
         why = " ".join(str(why).split())
         why = why if len(why) <= 200 else why[:199] + "…"
@@ -637,8 +638,10 @@ class Factory:
     def tick(self):
         events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
         folder = store.tickets_dir(self.cfg)
-        events += [f"{p.name}: not a Wonka ticket, use /wonka add instead" for p in sorted(folder.glob("*.md"))
-                   if p.stem not in self.db["tickets"]] if folder.exists() else []
+        foreign = sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"]) if folder.exists() else []
+        seen = set(self.db.get("foreign_notes", []))
+        events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
+        self.db["foreign_notes"] = foreign
         for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
                                 (("ready", "pending"), ("baking", "pending"), "baking")):
             for k in self.live():

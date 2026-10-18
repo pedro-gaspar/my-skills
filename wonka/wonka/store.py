@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import json
 import os
+import shutil
 from pathlib import Path
 
 STATE_FILE = "golden_ticket_status.json"
@@ -91,14 +92,21 @@ def log(*lines):
 
 @contextlib.contextmanager
 def state():
-    """Yield the whole status JSON under an exclusive lock; it is written back on success."""
+    """Yield the whole status JSON under an exclusive lock; it is written back on success if it changed,
+    and the previous version is kept as golden_ticket_status.json.bak."""
     root = home()
     root.mkdir(parents=True, exist_ok=True)
     path = root / STATE_FILE
     with open(root / ".lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        db = json.loads(path.read_text()) if path.exists() else {"next_id": 1, "tickets": {}}
+        old = path.read_text() if path.exists() else None
+        db = json.loads(old) if old is not None else {"next_id": 1, "tickets": {}}
         yield db
+        new = json.dumps(db, indent=2, ensure_ascii=False) + "\n"
+        if new == old:
+            return
+        if old is not None:
+            shutil.copy2(path, root / (STATE_FILE + ".bak"))
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(db, indent=2, ensure_ascii=False) + "\n")
+        tmp.write_text(new)
         os.replace(tmp, path)

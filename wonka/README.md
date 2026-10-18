@@ -70,7 +70,7 @@ that fails 3 times shows **🎩 Stuck** with a Retry checkbox; details are in `~
 **The state machine** (`wonka/machine.py`) is the only way a ticket moves. Drag a card anywhere other than Wont-Do
 and the next tick puts it back, with a note on the ticket. Notes keep only `id, title, status, phase, size,
 jira`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
-`~/.wonka/golden_ticket_status.json`.
+`~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`).
 
 ## Develop
 
