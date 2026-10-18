@@ -227,7 +227,7 @@ class Factory:
             # carries over when the child builds in the parent's repo; elsewhere it means nothing.
             if pr_repo is None and top == parent_t["repo"]:
                 pr_repo = parent_t["pr_repo"]
-            if jira is None:
+            if jira is None and self.path(parent).exists():  # a deleted parent note just means no key to inherit
                 jira = self.read(parent)[0].get("jira") or None
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
