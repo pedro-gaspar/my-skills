@@ -37,6 +37,7 @@ def checks():
     yield ("ok" if shutil.which("git") else "fail"), "git"
     yield ("ok" if _ok(["gh", "auth", "status"]) else "fail"), "gh installed and logged in (opens PRs, checks merges)"
     yield ("ok" if shutil.which("notify-send") else "warn"), "notify-send (desktop pings when a ticket needs you)"
+    yield ("ok" if shutil.which("xdg-open") else "warn"), "xdg-open (clicking a PR notification opens the PR)"
     try:
         cfg = store.load_config()
     except store.WonkaError as e:

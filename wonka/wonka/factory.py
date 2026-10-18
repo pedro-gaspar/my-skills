@@ -94,12 +94,26 @@ def fmt(state):
     return " · ".join(machine.label(state)) if machine.valid(state) else "/".join(map(str, state))
 
 
-def notify(tid, title):
+# Wait for the click in the background; open the URL only when the default action (a click) was chosen.
+_OPEN_ON_CLICK = 'u=$1; o=$2; shift 2; [ "$("$@")" = default ] && exec "$o" "$u"'
+
+
+def notify(tid, title, url=None):
+    """Ping the desktop. With a url, clicking the notification opens it (waits detached, never blocks)."""
     if os.environ.get("WONKA_NO_NOTIFY"):
         return
+    cmd = ["notify-send", "-a", "Wonka", "🎩 Wonka needs you", f"{tid} — {title}"]
     try:
-        subprocess.run(["notify-send", "-a", "Wonka", "🎩 Wonka needs you", f"{tid} — {title}"], check=False)
-    except FileNotFoundError:
+        if not url:
+            subprocess.run(cmd, check=False)
+            return
+        cmd[-1] += "\nClick to open the PR"
+        cmd += ["-A", "default=Open PR"]
+        opener = os.environ.get("WONKA_OPEN", "xdg-open")
+        subprocess.Popen(["sh", "-c", _OPEN_ON_CLICK, "wonka-notify", url, opener, *cmd],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
         pass
 
 
@@ -176,7 +190,7 @@ class Factory:
             if dst == ("shipped", "done"):
                 self.drop_branch(tid)
         if dst[1] == "awaiting":
-            notify(tid, meta.get("title", ""))
+            notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
 
     # -- intake -----------------------------------------------------------
 
