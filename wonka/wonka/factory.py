@@ -591,6 +591,17 @@ class Factory:
             f"+refs/heads/{base}:refs/remotes/wonka-pr/{base}", cwd=wt)
         return f"wonka-pr/{base}"
 
+    def _sync_pr_branch(self, tid):
+        """Fast-forward the worktree to the PR branch on origin (review suggestions, 'Update branch', a human fix),
+        so the fixer merges into what GitHub has and the plain push in resolved() is a fast-forward."""
+        t = self.ticket(tid)
+        wt, branch = t["worktree"], t["branch"]
+        git("fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=wt)
+        try:
+            git("merge", "--ff-only", "--quiet", f"origin/{branch}", cwd=wt)
+        except WonkaError as e:
+            raise WonkaError(f"{branch} has diverged from origin/{branch}: {' '.join(str(e).split())}") from e
+
     def resolved(self, tid):
         """The fixer committed the merge: check it, push the branch (never force) and wait for the human again."""
         self.expect(tid, ("shipped", "progress"))
@@ -734,6 +745,7 @@ class Factory:
                     git("merge", "--abort", cwd=t["worktree"])  # a half-done earlier attempt
                 except WonkaError:
                     pass
+            self._sync_pr_branch(tid)  # before moving: a failed fetch or a diverged branch is retried next tick
             base_ref = t["merge_ref"] = self._fetch_pr_base(tid)  # before moving: a failed fetch is retried next tick
             self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
         t.pop("resume", None)

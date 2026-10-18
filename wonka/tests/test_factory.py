@@ -1378,6 +1378,46 @@ class FactoryTest(unittest.TestCase):
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
 
+    def test_fixer_starts_from_the_pr_branch_on_origin(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        other = self.tmp / "other"
+        sh("git", "clone", "-q", "-b", branch, str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / "suggestion.txt").write_text("committed on GitHub\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "review suggestion", cwd=other)
+        sh("git", "push", "-q", "origin", branch, cwd=other)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.assertTrue((wt / "suggestion.txt").exists(), "the worktree is fast-forwarded to origin's branch")
+        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True)
+        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+        sh("git", "add", "hello.sh", cwd=wt)
+        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        with self.f() as f:
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
+
+    def test_diverged_pr_branch_leaves_the_ticket_flagged(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        other = self.tmp / "other"
+        sh("git", "clone", "-q", "-b", branch, str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / "theirs.txt").write_text("remote\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "remote commit", cwd=other)
+        sh("git", "push", "-q", "origin", branch, cwd=other)
+        (wt / "mine.txt").write_text("local\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "local commit", cwd=wt)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        tick = self.tick()
+        self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+        self.assertTrue(any(e.startswith(f"{tid}: ⚠️") and "diverged" in e for e in tick["events"]), tick["events"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertTrue(self.ticket(tid).get("conflicts"))
+
     def test_resolved_refuses_unfinished_merge(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
