@@ -212,6 +212,14 @@ class FactoryTest(unittest.TestCase):
         toobig = note.get_section(self.note(tid)[1], "toobig")
         self.assertEqual(toobig, "- [[WONKA-00002]] Pages\n- [[WONKA-00003]] Users")
 
+    def test_spark_and_airflow_squirrels_review_data_tickets(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("spark", "airflow"))
+        self.bake(tid)
+        job = self.review(tid, spark={"verdict": "good nut"}, airflow={"verdict": "good nut"})
+        self.assertEqual(job["agents"], ["wonka:squirrel-spark", "wonka:squirrel-airflow"])
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+
     def test_three_bad_review_rounds_kill_the_ticket(self):
         tid = self.add()
         self.to_ready(tid)

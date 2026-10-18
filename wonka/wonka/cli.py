@@ -159,7 +159,7 @@ def parser():
     s = sub.add_parser("drafted", help="analyst: spec and plan are done")
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
-    s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security")
+    s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security,spark,airflow")
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
     s = sub.add_parser("report", help="squirrel: review report JSON on stdin")

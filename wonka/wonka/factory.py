@@ -11,7 +11,7 @@ from . import banner, machine, note, store
 from .machine import KILLED
 from .store import WonkaError
 
-REVIEWERS = ("architect", "backend", "frontend", "security")
+REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 MAX_REVIEW_ROUNDS = 3
 MAX_RETRIES = 3
 
