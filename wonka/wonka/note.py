@@ -59,9 +59,10 @@ _BLOCK = re.compile(r"^[|>][0-9+-]*(\s+#.*)?$")
 
 
 def _scalar(head, lines):
-    """An owned field's value from its key line's text and the continuation lines below it."""
+    """An owned field's value from its key line's text and the indented continuation lines below it (column-0 ignored)."""
+    lines = [line for line in lines if not line.strip() or line[:1] in (" ", "\t")]
     if not _BLOCK.match(head):
-        rest = [line.strip() for line in lines if line.strip()]
+        rest = [s for s in (line.strip() for line in lines) if s and not s.startswith("#")]
         return _unquote(" ".join([head, *rest]).strip() if rest else head)
     while lines and not lines[-1].strip():
         lines = lines[:-1]

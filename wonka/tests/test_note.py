@@ -73,6 +73,14 @@ class NoteTest(unittest.TestCase):
         self.assertEqual(self._meta("title: foo\n  bar\n\nsize: s"), {"title": "foo bar", "size": "s"})
         self.assertEqual(self._meta("title: foo\n\nsize: s")["title"], "foo")
 
+    def test_skips_comment_lines_in_owned_field_continuations(self):
+        self.assertEqual(self._meta("title: x\n# comment\nstatus: y"), {"title": "x", "status": "y"})
+        self.assertEqual(self._meta("title: x\n  # comment\n  more\nsize: s")["title"], "x more")
+        self.assertEqual(self._meta("title: >-\n  a\n# comment\nsize: s")["title"], "a")
+        self.assertEqual(self._meta("title: >-\n  a\n  # kept\nsize: s")["title"], "a # kept")
+        self.assertEqual(self._meta("title: x\n- stray\nsize: s")["title"], "x")
+        self.assertEqual(self._meta("tags:\n  - a\n# c\nsize: s")["tags"], "tags:\n  - a\n# c")
+
     def test_quotes_values_plain_yaml_would_mangle(self):
         path = Path(tempfile.mkdtemp()) / "t.md"
         for title in ("Fix:", "x:", " padded ", "a\tb", "a\nb", "~"):
