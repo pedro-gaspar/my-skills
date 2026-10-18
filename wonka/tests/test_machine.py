@@ -18,6 +18,9 @@ class MachineTest(unittest.TestCase):
         self.assertFalse(machine.allowed(("inbox", "awaiting"), ("drafting", "pending")))
         self.assertFalse(machine.allowed(("shipped", "done"), ("inbox", "pending")))
 
+    def test_open_pr_can_go_back_in_progress_to_fix_conflicts(self):
+        self.assertTrue(machine.allowed(("shipped", "awaiting"), ("shipped", "progress")))
+
     def test_parse_accepts_labels_with_or_without_emoji(self):
         self.assertEqual(machine.parse("🐿️-Reviewing", machine.STATUSES), "reviewing")
         self.assertEqual(machine.parse("🐿-Reviewing", machine.STATUSES), "reviewing")

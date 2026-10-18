@@ -107,6 +107,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(cli._report(numbered), cli._report(plain))
         self.assertNotIn("dispatch", cli._report(numbered))
 
+    def test_resolved_takes_an_id(self):
+        a = cli.parser().parse_args(["resolved", "WONKA-00001"])
+        self.assertEqual((a.cmd, a.id), ("resolved", "WONKA-00001"))
+
     def test_agent_commands_never_need_json(self):
         """Claude Code blocks '{"' in background agents' Bash commands, so agent docs must not use it."""
         root = Path(cli.__file__).resolve().parent.parent

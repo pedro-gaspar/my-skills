@@ -63,6 +63,11 @@ def _story(tid, t, meta, cfg):
         return "warning", "🙋 Your turn: the factory is stuck", (
             "The last jobs for this ticket did not finish (details in `~/.wonka/factory.log`). "
             "Fix the cause, then tick **Retry** in 🎩 Stuck below.")
+    if t.get("conflicts") and s == ("shipped", "progress"):
+        return "info", "A fixer Oompa-Loompa is fixing merge conflicts", (
+            f"🔧 Merging {t.get('merge_ref')} into `{t.get('branch')}` in `{t.get('worktree')}`. Nothing to do.")
+    if t.get("conflicts") and s == ("shipped", "awaiting"):
+        return "info", "The PR has merge conflicts", "🔧 A fixer Oompa-Loompa picks it up on this tick."
     return {
         ("inbox", "pending"): ("abstract", "Waiting for triage", "📏 An Oompa-Loompa sizes this ticket on the next tick."),
         ("inbox", "awaiting"): ("question", "🙋 Your turn: approve it", (

@@ -127,6 +127,9 @@ def run(a, f):
     elif c == "baked":
         f.baked(a.id)
         print(f.summary(a.id))
+    elif c == "resolved":
+        f.resolved(a.id)
+        print(f.summary(a.id))
     elif c == "report":
         if not a.stdin and not a.verdict:
             raise WonkaError("report needs --verdict good|bad")
@@ -206,6 +209,8 @@ def parser():
     s.add_argument("--size", required=True, choices=machine.SIZES)
     s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security,spark,airflow")
     s = sub.add_parser("baked", help="builder: the code is committed")
+    s.add_argument("id")
+    s = sub.add_parser("resolved", help="fixer: the merge conflicts are committed")
     s.add_argument("id")
     s = sub.add_parser("report", help="squirrel: file a review verdict")
     s.add_argument("id")

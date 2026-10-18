@@ -1,6 +1,6 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder) and the squirrel reviewers), show status, change settings, check the setup, or init the Obsidian board. Use for /wonka add|tick|status|init|config|doctor.
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, change settings, check the setup, or init the Obsidian board. Use for /wonka add|tick|status|init|config|doctor.
 argument-hint: "add \"idea\" | tick | status | init --vault <path> | config [key value] | doctor"
 model: haiku
 ---
@@ -40,8 +40,8 @@ to the parent's (the PR repo only when the child builds in the parent's repo). T
 `wonka status` and show the lines as they are.
 
 ## tick
-1. Run `wonka tick`. It returns JSON: `events` (what changed), `jobs` (already claimed for you), `awaiting_human`,
-   `stale`.
+1. Run `wonka tick`. It returns JSON: `events` (what changed), `jobs` (already claimed for you; a `conflicts` job is
+   an open PR with merge conflicts, for `wonka:oompa-loompa-fixer`), `awaiting_human`, `stale`.
 2. For each job, dispatch one background agent per name in its `agents` list (Agent tool, `subagent_type` = that
    name exactly, e.g. `wonka:oompa-loompa-analyst`, `run_in_background: true`), all in one message. The prompt is the job JSON
    verbatim plus one line: `Work golden ticket <id> (<job>).`

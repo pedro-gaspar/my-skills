@@ -16,7 +16,7 @@ REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 MAX_RETRIES = 3
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
-              "oompa-loompa-builder": ("baking", "progress")}
+              "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
 REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?:Earlier change|Change) request) \d+", re.M)
 # PR comments by anyone else are not copied into the plan: the builder runs unattended and would read them as instructions
 TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
@@ -189,6 +189,11 @@ class Factory:
         t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
                              **({"why": why} if why else {})})
         t.pop("job_started_at", None)
+        if dst != ("shipped", "progress"):
+            # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through
+            # ship(), killed, merged) starts clean and the next tick re-detects conflicts
+            t.pop("conflicts", None)
+            t.pop("merge_ref", None)
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
@@ -571,6 +576,48 @@ class Factory:
         self.move(tid, ("baking", "pending"), "human", why)
         return f"{tid}: changes requested, back to baking"
 
+    def _fetch_pr_base(self, tid):
+        """Fetch the PR's base branch into the worktree and return the ref it now lives at."""
+        t = self.ticket(tid)
+        wt, base = t["worktree"], t["base_branch"]
+        try:
+            origin = parse_remote(git("remote", "get-url", "origin", cwd=wt))
+        except WonkaError:
+            origin = None
+        if origin in (None, t["pr_repo"]):
+            git("fetch", "--quiet", "origin", base, cwd=wt)
+            return f"origin/{base}"
+        git("fetch", "--quiet", f"https://github.com/{t['pr_repo']}.git",
+            f"+refs/heads/{base}:refs/remotes/wonka-pr/{base}", cwd=wt)
+        return f"wonka-pr/{base}"
+
+    def _sync_pr_branch(self, tid):
+        """Fast-forward the worktree to the PR branch on origin (review suggestions, 'Update branch', a human fix),
+        so the fixer merges into what GitHub has and the plain push in resolved() is a fast-forward."""
+        t = self.ticket(tid)
+        wt, branch = t["worktree"], t["branch"]
+        git("fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=wt)
+        try:
+            git("merge", "--ff-only", "--quiet", f"origin/{branch}", cwd=wt)
+        except WonkaError as e:
+            raise WonkaError(f"{branch} has diverged from origin/{branch}: {' '.join(str(e).split())}") from e
+
+    def resolved(self, tid):
+        """The fixer committed the merge: check it, push the branch (never force) and wait for the human again."""
+        self.expect(tid, ("shipped", "progress"))
+        t = self.ticket(tid)
+        if not t.get("conflicts"):
+            raise WonkaError(f"{tid} is not fixing merge conflicts")
+        wt = t["worktree"]
+        if git("status", "--porcelain", cwd=wt) or _ref_exists(wt, "MERGE_HEAD"):
+            raise WonkaError("the worktree has uncommitted changes or an unfinished merge: commit the merge first")
+        merged = subprocess.run(["git", "merge-base", "--is-ancestor", t["merge_ref"], "HEAD"],
+                                cwd=wt, capture_output=True).returncode == 0
+        if not merged:
+            raise WonkaError(f"{t['merge_ref']} is not merged into {t['branch']} yet")
+        git("push", "origin", t["branch"], cwd=wt)
+        self.move(tid, ("shipped", "awaiting"), "fixer", "Merge conflicts fixed and pushed")
+
     # -- the tick ---------------------------------------------------------
 
     def reconcile(self, tid):
@@ -633,13 +680,20 @@ class Factory:
                              f"(round {t['review_round']}/{self._budget(t)}, 1 extra round granted)")
                 return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{self._budget(t)})")
         elif last == ("shipped", "awaiting") and t["pr_url"]:
-            pr = gh("pr", "view", t["pr_url"], "--json", "state", "-q", ".state")
+            out = gh("pr", "view", t["pr_url"], "--json", "state,mergeable", "-q", '.state + " " + .mergeable')
+            pr, _, mergeable = out.partition(" ")
             if pr == "MERGED":
                 self.move(tid, ("shipped", "done"), "github", "PR merged 🎉")
                 return f"{tid}: shipped"
             if pr == "CLOSED":
                 self.move(tid, KILLED, "github", "PR closed without merging")
                 return f"{tid}: PR closed"
+            if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts"):
+                t["conflicts"] = True
+                self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
+                return f"{tid}: PR has merge conflicts"
+            if pr == "OPEN" and mergeable == "MERGEABLE" and t.pop("conflicts", None):
+                self.write(tid, meta, body)  # fixed by hand before a fixer ran: drop the banner's warning
             changes = note.get_section(body, "changes")
             if changes is None:  # a PR opened before change requests existed gets the box too
                 self.set_section(tid, "changes", note.CHANGES_BOX)
@@ -668,7 +722,9 @@ class Factory:
     def start(self, tid):
         """Claim a job for an agent and return what it needs to know."""
         t, s = self.ticket(tid), self.state(tid)
-        job = {"inbox": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review"}[s[0]]
+        job = {"inbox": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
+               "shipped": "conflicts"}[s[0]]
+        base_ref = None
         if s == ("drafting", "pending"):
             self.move(tid, ("drafting", "progress"), "wonka")
         elif s == ("baking", "pending"):
@@ -682,14 +738,25 @@ class Factory:
             t["reports"] = {}
             t["finished"] = []
             self.move(tid, ("reviewing", "progress"), "wonka")
+        elif s == ("shipped", "awaiting"):
+            self.ensure_worktree(tid)
+            if _ref_exists(t["worktree"], "MERGE_HEAD"):
+                try:
+                    git("merge", "--abort", cwd=t["worktree"])  # a half-done earlier attempt
+                except WonkaError:
+                    pass
+            self._sync_pr_branch(tid)  # before moving: a failed fetch or a diverged branch is retried next tick
+            base_ref = t["merge_ref"] = self._fetch_pr_base(tid)  # before moving: a failed fetch is retried next tick
+            self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
         t["dispatch"] = t.get("dispatch", 0) + 1  # only ever goes up: tells a late agent from the live one
         agents = {"triage": ["oompa-loompa-triage"], "draft": ["oompa-loompa-analyst"], "bake": ["oompa-loompa-builder"],
-                  "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]]}[job]
+                  "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]],
+                  "conflicts": ["oompa-loompa-fixer"]}[job]
         agents = [f"wonka:{a}" for a in agents]
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
-                "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_ref": self.base_ref(tid),
+                "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_ref": base_ref or self.base_ref(tid),
                 "review_round": t["review_round"], "dispatch": t["dispatch"]}
 
     def retry(self, tid, why="the last job did not finish"):
@@ -785,7 +852,8 @@ class Factory:
             if s == ("shipped", "pending"):
                 events.append(self._safe(k, self.ship))
             elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
-                    or (s == ("drafting", "progress") and t.get("resume")):
+                    or (s == ("drafting", "progress") and t.get("resume")) \
+                    or (s == ("shipped", "awaiting") and t.get("conflicts")):
                 job = self._safe(k, self.start)
                 (events if isinstance(job, str) else jobs).append(job)
         stale_after = dt.timedelta(hours=self.cfg["stale_hours"])
