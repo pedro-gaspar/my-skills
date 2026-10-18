@@ -74,6 +74,14 @@ def _bounds(body, heading):
     return m.start(), m.end() + nxt.start() if nxt else len(body)
 
 
+_HEADING = re.compile(r"^#{1,2}(?= )", re.M)
+
+
+def _demote(content):
+    """Section content can't hold # or ## headings: they would end the section early (see _bounds)."""
+    return _HEADING.sub("###", content)
+
+
 def get_section(body, key):
     b = _bounds(body, HEADINGS.get(key, key))
     if not b:
@@ -84,7 +92,7 @@ def get_section(body, key):
 def set_section(body, key, content):
     """Replace a section in place, or add it at the end (but always above the factory log)."""
     heading = HEADINGS.get(key, key)
-    block = f"## {heading}\n{content.strip()}\n\n"
+    block = f"## {heading}\n{_demote(content.strip())}\n\n"
     b = _bounds(body, heading)
     if b:
         return body[:b[0]] + block + body[b[1]:].lstrip("\n")
