@@ -35,7 +35,7 @@ def _round(t):
     return f"review round {t['review_round']}/3" if t.get("review_round") else ""
 
 
-def _squirrels(t):
+def _reviewers(t):
     return ", ".join(t.get("reviewers") or ["architect"])
 
 
@@ -60,29 +60,29 @@ def _story(tid, t, meta, cfg):
             "The last jobs for this ticket did not finish (details in `~/.wonka/factory.log`). "
             "Fix the cause, then tick **Retry** in 🎩 Stuck below.")
     return {
-        ("inbox", "pending"): ("abstract", "Waiting for Grandpa Joe", "👴 He will size this ticket on the next tick."),
+        ("inbox", "pending"): ("abstract", "Waiting for triage", "📏 An Oompa-Loompa sizes this ticket on the next tick."),
         ("inbox", "awaiting"): ("question", "🙋 Your turn: approve it", (
-            f"Grandpa Joe sized it **{size}**. Tick **Approve** and answer every question (⭐ is the recommendation) "
+            f"The triage Oompa-Loompa sized it **{size}**. Tick **Approve** and answer every question (⭐ is the recommendation) "
             "to send it to Drafting." if size not in machine.AUTO_DONE else
-            "Grandpa Joe needs answers first: tick one option per question (⭐ is the recommendation).")),
+            "The triage Oompa-Loompa needs answers first: tick one option per question (⭐ is the recommendation).")),
         ("inbox", "done"): ("info", "Ready for the Inventing Room",
-                            f"🧪 Charlie picks it up as soon as Drafting has room ({wip['drafting']} at a time)."),
-        ("drafting", "pending"): ("info", "Next in line for Charlie", "🧪 Drafting starts on the next tick."),
-        ("drafting", "progress"): ("info", "Charlie is drafting",
+                            f"🧪 The analyst picks it up as soon as Drafting has room ({wip['drafting']} at a time)."),
+        ("drafting", "pending"): ("info", "Next in line for the analyst", "🧪 Drafting starts on the next tick."),
+        ("drafting", "progress"): ("info", "The analyst is drafting",
                                    "🧪 Studying the code and writing the 📜 Spec and the build plan. Nothing to do."),
-        ("drafting", "awaiting"): ("question", "🙋 Your turn: Charlie has questions", (
+        ("drafting", "awaiting"): ("question", "🙋 Your turn: the analyst has questions", (
             "Tick one option per question in ❓ Questions (⭐ is the recommendation). Write under a question to add "
             "detail. Drafting resumes once every question has a tick.")),
         ("ready", "pending"): ("info", "Spec done, waiting for an oven",
-                               f"🍫 Baking starts when an Oompa-Loompa is free ({wip['baking']} at a time)."),
+                               f"🍫 Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
         ("baking", "pending"): ("info", "Queued for baking", (
             f"🍫 A fix round after {_round(t)}." if t.get("review_round") else "🍫 Baking starts on the next tick.")),
-        ("baking", "progress"): ("info", "An Oompa-Loompa is baking",
+        ("baking", "progress"): ("info", "A builder Oompa-Loompa is baking",
                                  f"🍫 Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),
         ("baking", "done"): ("info", "Baked", "🐿️ Off to the squirrels."),
-        ("reviewing", "pending"): ("info", "Waiting for the squirrels", f"🐿️ Reviewers: {_squirrels(t)}."),
-        ("reviewing", "progress"): ("info", "The squirrels are reviewing",
-                                    f"🐿️ {_squirrels(t)} are checking the code ({_round(t)}). Nothing to do."),
+        ("reviewing", "pending"): ("info", "Waiting for the squirrels", f"🐿️ Squirrels: {_reviewers(t)}."),
+        ("reviewing", "progress"): ("info", "The squirrels are testing every nut",
+                                    f"🐿️ {_reviewers(t)} ({_round(t)}). Nothing to do."),
         ("reviewing", "awaiting"): ("question", "🙋 Your turn: the squirrels have questions", (
             f"Tick one option per question in 🐿️ Review Questions ({_round(t)}). Then it goes back to baking, "
             "back to drafting, or is closed, as you choose.")),

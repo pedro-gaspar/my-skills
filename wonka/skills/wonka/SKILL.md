@@ -1,6 +1,6 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch Grandpa Joe, Charlie, Oompa-Loompas and squirrels), show status, or init the Obsidian board. Use for /wonka add|tick|status|init.
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder) and the squirrel reviewers), show status, or init the Obsidian board. Use for /wonka add|tick|status|init.
 argument-hint: "add \"idea\" | tick | status | init --vault <path>"
 model: haiku
 ---
@@ -37,7 +37,7 @@ Arguments: `$ARGUMENTS`
 1. Run `wonka tick`. It returns JSON: `events` (what changed), `jobs` (already claimed for you), `awaiting_human`,
    `stale`.
 2. For each job, dispatch one background agent per name in its `agents` list (Agent tool, `subagent_type` = that
-   name exactly, e.g. `wonka:charlie`, `run_in_background: true`), all in one message. The prompt is the job JSON
+   name exactly, e.g. `wonka:oompa-loompa-analyst`, `run_in_background: true`), all in one message. The prompt is the job JSON
    verbatim plus one line: `Work golden ticket <id> (<job>).`
 3. When an agent finishes, check `wonka show <id>`. If the ticket did not move on (still In-Progress, or a squirrel
    never reported), run `wonka retry <id>` and say so.

@@ -11,7 +11,7 @@ from . import banner, machine, note, store
 from .machine import KILLED
 from .store import WonkaError
 
-SQUIRRELS = ("architect", "backend", "frontend", "security")
+REVIEWERS = ("architect", "backend", "frontend", "security")
 MAX_REVIEW_ROUNDS = 3
 MAX_RETRIES = 3
 
@@ -200,9 +200,9 @@ class Factory:
             body = note.set_section(body, "questions", note.render_questions(questions))
         self.write(tid, meta, body)
         if size in machine.AUTO_DONE and not questions:
-            self.move(tid, ("inbox", "done"), "grandpa-joe")
+            self.move(tid, ("inbox", "done"), "triage")
         else:
-            self.move(tid, ("inbox", "awaiting"), "grandpa-joe", "Grandpa Joe needs a human: see Approval / Questions")
+            self.move(tid, ("inbox", "awaiting"), "triage", "The triage Oompa-Loompa needs a human: see Approval / Questions")
 
     # -- drafting ---------------------------------------------------------
 
@@ -213,7 +213,7 @@ class Factory:
     def ask(self, tid, questions):
         self.expect(tid, ("drafting", "progress"))
         self.set_section(tid, "questions", note.render_questions(questions))
-        self.move(tid, ("drafting", "awaiting"), "charlie", "Charlie has questions: tick an answer for each")
+        self.move(tid, ("drafting", "awaiting"), "analyst", "The analyst has questions: tick an answer for each")
 
     def plan_path(self, tid):
         folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
@@ -235,11 +235,11 @@ class Factory:
                 raise WonkaError(f"{tid} is {size}: split it first with `wonka add --parent {tid} ...`")
             lines = [f"- [[{k}]] {self.read(k)[0].get('title', '')}" for k in kids]
             self.write(tid, meta, note.set_section(body, "toobig", "\n".join(lines)))
-            self.move(tid, KILLED, "charlie", f"Too big ({size}): split into {len(kids)} tickets")
+            self.move(tid, KILLED, "analyst", f"Too big ({size}): split into {len(kids)} tickets")
             return
-        bad = [r for r in reviewers if r not in SQUIRRELS]
+        bad = [r for r in reviewers if r not in REVIEWERS]
         if bad:
-            raise WonkaError(f"unknown reviewers {bad}; pick from {', '.join(SQUIRRELS)}")
+            raise WonkaError(f"unknown reviewers {bad}; pick from {', '.join(REVIEWERS)}")
         plan = self.plan_path(tid)
         if not plan.exists():
             raise WonkaError(f"write the detailed plan first: wonka plan {tid} < plan.md")
@@ -250,7 +250,7 @@ class Factory:
             body = note.set_section(body, "spec", f"{spec}\n\n📋 Plan: [[{tid}-plan]]")
         self.write(tid, meta, body)
         t["plan"], t["reviewers"] = str(plan), list(reviewers) or ["architect"]
-        self.move(tid, ("ready", "pending"), "charlie")
+        self.move(tid, ("ready", "pending"), "analyst")
 
     # -- baking -----------------------------------------------------------
 
@@ -299,17 +299,17 @@ class Factory:
             raise WonkaError("the worktree has uncommitted changes: commit them first")
         if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
             raise WonkaError(f"no commits on {t['branch']} yet")
-        self.move(tid, ("baking", "done"), "oompa-loompa")
+        self.move(tid, ("baking", "done"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
 
     # -- reviewing --------------------------------------------------------
 
-    def report(self, tid, squirrel, rep):
+    def report(self, tid, reviewer, rep):
         self.expect(tid, ("reviewing", "progress"))
-        if squirrel not in SQUIRRELS:
-            raise WonkaError(f"unknown squirrel {squirrel}")
+        if reviewer not in REVIEWERS:
+            raise WonkaError(f"unknown squirrel {reviewer}; one of {', '.join(REVIEWERS)}")
         t = self.ticket(tid)
-        t.setdefault("reports", {})[squirrel] = rep
+        t.setdefault("reports", {})[reviewer] = rep
         missing = [r for r in t["reviewers"] if r not in t["reports"]]
         if missing:
             return f"{tid}: waiting for {', '.join(missing)}"
@@ -413,7 +413,7 @@ class Factory:
                 self.move(tid, ("inbox", "done"), "human", "Approved")
                 return f"{tid}: approved"
         elif last == ("drafting", "awaiting") and note.all_answered(note.get_section(body, "questions")):
-            self.move(tid, ("drafting", "progress"), "human", "Questions answered, Charlie resumes")
+            self.move(tid, ("drafting", "progress"), "human", "Questions answered, the analyst resumes")
             t["resume"] = True
             return f"{tid}: answered, drafting resumes"
         elif last == ("reviewing", "awaiting"):
@@ -469,7 +469,7 @@ class Factory:
             self.move(tid, ("reviewing", "progress"), "wonka")
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
-        agents = {"triage": ["grandpa-joe"], "draft": ["charlie"], "bake": ["oompa-loompa"],
+        agents = {"triage": ["oompa-loompa-triage"], "draft": ["oompa-loompa-analyst"], "bake": ["oompa-loompa-builder"],
                   "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]]}[job]
         agents = [f"wonka:{a}" for a in agents]
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),

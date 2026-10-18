@@ -112,7 +112,7 @@ class FactoryTest(unittest.TestCase):
     def test_xs_ticket_goes_from_inbox_to_archive(self):
         tid = self.add()
         self.assertEqual(tid, "WONKA-00001")
-        self.assertEqual(self.tick()["jobs"][0]["agents"], ["wonka:grandpa-joe"])
+        self.assertEqual(self.tick()["jobs"][0]["agents"], ["wonka:oompa-loompa-triage"])
         self.to_ready(tid, reviewers=("architect", "security"))
         self.assertIn("[[WONKA-00001-plan]]", note.get_section(self.note(tid)[1], "spec"))
 
@@ -171,8 +171,8 @@ class FactoryTest(unittest.TestCase):
             f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"], "recommended": 0}])
         self.assertEqual(self.state(tid), ("inbox", "awaiting"))
         body = self.note(tid)[1]
-        self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!question] 🙋 Your turn: approve it\n> Grandpa Joe sized it **m**"))
-        self.assertIn("· grandpa-joe · ✉️-Inbox 🕰️-Pending → ✉️-Inbox 🙋-Awaiting-Human", body)
+        self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!question] 🙋 Your turn: approve it\n> The triage Oompa-Loompa sized it **m**"))
+        self.assertIn("· triage · ✉️-Inbox 🕰️-Pending → ✉️-Inbox 🙋-Awaiting-Human", body)
         self.assertGreater(body.index("## 🎩 Factory log"), body.index("## ❓ Questions"), "log stays last")
         self.edit_note(tid, lambda t: t.replace("- [ ] Approve", "- [x] Approve"))
         self.tick()
@@ -181,7 +181,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("drafting", "progress"), "approved, promoted and claimed in one tick")
 
-    def test_drafting_questions_resume_charlie(self):
+    def test_drafting_questions_resume_the_analyst(self):
         tid = self.add()
         self.tick()
         with self.f() as f:

@@ -3,7 +3,8 @@
 *Come with me, and you'll be in a world of pure imagination.* 🍫
 
 A slim software factory for Claude Code. Every idea is a **golden ticket**, a note on an Obsidian Bases kanban.
-Film characters draft, bake, review and ship it as a PR. You steer by ticking checkboxes.
+🎩 **Wonka** (the `/wonka` skill) runs the floor, and his **Oompa-Loompas** (triage, analyst, builder) draft and bake each
+ticket, the Nut Room **squirrels** test it (good nut or bad nut?), then Wonka ships it as a PR. You steer by ticking checkboxes.
 
 ## Install
 
@@ -34,11 +35,11 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 
 | Column | What happens |
 |---|---|
-| ✉️-Inbox | 👴 **grandpa-joe** (Sonnet) sizes it. xs/s with a clear idea → 🌟 Done. m/l/xl or unclear → 🙋, tick **Approve** and answer the questions |
-| 🧪-Drafting | 🧪 **charlie** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed, splits l/xl into new Inbox tickets (`## 🫐 Too big`, then Wont-Do) |
+| ✉️-Inbox | 📏 **oompa-loompa-triage** (Sonnet) sizes it. xs/s with a clear idea → 🌟 Done. m/l/xl or unclear → 🙋, tick **Approve** and answer the questions |
+| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed, splits l/xl into new Inbox tickets (`## 🫐 Too big`, then Wont-Do) |
 | 🎫-Ready | waits for a Baking slot |
-| 🍫-Baking | 🍫 **oompa-loompa** (Opus) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
-| 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security** (Opus, picked by Charlie). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting). Max 3 rounds, then Wont-Do |
+| 🍫-Baking | 🍫 **oompa-loompa-builder** (Opus) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
+| 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security** (Opus, picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting). Max 3 rounds, then Wont-Do |
 | 🛗-Shipped | the CLI pushes and opens the PR → 🙋 approve and merge it → 🌟 Done, worktree removed |
 | 🫐-Wont-Do | killed, split or closed. You can drag any card here |
 

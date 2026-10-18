@@ -16,7 +16,7 @@ class BannerTest(unittest.TestCase):
 
     def test_log_is_newest_first_and_folded(self):
         t = {"history": [
-            {"at": "2026-10-18T10:00:00+00:00", "from": "inbox/pending", "to": "inbox/done", "by": "grandpa-joe"},
+            {"at": "2026-10-18T10:00:00+00:00", "from": "inbox/pending", "to": "inbox/done", "by": "triage"},
             {"at": "2026-10-18T11:00:00+00:00", "by": "wonka", "why": "Reverted"},
         ]}
         lines = banner.log(t).splitlines()
