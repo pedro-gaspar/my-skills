@@ -25,6 +25,14 @@ class NoteTest(unittest.TestCase):
         note.write(path, meta, body)
         self.assertEqual(path.read_text(), text.replace("size: s", "size: m"))
 
+    def test_reads_frontmatter_as_obsidian_rewrites_it_after_a_drag(self):
+        """A kanban drop rewrites the frontmatter through Obsidian's YAML serializer (processFrontMatter)."""
+        path = Path(tempfile.mkdtemp()) / "t.md"
+        path.write_text("---\nid: WONKA-00001\ntitle: 'It''s: done'\nstatus: \"🍫-Baking\"\nphase: 🕰️-Pending\n"
+                        "size: s\njira: null\n---\nbody\n")
+        meta, _ = note.read(path)
+        self.assertEqual((meta["title"], meta["status"], meta["jira"]), ("It's: done", "🍫-Baking", ""))
+
     def test_sections_replace_and_append(self):
         body = note.set_section("", "idea", "an idea")
         body = note.set_section(body, "spec", "v1")
