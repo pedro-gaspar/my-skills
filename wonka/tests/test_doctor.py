@@ -35,3 +35,42 @@ class PermissionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrphansTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = {"vault": str(self.tmp), "folder": "wonka"}
+        self.board = self.tmp / "wonka"
+
+    def write(self, folder, name, body):
+        path = self.board / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("---\nid: WONKA-00001\n---\n" + body)
+        return path
+
+    def test_clean_note_is_ok(self):
+        self.write("golden-tickets", "WONKA-00001.md", "# 🎫 T\n\n## 💡 Idea\nx\n\n## 🎩 Factory log\n> y\n")
+        result = list(doctor._orphans(self.cfg))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "ok")
+        self.assertIn("1 notes", result[0][1])
+
+    def test_orphans_in_tickets_and_archive_warn(self):
+        body = "## 📜 Spec\nspec\n## Changes\nmore\n\n## 🎩 Factory log\n> y\n"
+        a = self.write("golden-tickets", "WONKA-00001.md", body)
+        b = self.write("archive", "WONKA-00002.md", body)
+        result = list(doctor._orphans(self.cfg))
+        self.assertEqual(len(result), 1)
+        level, msg = result[0]
+        self.assertEqual(level, "warn")
+        self.assertIn(str(a), msg)
+        self.assertIn(str(b), msg)
+        self.assertIn("## Changes (below ## 📜 Spec)", msg)
+
+    def test_plans_are_skipped(self):
+        self.write("archive", "WONKA-00001-plan.md", "# Plan\n\n## Goal\nx\n\n## Changes\ny\n")
+        self.assertEqual(list(doctor._orphans(self.cfg)), [("ok", "notes: no unknown ## sections (0 notes)")])
+
+    def test_missing_folders_are_ok(self):
+        self.assertEqual(list(doctor._orphans(self.cfg)), [("ok", "notes: no unknown ## sections (0 notes)")])

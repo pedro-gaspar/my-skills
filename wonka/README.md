@@ -29,7 +29,7 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
 | `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds` |
-| `wonka doctor` | check git, gh, board, state and Claude Code permissions |
+| `wonka doctor` | check git, gh, board, state, Claude Code permissions and notes with stray ## sections |
 
 ## The floor
 
