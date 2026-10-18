@@ -40,5 +40,19 @@ class BannerTest(unittest.TestCase):
         self.assertIn("A fix round after review round 4/4 (1 extra)", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
 
+    def test_fix_round_for_requested_changes(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "baking", "phase": "pending"}, "project": "app", "history": [],
+             "review_round": 0, "fixing_changes": True, "reviewers": ["architect"]}
+        self.assertIn("changes you requested", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        t["fixing_changes"] = False
+        self.assertNotIn("changes you requested", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
+    def test_awaiting_merge_mentions_request_changes(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "shipped", "phase": "awaiting"}, "project": "app", "history": [],
+             "review_round": 1, "reviewers": ["architect"], "pr_url": "https://github.com/acme/app/pull/7"}
+        self.assertIn("🔁 Request changes", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
 if __name__ == "__main__":
     unittest.main()

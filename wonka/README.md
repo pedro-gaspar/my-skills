@@ -40,7 +40,7 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | 🎫-Ready | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Opus) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
 | 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (Opus, picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); a clean round ships once every answer is the recommended one, otherwise rebakes. Max `max_review_rounds` (default 3) rounds with issues, then Wont-Do; a clean round that rebakes adds an extra round |
-| 🛗-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed |
+| 🛗-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed. Or tick **🔁 Request changes** (write what to change under it and/or leave PR review comments): back to Baking for a fix round with a fresh 3 review rounds; the fixes are pushed to the same PR. Only comments by the repo's owners, members and collaborators are copied to the builder (others could slip it instructions on a public repo); the number skipped shows in the factory log |
 | 🫐-Wont-Do | killed, split or closed (the local branch is kept, it may hold work). You can drag any card here |
 
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Done. Done tickets and their plans move to

@@ -231,6 +231,14 @@ class NoteTest(unittest.TestCase):
         self.assertEqual(note.set_banner("## 💡 Idea\nidea\n", "# 🎫 T\n\n> [!info] new"),
                          "# 🎫 T\n\n> [!info] new\n\n## 💡 Idea\nidea\n")
 
+    def test_requested_changes(self):
+        self.assertEqual(note.requested_changes(None), (False, ""))
+        self.assertEqual(note.requested_changes(""), (False, ""))
+        self.assertEqual(note.requested_changes("- [ ] 🔁 Request changes\nnot yet"), (False, "not yet"))
+        self.assertEqual(note.requested_changes("- [x] 🔁 Request changes\n\nline1\nline2\n\n"), (True, "line1\nline2"))
+        self.assertEqual(note.requested_changes("- [x] 🔁 Request changes"), (True, ""))
+        self.assertEqual(note.requested_changes("- [X] Request changes\n  - indented detail"), (True, "  - indented detail"))
+
 
 class UnknownSectionsTest(unittest.TestCase):
     def test_orphan_reports_heading_above(self):

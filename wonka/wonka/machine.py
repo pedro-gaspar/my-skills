@@ -65,6 +65,7 @@ _EDGES = [
     ("shipped/progress", "shipped/pending"),  # retry
     ("shipped/progress", "shipped/awaiting"),
     ("shipped/awaiting", "shipped/done"),
+    ("shipped/awaiting", "baking/pending"),  # the human requested changes on the PR
 ]
 EDGES = {tuple(tuple(side.split("/")) for side in edge) for edge in _EDGES}
 
