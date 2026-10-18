@@ -8,11 +8,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import banner, machine, note, store
+from . import banner, machine, mdlint, note, store
 from .machine import KILLED, review_budget
 from .store import WonkaError
 
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
+# free-text sections, checked with markdownlint; Wonka-rendered sections (approval, questions, stuck, log, ...) never are
+LINTED = ("idea", "spec")
 MAX_RETRIES = 3
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
@@ -235,7 +237,7 @@ class Factory:
         }
         if parent_t:
             parent_t["children"].append(tid)
-        self.write(tid, meta, note.set_section("", "idea", idea))
+        self.write(tid, meta, note.set_section("", "idea", mdlint.guard(idea)))
         return tid
 
     def set_field(self, tid, field, value):
@@ -271,6 +273,8 @@ class Factory:
     # -- drafting ---------------------------------------------------------
 
     def set_section(self, tid, key, content):
+        if key in LINTED:
+            content = mdlint.guard(content)
         meta, body = self.read(tid)
         self.write(tid, meta, note.set_section(body, key, content))
 
