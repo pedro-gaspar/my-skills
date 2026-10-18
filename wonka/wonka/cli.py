@@ -65,7 +65,36 @@ def cmd_config(a):
 
 
 def _stdin_json():
-    return json.loads(sys.stdin.read())
+    try:
+        return json.loads(sys.stdin.read())
+    except ValueError as e:
+        raise WonkaError(f"stdin is not valid JSON: {e}")
+
+
+def parse_question(text):
+    """'Store sessions where? | Redis | *Postgres, already in the stack' → a question; * marks the recommendation."""
+    q, *opts = [part.strip() for part in text.split("|")]
+    if not q or len(opts) < 2:
+        raise WonkaError(f"--question needs a question and at least two options: {text!r}")
+    rec = next((i for i, o in enumerate(opts) if o.startswith("*")), None)
+    return {"q": q, "options": [o.lstrip("*").strip() for o in opts], "recommended": rec}
+
+
+def _questions(a):
+    """Questions come as --question flags (what agents use) or, with --stdin, as JSON."""
+    qs = [parse_question(x) for x in a.question or []]
+    return qs + (_stdin_json() if getattr(a, "stdin", False) else [])
+
+
+def _report(a):
+    if a.stdin:
+        return _stdin_json()
+    rep = {"verdict": "good nut" if a.verdict == "good" else "bad nut", "issues": a.issue or [],
+           "questions": [parse_question(x) for x in a.question or []], "suggest": a.suggest, "why": a.why or ""}
+    for fu in a.followup or []:
+        title, sep, idea = fu.partition("::")
+        rep.setdefault("followups", []).append({"title": title.strip(), "idea": (idea if sep else title).strip()})
+    return rep
 
 
 def run(a, f):
@@ -76,10 +105,13 @@ def run(a, f):
     elif c == "set":
         f.set_field(a.id, a.field, a.value)
     elif c == "triage":
-        f.triage(a.id, a.size, a.title, _stdin_json() if a.questions else None)
+        f.triage(a.id, a.size, a.title, _questions(a) or None)
         print(f.summary(a.id))
     elif c == "ask":
-        f.ask(a.id, _stdin_json())
+        qs = _questions(a)
+        if not qs:
+            raise WonkaError("ask needs at least one --question")
+        f.ask(a.id, qs)
         print(f.summary(a.id))
     elif c == "section":
         f.set_section(a.id, a.key, sys.stdin.read())
@@ -93,7 +125,9 @@ def run(a, f):
         f.baked(a.id)
         print(f.summary(a.id))
     elif c == "report":
-        print(f.report(a.id, a.squirrel, _stdin_json()))
+        if not a.stdin and not a.verdict:
+            raise WonkaError("report needs --verdict good|bad")
+        print(f.report(a.id, a.squirrel, _report(a)))
     elif c == "retry":
         print(f.retry(a.id))
     elif c == "move":
@@ -148,9 +182,12 @@ def parser():
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
     s.add_argument("--title")
-    s.add_argument("--questions", action="store_true", help="read questions JSON from stdin")
-    s = sub.add_parser("ask", help="analyst: questions JSON on stdin")
+    s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
+    s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
+    s = sub.add_parser("ask", help="analyst: ask a human, one --question per question")
     s.add_argument("id")
+    s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
+    s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
     s = sub.add_parser("section", help="write a ## section from stdin (e.g. spec)")
     s.add_argument("id")
     s.add_argument("key")
@@ -162,9 +199,16 @@ def parser():
     s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security,spark,airflow")
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
-    s = sub.add_parser("report", help="squirrel: review report JSON on stdin")
+    s = sub.add_parser("report", help="squirrel: file a review verdict")
     s.add_argument("id")
     s.add_argument("--squirrel", required=True)
+    s.add_argument("--verdict", choices=("good", "bad"))
+    s.add_argument("--issue", action="append", help='"file[:line]: problem → fix" (repeatable)')
+    s.add_argument("--followup", action="append", help='"Title :: self-contained idea" (repeatable)')
+    s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
+    s.add_argument("--suggest", choices=("close", "draft"))
+    s.add_argument("--why", help="why you suggest closing or re-drafting")
+    s.add_argument("--stdin", action="store_true", help="read the whole report as JSON from stdin instead")
     s = sub.add_parser("retry", help="give a stuck job back to the queue")
     s.add_argument("id")
     s = sub.add_parser("move", help="a manual move, still checked by the state machine")

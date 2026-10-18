@@ -12,17 +12,17 @@ and `repo`. Work read-only in the repo: no edits, no commits.
 - git: always `git -C <repo> ...`, never `cd ... && git ...` (that is blocked).
 - tests and tools: one command per call, as `cd <repo> && <command>`.
 - reading code: use the Read, Grep and Glob tools, not `cat`, `ls` or shell loops.
+- in heredoc text (plan, spec) never write `{` directly followed by `"`: write `{ "` (with a space) instead.
 
 1. Read the note: `## 💡 Idea`, and if present `## ❓ Questions` (ticked answers, plus any text written under a
    question) and the review rounds at the bottom of the plan file (when the ticket came back from review).
 2. Study the code until you know exactly what to build: files, functions, data, tests, edge cases.
 3. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash
-   wonka ask <id> <<'EOF'
-   [{"q": "Store sessions in Redis or Postgres?", "options": ["Redis", "Postgres"], "recommended": 1, "why": "already in the stack"}]
-   EOF
+   wonka ask <id> --question "Store sessions in Redis or Postgres? | Redis | *Postgres, already in the stack" \
+                  --question "..."
    ```
-   Always recommend one option. You will be re-dispatched when every question is ticked.
+   Options are separated by `|`; mark the one you recommend with a leading `*` (always recommend one). You will be re-dispatched when every question is ticked.
 4. Re-size if the work turned out bigger or smaller.
 5. **l or xl**: split it into xs/s/m tickets, each standing alone, then close this one:
    ```bash

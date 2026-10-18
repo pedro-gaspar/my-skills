@@ -45,6 +45,32 @@ class CliTest(unittest.TestCase):
         self.assertIn("too small", err)
         self.assertEqual(self.run_cli("config", "colour", "blue")[0], 1)
 
+    def test_question_flags_mark_the_recommendation_with_a_star(self):
+        q = cli.parse_question("Store sessions where? | Redis | *Postgres, already in the stack")
+        self.assertEqual(q, {"q": "Store sessions where?", "options": ["Redis", "Postgres, already in the stack"],
+                             "recommended": 1})
+        with self.assertRaises(store.WonkaError):
+            cli.parse_question("Only one option? | Yes")
+
+    def test_report_flags_build_the_same_report_as_json(self):
+        a = cli.parser().parse_args([
+            "report", "WONKA-00001", "--squirrel", "architect", "--verdict", "bad",
+            "--issue", "calc.py:4: no zero test → add one",
+            "--followup", "Cache lookups :: memoise the user lookup",
+            "--question", "Keep the old API? | Yes | *No, nothing uses it",
+            "--suggest", "draft", "--why", "the spec missed the API"])
+        self.assertEqual(cli._report(a), {
+            "verdict": "bad nut", "issues": ["calc.py:4: no zero test → add one"],
+            "questions": [{"q": "Keep the old API?", "options": ["Yes", "No, nothing uses it"], "recommended": 1}],
+            "suggest": "draft", "why": "the spec missed the API",
+            "followups": [{"title": "Cache lookups", "idea": "memoise the user lookup"}]})
+
+    def test_agent_commands_never_need_json(self):
+        """Claude Code blocks '{"' in background agents' Bash commands, so agent docs must not use it."""
+        root = Path(cli.__file__).resolve().parent.parent
+        for doc in sorted((root / "agents").glob("*.md")) + [root / "skills/wonka/SKILL.md"]:
+            self.assertNotIn('{"', doc.read_text(), doc.name)
+
     def test_errors_are_friendly_and_logged(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         code, _, err = self.run_cli("show", "WONKA-00042")
