@@ -1010,6 +1010,17 @@ class FactoryTest(unittest.TestCase):
             self.assertNotEqual(f.ticket(child)["pr_repo"], "acme/app")
         self.assertEqual(self.note(child)[0]["jira"], "CALC-42")
 
+    def test_child_of_parent_with_deleted_note_gets_no_jira(self):
+        tid = self.add(jira="CALC-42")
+        with self.f() as f:
+            f.path(tid).unlink()
+        with self.f() as f:
+            child = f.add("Part", repo=str(self.repo), parent=tid)
+            explicit = f.add("Other part", repo=str(self.repo), parent=tid, jira="CALC-7")
+            self.assertIn(child, f.ticket(tid)["children"])
+        self.assertEqual(self.note(child)[0]["jira"], "")
+        self.assertEqual(self.note(explicit)[0]["jira"], "CALC-7")
+
     def test_deleted_note_with_dirty_worktree_does_not_wedge_the_tick(self):
         tid = self.add()
         self.to_ready(tid)
