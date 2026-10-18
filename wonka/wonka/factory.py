@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from . import banner, machine, note, store
-from .machine import KILLED, MAX_REVIEW_ROUNDS
+from .machine import KILLED
 from .store import WonkaError
 
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
@@ -118,6 +118,9 @@ class Factory:
             return self.db["tickets"][tid]
         except KeyError:
             raise WonkaError(f"No ticket {tid}")
+
+    def _max_rounds(self):
+        return self.cfg["max_review_rounds"]
 
     def path(self, tid):
         folder = store.archive_dir if self.ticket(tid).get("archived") else store.tickets_dir
@@ -413,18 +416,18 @@ class Factory:
         if qs:
             self.set_section(tid, "review-questions", note.render_questions(qs))
             t["round_issues"] = len(issues)
-            self.move(tid, ("reviewing", "awaiting"), "squirrels", f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: the squirrels have questions")
+            self.move(tid, ("reviewing", "awaiting"), "squirrels", f"Review round {rnd}/{self._max_rounds()}: the squirrels have questions")
             return f"{tid}: review questions for a human"
         if issues:
-            return self._back_to_baking(tid, f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: {len(issues)} issue(s), back to baking")
-        self.move(tid, ("reviewing", "done"), "squirrels", f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: a good nut")
+            return self._back_to_baking(tid, f"Review round {rnd}/{self._max_rounds()}: {len(issues)} issue(s), back to baking")
+        self.move(tid, ("reviewing", "done"), "squirrels", f"Review round {rnd}/{self._max_rounds()}: a good nut")
         self.move(tid, ("shipped", "pending"), "wonka")
         return f"{tid}: clean review, off to ship"
 
     def _back_to_baking(self, tid, why, kill=True):
-        if kill and self.ticket(tid)["review_round"] >= MAX_REVIEW_ROUNDS:
-            self.move(tid, KILLED, "wonka", f"Bad nut: {MAX_REVIEW_ROUNDS} review rounds without a clean bill, rolled away")
-            return f"{tid}: killed after {MAX_REVIEW_ROUNDS} review rounds"
+        if kill and self.ticket(tid)["review_round"] >= self._max_rounds():
+            self.move(tid, KILLED, "wonka", f"Bad nut: {self._max_rounds()} review rounds without a clean bill, rolled away")
+            return f"{tid}: killed after {self._max_rounds()} review rounds"
         self.move(tid, ("baking", "pending"), "wonka", why)
         return f"{tid}: back to baking"
 
@@ -511,8 +514,8 @@ class Factory:
                         return f"{tid}: clean review answered, off to ship"
                     return self._back_to_baking(
                         tid, f"Review answers in, a clean round but the answers change the plan, back to baking "
-                             f"(round {t['review_round']}/{MAX_REVIEW_ROUNDS})", kill=False)
-                return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{MAX_REVIEW_ROUNDS})")
+                             f"(round {t['review_round']}/{self._max_rounds()})", kill=False)
+                return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{self._max_rounds()})")
         elif last == ("shipped", "awaiting") and t["pr_url"]:
             pr = gh("pr", "view", t["pr_url"], "--json", "state", "-q", ".state")
             if pr == "MERGED":

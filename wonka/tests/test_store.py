@@ -50,6 +50,10 @@ class StateTest(unittest.TestCase):
             raise RuntimeError("boom")
         self.assertEqual(self.next_ids(), (2, None))
 
+    def test_old_config_without_max_review_rounds_gets_the_default(self):
+        (self.tmp / "config.json").write_text(json.dumps({"vault": "/x"}))
+        self.assertEqual(store.load_config()["max_review_rounds"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

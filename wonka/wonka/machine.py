@@ -18,7 +18,6 @@ PHASES = {
 SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
 AUTO_DONE = ("xs", "s")  # Inbox tickets this small need no human approval
-MAX_REVIEW_ROUNDS = 3  # review rounds before a bad nut is rolled away
 
 VALID = {
     "inbox": {"pending", "awaiting", "done"},

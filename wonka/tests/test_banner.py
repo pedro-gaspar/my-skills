@@ -1,5 +1,4 @@
 import unittest
-from unittest import mock
 
 from wonka import banner, machine, store
 
@@ -25,12 +24,11 @@ class BannerTest(unittest.TestCase):
         self.assertIn("Reverted", lines[1])
         self.assertIn("✉️-Inbox 🕰️-Pending → ✉️-Inbox 🌟-Done", lines[2])
 
-    def test_review_round_uses_the_max_rounds_constant(self):
-        cfg = dict(store.DEFAULT_CONFIG)
+    def test_review_round_uses_the_max_rounds_setting(self):
+        cfg = {**store.DEFAULT_CONFIG, "max_review_rounds": 5}
         t = {"last_valid": {"status": "reviewing", "phase": "progress"}, "project": "app", "history": [],
              "review_round": 2, "reviewers": ["architect"], "entered_done_at": "2026-10-18T10:00:00+00:00"}
-        with mock.patch.object(machine, "MAX_REVIEW_ROUNDS", 5):
-            text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
         self.assertIn("review round 2/5", text)
 
 

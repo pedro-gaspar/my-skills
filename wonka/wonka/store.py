@@ -16,9 +16,11 @@ DEFAULT_CONFIG = {
     "wip": {"drafting": 1, "baking": 2},  # tickets worked on at the same time
     "archive_after_days": 7,  # Done tickets (and their plans) move to archive/ after this
     "stale_hours": 2,  # a job running longer than this is offered for retry
+    "max_review_rounds": 3,  # review rounds with issues before a bad nut is rolled away
 }
 SETTINGS = {  # wonka config <key> <value>
     "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
+    "max_review_rounds": int,
 }
 
 
@@ -29,7 +31,7 @@ def set_setting(cfg, key, raw):
         value = SETTINGS[key](raw)
     except ValueError:
         raise WonkaError(f"{key} must be a number")
-    if value < (1 if key.startswith("wip.") else 0):
+    if value < (1 if key.startswith("wip.") or key == "max_review_rounds" else 0):
         raise WonkaError(f"{key} is too small")
     *parents, leaf = key.split(".")
     node = cfg

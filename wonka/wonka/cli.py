@@ -33,7 +33,8 @@ def cmd_init(a):
         cfg = copy.deepcopy(store.DEFAULT_CONFIG)
     cfg["vault"], cfg["folder"] = str(Path(a.vault).expanduser().resolve()), a.folder
     for key, value in (("wip.drafting", a.drafting), ("wip.baking", a.baking),
-                       ("archive_after_days", a.archive_days), ("stale_hours", a.stale_hours)):
+                       ("archive_after_days", a.archive_days), ("stale_hours", a.stale_hours),
+                       ("max_review_rounds", a.max_review_rounds)):
         if value is not None:
             store.set_setting(cfg, key, value)
     store.save_config(cfg)
@@ -51,7 +52,8 @@ def show_config(cfg):
     print(f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
           f"🍫 baking at once   : {cfg['wip']['baking']}\n"
           f"🗄️ archive after    : {cfg['archive_after_days']} days\n"
-          f"⏳ retry jobs after : {cfg['stale_hours']} hours")
+          f"⏳ retry jobs after : {cfg['stale_hours']} hours\n"
+          f"🐿️ review rounds    : {cfg['max_review_rounds']}")
 
 
 def cmd_config(a):
@@ -168,6 +170,7 @@ def parser():
                                     "reviewing and shipped tickets don't count (default 2)")
     s.add_argument("--archive-days", help="days before Done tickets are archived (default 7)")
     s.add_argument("--stale-hours", help="hours before a running job is offered for retry (default 2)")
+    s.add_argument("--max-review-rounds", help="review rounds with issues before a ticket is rolled away (default 3)")
     s = sub.add_parser("config", help="show settings, or change one: wonka config wip.baking 3")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")
