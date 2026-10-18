@@ -33,6 +33,59 @@ class NoteTest(unittest.TestCase):
         meta, _ = note.read(path)
         self.assertEqual((meta["title"], meta["status"], meta["jira"]), ("It's: done", "🍫-Baking", ""))
 
+    FOLDED = ("---\nid: WONKA-00001\ntitle: >-\n  Handle block scalars and trailing colons in note YAML so that\n"
+              "  long titles survive\nstatus: ✉️-Inbox\nphase: 🕰️-Pending\nsize: s\njira:\n---\nbody\n")
+    LONG = "Handle block scalars and trailing colons in note YAML so that long titles survive"
+
+    def _meta(self, frontmatter):
+        path = Path(tempfile.mkdtemp()) / "t.md"
+        path.write_text(f"---\n{frontmatter}\n---\nbody\n")
+        return note.read(path)[0]
+
+    def test_reads_folded_block_scalar_as_js_yaml_writes_long_titles(self):
+        path = Path(tempfile.mkdtemp()) / "t.md"
+        path.write_text(self.FOLDED)
+        meta, body = note.read(path)
+        self.assertEqual(meta["title"], self.LONG)
+        self.assertEqual((meta["status"], meta["phase"], meta["jira"]), ("✉️-Inbox", "🕰️-Pending", ""))
+        self.assertEqual(body, "body\n")
+
+    def test_reads_literal_and_clipped_block_scalars(self):
+        self.assertEqual(self._meta("title: |-\n  one\n  two\nsize: s")["title"], "one\ntwo")
+        self.assertEqual(self._meta("title: >\n  a\n  b\n\n  c\n\nsize: s")["title"], "a b\nc")
+        self.assertEqual(self._meta("title: > # c\n  x")["title"], "x")
+        self.assertEqual(self._meta("title: >-\nsize: s"), {"title": "", "size": "s"})
+
+    def test_block_scalar_title_round_trips_to_one_quoted_line(self):
+        path = Path(tempfile.mkdtemp()) / "t.md"
+        path.write_text(self.FOLDED)
+        meta, body = note.read(path)
+        note.write(path, meta, body)
+        self.assertIn(f"\ntitle: {self.LONG}\nstatus:", path.read_text(), "one plain line: nothing to quote")
+        self.assertEqual(note.read(path), (meta, body))
+        path.write_text(self.FOLDED.replace("so that\n", "so that:\n"))
+        meta, body = note.read(path)
+        note.write(path, meta, body)
+        self.assertIn(f'\ntitle: "{self.LONG.replace("so that", "so that:")}"\nstatus:', path.read_text())
+        self.assertEqual(note.read(path), (meta, body))
+
+    def test_reads_plain_multiline_scalar(self):
+        self.assertEqual(self._meta("title: foo\n  bar\n\nsize: s"), {"title": "foo bar", "size": "s"})
+        self.assertEqual(self._meta("title: foo\n\nsize: s")["title"], "foo")
+
+    def test_quotes_values_plain_yaml_would_mangle(self):
+        path = Path(tempfile.mkdtemp()) / "t.md"
+        for title in ("Fix:", "x:", " padded ", "a\tb", "a\nb", "~"):
+            with self.subTest(title=title):
+                note.write(path, {"id": "WONKA-00001", "title": title}, "body")
+                line = next(l for l in path.read_text().splitlines() if l.startswith("title:"))
+                self.assertTrue(line.startswith('title: "'), line)
+                self.assertEqual(note.read(path)[0]["title"], title)
+        note.write(path, {"id": "WONKA-00001", "title": "plain title"}, "body")
+        text = path.read_text()
+        self.assertIn("\nid: WONKA-00001\n", text)
+        self.assertIn("\ntitle: plain title\n", text)
+
     def test_new_questions_archives_an_answered_round(self):
         body = note.set_section("", "idea", "an idea")
         body = note.set_section(body, "log", "> - event")
