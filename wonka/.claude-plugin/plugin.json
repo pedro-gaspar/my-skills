@@ -1,6 +1,6 @@
 {
   "name": "wonka",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "🎩 A slim software factory: golden tickets on an Obsidian Bases kanban, drafted and baked by Oompa-Loompas, reviewed by squirrels, shipped as PRs.",
   "author": { "name": "Pedro Gaspar" },
   "keywords": ["workflow", "kanban", "obsidian", "subagents", "factory"]
