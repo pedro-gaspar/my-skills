@@ -307,6 +307,9 @@ class Factory:
             raise WonkaError("the worktree has uncommitted changes: commit them first")
         if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
             raise WonkaError(f"no commits on {t['branch']} yet")
+        if t["review_round"] > 0 and git("rev-parse", "HEAD", cwd=t["worktree"]) == t.get("reviewed_head"):
+            raise WonkaError(f"no new commits on {t['branch']} since review round {t['review_round']}: "
+                             "commit the fixes first")
         self.move(tid, ("baking", "done"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
 
@@ -432,6 +435,7 @@ class Factory:
                     return f"{tid}: closed after review"
                 if note.picked_yes(sec, note.DRAFT_Q):
                     t["review_round"] = 0
+                    t.pop("reviewed_head", None)
                     self.move(tid, ("drafting", "pending"), "human", "Back to drafting after review")
                     return f"{tid}: back to drafting"
                 return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{MAX_REVIEW_ROUNDS})")
@@ -472,6 +476,7 @@ class Factory:
             self.move(tid, ("baking", "progress"), "wonka")
         elif s == ("reviewing", "pending"):
             self.ensure_worktree(tid)
+            t["reviewed_head"] = git("rev-parse", "HEAD", cwd=t["worktree"])
             t["review_round"] += 1
             t["reports"] = {}
             self.move(tid, ("reviewing", "progress"), "wonka")
