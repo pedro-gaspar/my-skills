@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -971,6 +972,96 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "done"))
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         self.assertTrue(any(h.get("why", "").startswith("Branch kept") for h in self.history(tid)))
+
+    # -- notifications ----------------------------------------------------
+
+    def notify_env(self, **extra):
+        """Let notify() run for real (setUp silences it)."""
+        patcher = mock.patch.dict(os.environ, extra)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("WONKA_NO_NOTIFY", None)
+
+    def test_notify_without_url_runs_notify_send_once(self):
+        self.notify_env()
+        with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
+            factory.notify("WONKA-00001", "Hi")
+        run.assert_called_once_with(["notify-send", "-a", "Wonka", "🎩 Wonka needs you", "WONKA-00001 — Hi"], check=False)
+        popen.assert_not_called()
+
+    def test_notify_with_url_waits_for_a_click_in_the_background(self):
+        self.notify_env()
+        url = "https://x/pull/7"
+        with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
+            factory.notify("WONKA-00001", "Hi", url)
+        run.assert_not_called()
+        popen.assert_called_once()
+        argv, kwargs = popen.call_args.args[0], popen.call_args.kwargs
+        self.assertEqual(argv[:2], ["sh", "-c"])
+        self.assertNotIn(url, argv[2], "the URL is an argument, not part of the script")
+        self.assertIn(url, argv[3:])
+        i = argv.index("-A")
+        self.assertEqual(argv[i + 1], "default=Open PR")
+        self.assertTrue(kwargs["start_new_session"])
+
+    def fake_notify(self, notify_send):
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        (bin_dir / "notify-send").write_text(notify_send)
+        opener = bin_dir / "opener"
+        opener.write_text('#!/bin/sh\nprintf \'%s\' "$1" > "$OPENED"\n')
+        for p in (bin_dir / "notify-send", opener):
+            p.chmod(0o755)
+        opened = self.tmp / "opened"
+        self.notify_env(PATH=f"{bin_dir}:{os.environ['PATH']}", WONKA_OPEN=str(opener), OPENED=str(opened))
+        real_popen = subprocess.Popen
+
+        def popen(*a, **kw):
+            proc = real_popen(*a, **kw)
+            self.addCleanup(proc.wait, 5)
+            return proc
+
+        patcher = mock.patch.object(factory.subprocess, "Popen", popen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return opened
+
+    def test_clicking_the_notification_opens_the_pr(self):
+        opened = self.fake_notify("#!/bin/sh\necho default\n")
+        url = "https://github.com/acme/app/pull/7"
+        pwned = self.tmp / "pwned"
+        factory.notify("WONKA-00001", f"Hi; $(touch {pwned})", url)
+        deadline = time.monotonic() + 5
+        while not opened.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.05)
+        self.assertEqual(opened.read_text(), url)
+        self.assertFalse(pwned.exists(), "the title is never run by the shell")
+
+    def test_dismissing_the_notification_opens_nothing(self):
+        opened = self.fake_notify("#!/bin/sh\nexit 0\n")
+        factory.notify("WONKA-00001", "Hi", "https://github.com/acme/app/pull/7")
+        time.sleep(0.5)
+        self.assertFalse(opened.exists())
+
+    def test_pr_notification_carries_the_pr_url(self):
+        tid = self.add()
+        with mock.patch.object(factory, "notify") as n:
+            self.to_awaiting_merge(tid)
+        calls = [c.args for c in n.call_args_list if c.args[0] == tid]
+        self.assertEqual(calls[-1], (tid, "Add a hello script", "https://github.com/acme/app/pull/7"))
+        self.assertTrue(all(c[2] is None for c in calls[:-1]))
+
+    def test_other_awaiting_notifications_have_no_url(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.ticket(tid)["pr_url"] = "https://github.com/acme/app/pull/99"
+        with mock.patch.object(factory, "notify") as n:
+            with self.f() as f:
+                f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"]}])
+        self.assertEqual(self.state(tid), ("inbox", "awaiting"))
+        n.assert_called_once_with(tid, "Add a hello script", None)
 
     def test_one_unreadable_note_does_not_block_other_tickets(self):
         a = self.add("Add a hello script")
