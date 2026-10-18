@@ -186,6 +186,23 @@ class NoteTest(unittest.TestCase):
         self.assertFalse(note.approved_retry("- [ ] Retry"))
         self.assertTrue(note.approved_retry("- [X] Retry (stuck)"))
 
+    def test_set_banner_replaces_only_the_old_banner(self):
+        old = "# 🎫 T\n\n> [!info] x\n> y\n> *q*\n> \n> facts\n\n"
+        user = "> my own quote\n\n# My heading\n\n"
+        new = "# 🎫 T\n\n> [!info] new"
+        text = note.set_banner(old + user + "## 💡 Idea\nidea\n", new)
+        self.assertTrue(text.startswith(new + "\n\n"), text)
+        self.assertEqual(text.count("> my own quote"), 1)
+        self.assertEqual(text.count("# My heading"), 1)
+        self.assertNotIn("> [!info] x", text)
+        self.assertNotIn("> y", text)
+        self.assertTrue(text.endswith("## 💡 Idea\nidea\n"))
+        self.assertEqual(note.set_banner(text, new), text, "idempotent")
+
+    def test_set_banner_on_a_note_without_one(self):
+        self.assertEqual(note.set_banner("## 💡 Idea\nidea\n", "# 🎫 T\n\n> [!info] new"),
+                         "# 🎫 T\n\n> [!info] new\n\n## 💡 Idea\nidea\n")
+
 
 if __name__ == "__main__":
     unittest.main()
