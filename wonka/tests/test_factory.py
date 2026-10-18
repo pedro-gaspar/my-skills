@@ -143,11 +143,15 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertTrue(wt.exists(), "worktree lives until shipped")
         self.assertIn("pull/7", self.note(tid)[1])
+        with self.f() as f:
+            branch = f.ticket(tid)["branch"]
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
 
         self.pr_state.write_text("MERGED")
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "done"))
         self.assertFalse(wt.exists())
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "merged branch is deleted")
 
         meta, body = self.note(tid)
         self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
@@ -751,6 +755,59 @@ class FactoryTest(unittest.TestCase):
             history = f.ticket(tid)["history"]
         self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in history))
         self.tick()
+
+    def to_awaiting_merge(self, tid):
+        """Bake, review clean and open the PR: shipped/awaiting with the worktree and branch in place."""
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        with self.f() as f:
+            branch = f.ticket(tid)["branch"]
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        return wt, branch
+
+    def history(self, tid):
+        with self.f() as f:
+            return list(f.ticket(tid)["history"])
+
+    def test_killed_ticket_keeps_its_branch(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.pr_state.write_text("CLOSED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertFalse(wt.exists())
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "a closed PR keeps its branch")
+
+    def test_branch_kept_when_worktree_is_dirty_after_merge(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        (wt / "scratch.txt").write_text("wip\n")
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertTrue(wt.exists())
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in self.history(tid)))
+
+    def test_branch_delete_failure_is_logged_not_raised(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        real_git = factory.git
+
+        def fake(*args, cwd):
+            if args[:2] == ("branch", "-D"):
+                raise WonkaError("boom")
+            return real_git(*args, cwd=cwd)
+
+        self.pr_state.write_text("MERGED")
+        with mock.patch.object(factory, "git", fake):
+            self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        self.assertTrue(any(h.get("why", "").startswith("Branch kept") for h in self.history(tid)))
 
     def test_one_unreadable_note_does_not_block_other_tickets(self):
         a = self.add("Add a hello script")
