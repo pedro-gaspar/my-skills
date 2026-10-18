@@ -1,10 +1,10 @@
 {
-  "name": "wonka",
+  "name": "my-skills",
   "owner": { "name": "Pedro Gaspar" },
   "plugins": [
     {
       "name": "wonka",
-      "source": "./",
+      "source": "./wonka",
       "description": "🎩 A slim software factory run from an Obsidian Bases kanban."
     }
   ]
