@@ -3,6 +3,7 @@
 import contextlib
 import datetime as dt
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -683,6 +684,49 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "pending"))
         with self.f() as f:
             self.assertEqual(f.ticket(tid)["retries"], 1)
+
+    def _shipping_ticket(self):
+        tid = self.add()
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        return tid, wt
+
+    def _assert_retried_once(self, tid):
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        with self.f() as f:
+            self.assertEqual(f.ticket(tid)["retries"], 1)
+            self.assertNotIn("job_started_at", f.ticket(tid))
+
+    def test_ship_with_deleted_worktree_is_retried(self):
+        tid, wt = self._shipping_ticket()
+        shutil.rmtree(wt)
+        events = self.tick()["events"]
+        self.assertTrue(any(e.startswith(f"{tid}: PR failed: working directory") for e in events), events)
+        self._assert_retried_once(tid)
+
+    def test_ship_with_worktree_replaced_by_a_file_is_retried(self):
+        tid, wt = self._shipping_ticket()
+        shutil.rmtree(wt)
+        wt.write_text("not a dir\n")
+        events = self.tick()["events"]
+        self.assertTrue(any(e.startswith(f"{tid}: PR failed") for e in events), events)
+        self.assertFalse(any(e.startswith("⚠️") for e in events), events)
+        self._assert_retried_once(tid)
+
+        self.tick()
+        events = self.tick()["events"]
+        self.assertTrue(any("stuck after 3 tries" in e for e in events), events)
+        with self.f() as f:
+            self.assertTrue(f.ticket(tid).get("stuck"))
+
+    def test_run_names_a_missing_working_directory(self):
+        missing = self.tmp / "nope"
+        with self.assertRaisesRegex(WonkaError, "working directory .* is missing"):
+            factory._run(["git", "status"], cwd=str(missing))
+        with self.assertRaisesRegex(WonkaError, "is not installed"):
+            factory._run(["no-such-binary-xyz"])
 
     def test_deleted_and_foreign_notes(self):
         tid = self.add()

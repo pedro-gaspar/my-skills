@@ -41,7 +41,9 @@ def _age(stamp):
 def _run(cmd, cwd=None):
     try:
         out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        if cwd is not None and e.filename == str(cwd):
+            raise WonkaError(f"working directory {cwd} is missing")
         raise WonkaError(f"{cmd[0]} is not installed")
     except subprocess.CalledProcessError as e:
         raise WonkaError(f"{' '.join(cmd[:3])} failed: {(e.stderr or e.stdout).strip()}")
@@ -445,7 +447,7 @@ class Factory:
                      "--json", "url", "-q", ".[0].url") or gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
                      "--title", f"{tid}: {meta.get('title', '')}",
                      "--body", pr_body(tid, meta, spec))
-        except WonkaError as e:
+        except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
             outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
