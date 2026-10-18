@@ -28,7 +28,7 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | `/wonka tick` | one turn of the factory: fix the board, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
-| `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking`, `archive_after_days`, `stale_hours` |
+| `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours` |
 | `wonka doctor` | check git, gh, board, state and Claude Code permissions |
 
 ## The floor
@@ -45,6 +45,20 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Done. Done tickets and their plans move to
 `wonka/archive/` after 7 days.
+
+## WIP limits
+
+`wip.drafting` and `wip.baking` cap how many tickets an Oompa-Loompa is working on, not how many cards sit in a
+column. A ticket counts toward its column's limit only while it is 🕰️-Pending or 🎩-In-Progress there, and the limit
+is checked only when a ticket is pulled in (✉️ Inbox to 🧪 Drafting, 🎫 Ready to 🍫 Baking). This is on purpose:
+waiting for a human should never block the line.
+
+- 🧪 Drafting: a ticket waiting on your answers (🙋) frees its slot. When you answer, drafting resumes at once,
+  even if that briefly puts Drafting over the limit.
+- 🍫 Baking: tickets in 🐿️-Reviewing and 🛗-Shipped don't count, and squirrel reviews run without a limit. A ticket
+  sent back by review returns to Baking straight away, without waiting for a slot.
+- So `wip.baking` is not a cap on worktrees: every ticket keeps its worktree from Baking until its PR is merged
+  or it goes to Wont-Do.
 
 ## Reading a ticket
 
