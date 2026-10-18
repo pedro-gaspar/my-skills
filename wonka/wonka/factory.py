@@ -125,8 +125,9 @@ class Factory:
     def log_event(self, tid, why, by="wonka"):
         self.ticket(tid)["history"].append({"at": _iso(now()), "by": by, "why": why})
         store.log(f"{tid} {by}: {why}")
-        meta, body = self.read(tid)
-        self.write(tid, meta, body)
+        if self.path(tid).exists():
+            meta, body = self.read(tid)
+            self.write(tid, meta, body)
 
     def state(self, tid):
         lv = self.ticket(tid)["last_valid"]
@@ -509,7 +510,7 @@ class Factory:
     def _safe(self, tid, fn):
         try:
             return fn(tid)
-        except WonkaError as e:
+        except (WonkaError, OSError) as e:
             return f"{tid}: ⚠️ {e}"
 
     def tick(self):
@@ -521,13 +522,12 @@ class Factory:
                                 (("ready", "pending"), ("baking", "pending"), "baking")):
             for k in self.live():
                 if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
-                    self.move(k, dst, "wonka")
-                    events.append(f"{k}: → {fmt(dst)}")
+                    events.append(self._safe(k, lambda k: self.move(k, dst, "wonka") or f"{k}: → {fmt(dst)}"))
         jobs = []
         for k in self.live():
             t, s = self.ticket(k), self.state(k)
             if s == ("shipped", "pending"):
-                events.append(self.ship(k))
+                events.append(self._safe(k, self.ship))
             elif t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
                 continue
             elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
