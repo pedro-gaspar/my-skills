@@ -403,6 +403,15 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", events)
         self.assertEqual(self.state(tid), ("wontdo", "done"))
 
+    def test_add_with_unknown_parent_leaves_nothing_behind(self):
+        with self.assertRaises(WonkaError):
+            self.add(parent="WONKA-09999")
+        folder = store.tickets_dir(self.cfg)
+        self.assertEqual(list(folder.glob("*.md")) if folder.exists() else [], [])
+        tid = self.add()
+        self.assertEqual(tid, "WONKA-00001")
+        self.assertFalse([e for e in self.tick()["events"] if "not a Wonka ticket" in e])
+
     def test_deleted_note_with_dirty_worktree_does_not_wedge_the_tick(self):
         tid = self.add()
         self.to_ready(tid)
