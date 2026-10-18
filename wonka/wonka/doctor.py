@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import store
 
-SETTINGS = Path.home() / ".claude" / "settings.json"
+SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
 
 
 def _ok(cmd):
@@ -16,6 +16,19 @@ def _ok(cmd):
         return subprocess.run(cmd, capture_output=True).returncode == 0
     except FileNotFoundError:
         return False
+
+
+def _permissions(paths=None):
+    """Merged allow rules and additional directories from every settings file that exists."""
+    allow, dirs = [], []
+    for path in paths or SETTINGS:
+        try:
+            perms = json.loads(path.read_text()).get("permissions", {})
+        except (OSError, ValueError, AttributeError):
+            continue
+        allow += perms.get("allow", [])
+        dirs += [str(Path(d).expanduser()) for d in perms.get("additionalDirectories", [])]
+    return allow, dirs
 
 
 def checks():
@@ -38,17 +51,13 @@ def checks():
     except (ValueError, KeyError) as e:
         yield "fail", f"state {path} is unreadable: {e}"
 
-    try:
-        perms = json.loads(SETTINGS.read_text()).get("permissions", {})
-    except (FileNotFoundError, ValueError):
-        perms = {}
-    allow, dirs = perms.get("allow", []), [str(Path(d).expanduser()) for d in perms.get("additionalDirectories", [])]
+    allow, dirs = _permissions()
     want_dirs = [str(store.worktrees_dir()), str(board)]
     missing = [r for r in ("Bash(wonka *)", "Bash(git *)") if r not in allow and r.replace(" *", ":*") not in allow]
     missing_dirs = [d for d in want_dirs if d not in dirs]
     if missing or missing_dirs:
         snippet = {"permissions": {"allow": missing, "additionalDirectories": missing_dirs}}
-        yield "warn", ("background agents will ask you before every wonka/git call; to run unattended add to ~/.claude/settings.json:\n"
+        yield "warn", ("background agents will ask you before every wonka/git call; to run unattended add to ~/.claude/settings.json (or settings.local.json):\n"
                        + json.dumps(snippet, indent=2))
     else:
         yield "ok", "Claude Code permissions for the CLI, git, worktrees and board"
