@@ -40,8 +40,8 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | 🎫-Ready | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Opus) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
 | 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (Opus, picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); a clean round ships once every answer is the recommended one, otherwise rebakes. Max 3 rounds with issues, then Wont-Do |
-| 🛗-Shipped | the CLI pushes and opens the PR → 🙋 approve and merge it → 🌟 Done, worktree removed |
-| 🫐-Wont-Do | killed, split or closed. You can drag any card here |
+| 🛗-Shipped | the CLI pushes and opens the PR → 🙋 approve and merge it → 🌟 Done, worktree and local branch removed |
+| 🫐-Wont-Do | killed, split or closed (the local branch is kept, it may hold work). You can drag any card here |
 
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Done. Done tickets and their plans move to
 `wonka/archive/` after 7 days.

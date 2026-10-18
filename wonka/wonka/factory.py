@@ -169,6 +169,8 @@ class Factory:
             t.pop("retries", None)
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             self.drop_worktree(tid)
+            if dst == ("shipped", "done"):
+                self.drop_branch(tid)
         if dst[1] == "awaiting":
             notify(tid, meta.get("title", ""))
 
@@ -331,6 +333,18 @@ class Factory:
                 self.log_event(tid, f"Worktree kept, it has local changes: {t['worktree']} ({e})")
                 return
         t["worktree"] = None
+
+    def drop_branch(self, tid):
+        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone."""
+        t = self.ticket(tid)
+        if not t.get("branch") or t.get("worktree"):
+            return  # no branch, or the worktree was kept (it still has the branch checked out)
+        if not Path(t["repo"]).is_dir() or not _ref_exists(t["repo"], f"refs/heads/{t['branch']}"):
+            return
+        try:
+            git("branch", "-D", t["branch"], cwd=t["repo"])
+        except WonkaError as e:
+            self.log_event(tid, f"Branch kept, could not delete {t['branch']} ({e})")
 
     def baked(self, tid):
         self.expect(tid, ("baking", "progress"))
