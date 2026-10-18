@@ -102,6 +102,10 @@ def notify(tid, title):
         pass
 
 
+def _default_title(idea):
+    return idea.strip().splitlines()[0][:60]
+
+
 class Factory:
     def __init__(self, cfg, db):
         self.cfg, self.db = cfg, db
@@ -184,7 +188,7 @@ class Factory:
                 jira = self.read(parent)[0].get("jira") or None
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
-        title = title or idea.strip().splitlines()[0][:60]
+        title = title or _default_title(idea)
         meta = {"id": tid, "title": title, "size": size or "", "jira": jira or ""}
         meta["status"], meta["phase"] = machine.label(("inbox", "pending"))
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
@@ -354,13 +358,29 @@ class Factory:
             return f"{tid}: waiting for {', '.join(missing)}"
         return self._verdict(tid)
 
+    def _child_titles(self, tid):
+        """Casefolded titles of a ticket's children, in any state, so a repeated follow-up is not filed twice."""
+        titles = set()
+        for c in self.ticket(tid).get("children", []):
+            try:
+                titles.add((self.read(c)[0].get("title") or "").strip().casefold())
+            except (WonkaError, OSError):
+                pass  # lost note or unknown child: nothing to match against
+        return titles
+
     def _verdict(self, tid):
         t = self.ticket(tid)
         reps, rnd = t.pop("reports"), t["review_round"]
         t.pop("finished", None)
+        seen = self._child_titles(tid)
         for rep in reps.values():
             for f in rep.get("followups", []):
-                self.add(f["idea"], f.get("title"), t["repo"], t["pr_repo"], parent=tid)
+                title = (f.get("title") or _default_title(f["idea"])).strip()
+                if title.casefold() in seen:
+                    self.log_event(tid, f"Follow-up already on the board, skipped: {title}")
+                    continue
+                self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid)
+                seen.add(title.casefold())
         issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
         if t["plan"] and Path(t["plan"]).exists():
             log = [f"\n## 🐿️ Review round {rnd}"]

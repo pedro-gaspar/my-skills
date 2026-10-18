@@ -148,6 +148,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "done"))
         self.assertFalse(wt.exists())
+
         meta, body = self.note(tid)
         self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
         self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
@@ -162,6 +163,35 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((archive / f"{tid}.md").exists())
         self.assertTrue((archive / f"{tid}-plan.md").exists(), "plans are archived with their tickets")
         self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-plan.md").exists())
+
+    def test_repeated_followup_across_rounds_is_not_duplicated(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "security"))
+        children = lambda: self.f_ticket(tid)["children"]
+
+        self.bake(tid)
+        bye = {"title": "Add a bye script", "idea": "bye.sh"}
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["x"], "followups": [bye]},
+                    security={"verdict": "bad nut", "issues": ["y"], "followups": [dict(bye)]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        self.assertEqual(len(children()), 1, "same follow-up from two squirrels in one round is filed once")
+
+        self.bake(tid, "fix.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["x"],
+                                    "followups": [{"title": "  add A BYE script ", "idea": "bye.sh again"},
+                                                  {"title": "Add a ciao script", "idea": "ciao.sh"}]},
+                    security={"verdict": "bad nut", "issues": ["y"],
+                              "followups": [{"idea": "Add a bye script\nno title, idea's first line matches"}]})
+        kids = children()
+        self.assertEqual(len(kids), 2)
+        self.assertEqual([self.note(k)[0]["title"] for k in kids], ["Add a bye script", "Add a ciao script"])
+        skipped = [h["why"] for h in self.f_ticket(tid)["history"] if "skipped" in h.get("why", "")]
+        self.assertEqual(len(skipped), 3, "one skip in round 1 (same round), two in round 2")
+        self.assertIn("Follow-up already on the board, skipped: add A BYE script", skipped)
+
+    def f_ticket(self, tid):
+        with self.f() as f:
+            return f.ticket(tid)
 
     def test_pr_description_carries_the_wonka_and_jira_ids(self):
         tid = self.add(jira="CALC-42")
