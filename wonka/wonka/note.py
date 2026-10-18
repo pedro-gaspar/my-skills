@@ -36,16 +36,49 @@ def read(path):
     if text.startswith("---\n"):
         end = text.find("\n---", 4)
         if end != -1:
-            key = None
+            key, heads, cont = None, {}, {}
             for line in text[4:end].splitlines():
                 k, sep, value = line.partition(":")
                 if sep and not line.startswith((" ", "\t", "-", "#")):
                     key = k.strip()
-                    meta[key] = _unquote(value.strip()) if key in FIELDS else Raw(line)
-                elif key and key not in FIELDS:
+                    if key in FIELDS:
+                        meta[key], heads[key], cont[key] = "", value.strip(), []
+                    else:
+                        meta[key] = Raw(line)
+                elif key in FIELDS:
+                    cont[key].append(line)
+                elif key:
                     meta[key] = Raw(meta[key] + "\n" + line)
+            for key, head in heads.items():
+                meta[key] = _scalar(head, cont[key])
             body = text[end + 4:].lstrip("\n")
     return meta, body
+
+
+_BLOCK = re.compile(r"^[|>][0-9+-]*(\s+#.*)?$")
+
+
+def _scalar(head, lines):
+    """An owned field's value from its key line's text and the continuation lines below it."""
+    if not _BLOCK.match(head):
+        rest = [line.strip() for line in lines if line.strip()]
+        return _unquote(" ".join([head, *rest]).strip() if rest else head)
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    first = next((line for line in lines if line.strip()), "")
+    indent = len(first) - len(first.lstrip(" \t"))
+    lines = [line[indent:] if line.strip() else "" for line in lines]
+    if head[0] == "|":
+        return "\n".join(lines)
+    out, prev_blank = "", True
+    for line in lines:
+        if not line:
+            out += "\n"
+        else:
+            out += ("" if prev_blank else " ") + line
+        prev_blank = not line
+    # Chomping (+/-) and indent digits are ignored: owned fields are single-line, so trailing newlines always go.
+    return out.strip("\n")
 
 
 def write(path, meta, body):
@@ -62,9 +95,13 @@ def _unquote(v):
 
 def _quote(v):
     v = "" if v is None else str(v)
-    if v and (": " in v or " #" in v or v[0] in "[]{}&*!|>'\"%@`#,?-" or v.lower() in ("true", "false", "null", "yes", "no")):
-        return json.dumps(v, ensure_ascii=False)
-    return v
+    risky = v and (
+        ": " in v or " #" in v or v.endswith(":")
+        or v[0] in "[]{}&*!|>'\"%@`#,?-"
+        or v != v.strip() or any(c in v for c in "\t\n\r")
+        or v.lower() in ("true", "false", "null", "yes", "no", "~")
+    )
+    return json.dumps(v, ensure_ascii=False) if risky else v
 
 
 def _bounds(body, heading):
