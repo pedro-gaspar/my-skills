@@ -566,6 +566,8 @@ class Factory:
 
     def retry(self, tid, why="the last job did not finish"):
         t, s = self.ticket(tid), self.state(tid)
+        if s[1] not in ("pending", "progress"):
+            raise WonkaError(f"{tid} is {fmt(s)}: no job is running or queued, nothing to retry")
         retries = t.get("retries", 0) + 1
         why = " ".join(str(why).split())
         why = why if len(why) <= 200 else why[:199] + "…"

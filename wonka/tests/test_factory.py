@@ -494,6 +494,25 @@ class FactoryTest(unittest.TestCase):
             f.retry(tid)
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["bake"])
 
+    def test_retry_rejects_a_ticket_awaiting_a_human(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "m")
+        self.assertEqual(self.state(tid), ("inbox", "awaiting"))
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "nothing to retry"):
+            f.retry(tid)
+        t = self.ticket(tid)
+        self.assertNotIn("retries", t)
+        self.assertNotIn("stuck", t)
+
+    def test_retry_rejects_a_killed_ticket(self):
+        tid = self.add()
+        with self.f() as f:
+            f.move(tid, factory.KILLED, "human")
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "nothing to retry"):
+            f.retry(tid)
+
     def test_three_failed_jobs_get_stuck_until_a_human_ticks_retry(self):
         tid = self.add()
         self.tick()
