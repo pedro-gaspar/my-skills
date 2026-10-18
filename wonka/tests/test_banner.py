@@ -31,6 +31,14 @@ class BannerTest(unittest.TestCase):
         text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
         self.assertIn("review round 2/5", text)
 
+    def test_extra_rounds_extend_the_budget(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "reviewing", "phase": "progress"}, "project": "app", "history": [],
+             "review_round": 4, "extra_rounds": 1, "reviewers": ["architect"]}
+        self.assertIn("review round 4/4 (1 extra)", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        t["last_valid"] = {"status": "baking", "phase": "pending"}
+        self.assertIn("A fix round after review round 4/4 (1 extra)", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
 
 if __name__ == "__main__":
     unittest.main()

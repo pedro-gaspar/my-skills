@@ -33,7 +33,10 @@ STUCK_QUIP = "🌊 Augustus is stuck in the chocolate pipe again."
 
 
 def _round(t, cfg):
-    return f"review round {t['review_round']}/{cfg[MAX_ROUNDS_KEY]}" if t.get("review_round") else ""
+    if not t.get("review_round"):
+        return ""
+    extra = t.get("extra_rounds")
+    return f"review round {t['review_round']}/{machine.review_budget(t, cfg[MAX_ROUNDS_KEY])}" + (f" ({extra} extra)" if extra else "")
 
 
 def _reviewers(t):

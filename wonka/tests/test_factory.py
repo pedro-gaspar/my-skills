@@ -456,6 +456,63 @@ class FactoryTest(unittest.TestCase):
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
 
+    def test_clean_review_rebake_grants_an_extra_round(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bad_rounds(tid)
+        self.clean_rebake(tid, "f2.sh")
+        with self.f() as f:
+            self.assertEqual(f.ticket(tid)["extra_rounds"], 1)
+        self.assertIn("round 3/4, 1 extra round granted", self.note(tid)[1])
+
+    def clean_rebake(self, tid, filename):
+        """A clean review round whose answer is off the recommendation, then the rebake's commit."""
+        self.bake(tid, filename)
+        self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Rename to hi", "  - [x] Rename to hi"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        wt = Path(self.ticket(tid)["worktree"])
+        (wt / f"re-{filename}").write_text("echo hi\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "rebake", cwd=wt)
+        with self.f() as f:
+            f.baked(tid)
+
+    def test_clean_rebake_grants_one_more_round_with_issues(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bad_rounds(tid)
+        self.clean_rebake(tid, "f2.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertIn("3 review rounds", self.note(tid)[1])
+
+    def test_early_clean_rebake_does_not_shorten_the_budget(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.clean_rebake(tid, "f0.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        self.bake(tid, "f1.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"), "only 2 rounds with issues so far")
+        self.bake(tid, "f2.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+
+    def test_redraft_resets_the_extra_rounds(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.clean_rebake(tid, "f0.sh")
+        self.review(tid, architect={"verdict": "bad nut", "suggest": "draft", "why": "because"})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        t = self.ticket(tid)
+        self.assertNotIn("extra_rounds", t)
+        self.assertEqual(t["review_round"], 0)
+
     def test_round_three_clean_review_with_questions_is_not_killed(self):
         tid = self.add()
         self.to_ready(tid)
