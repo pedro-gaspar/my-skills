@@ -8,11 +8,10 @@ import subprocess
 from pathlib import Path
 
 from . import banner, machine, note, store
-from .machine import KILLED
+from .machine import KILLED, MAX_REVIEW_ROUNDS
 from .store import WonkaError
 
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
-MAX_REVIEW_ROUNDS = 3
 MAX_RETRIES = 3
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
