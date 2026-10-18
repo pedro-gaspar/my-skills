@@ -42,6 +42,17 @@ class NoteTest(unittest.TestCase):
         self.assertEqual(body.count("## 📜 Spec"), 1)
         self.assertIsNone(note.get_section(body, "questions"))
 
+    def test_section_content_headings_are_demoted(self):
+        body = note.set_section("", "idea", "an idea")
+        body = note.set_section(body, "spec", "intro\n## Changes\n- a\n# Top\n### Keep\n#tag")
+        self.assertEqual(note.get_section(body, "spec"), "intro\n### Changes\n- a\n### Top\n### Keep\n#tag")
+        body = note.set_section(body, "spec", "v2\n## Changes\n- b")
+        self.assertNotIn("\n## Changes", body)
+        self.assertEqual(body.count("## 📜 Spec"), 1)
+        self.assertEqual(note.get_section(body, "spec"), "v2\n### Changes\n- b")
+        self.assertEqual(note.get_section(body, "idea"), "an idea")
+        self.assertNotIn("- a", body)
+
     def test_questions_answered_only_when_every_question_has_a_tick(self):
         sec = note.render_questions([
             {"q": "Redis or Postgres?", "options": ["Redis", "Postgres"], "recommended": 1, "why": "in stack"},
