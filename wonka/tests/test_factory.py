@@ -527,9 +527,9 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([j["id"] for j in tick["jobs"]], [tid])
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
 
-    def finished(self, tid, agent):
+    def finished(self, tid, agent, dispatch=None):
         with self.f() as f:
-            return f.finished(tid, agent)
+            return f.finished(tid, agent, dispatch)
 
     def ticket(self, tid):
         with self.f() as f:
@@ -647,6 +647,87 @@ class FactoryTest(unittest.TestCase):
                          f"{tid}: stuck, waiting for a human to tick Retry")
         self.assertEqual(self.ticket(tid)["retries"], before["retries"])
         self.assertEqual(self.state(tid), ("inbox", "pending"))
+
+    def test_start_bumps_the_dispatch_number(self):
+        tid = self.add()
+        seen = [self.tick()["jobs"][0]["dispatch"]]
+        with self.f() as f:
+            f.triage(tid, "s")
+        seen.append([j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"])
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+            f.drafted(tid, "s", ["architect"])
+        self.bake(tid)
+        seen.append(self.ticket(tid)["dispatch"])
+        first = self.review(tid)
+        seen.append(first["dispatch"])
+        with self.f() as f:
+            f.retry(tid)
+        again = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        seen.append(again["dispatch"])
+        self.assertEqual(again["review_round"], first["review_round"], "a retried round repeats its number")
+        self.assertEqual(seen, sorted(set(seen)), f"dispatch only goes up: {seen}")
+
+    def retried_review(self):
+        """A review handed out, retried and handed out again: (tid, first dispatch, second job)."""
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "backend"))
+        self.bake(tid)
+        first = self.review(tid)
+        with self.f() as f:
+            f.retry(tid)
+        again = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertGreater(again["dispatch"], first["dispatch"])
+        self.assertEqual(again["review_round"], first["review_round"])
+        return tid, first["dispatch"], again
+
+    def test_late_squirrel_finish_from_an_earlier_dispatch_is_ignored(self):
+        tid, d1, job = self.retried_review()
+        d2 = job["dispatch"]
+        retries = self.ticket(tid)["retries"]
+        msg = self.finished(tid, "wonka:squirrel-architect", d1)
+        self.assertEqual(msg, f"{tid}: wonka:squirrel-architect is from an earlier dispatch ({d1}, now {d2}), ignored")
+        t = self.ticket(tid)
+        self.assertEqual(t["finished"], [])
+        self.assertEqual(t["retries"], retries)
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        with self.f() as f:
+            f.report(tid, "architect", {"verdict": "good nut"}, d2)
+        self.assertEqual(self.finished(tid, "wonka:squirrel-architect", d2),
+                         f"{tid}: squirrel-architect reported, waiting for backend")
+
+    def test_late_squirrel_report_from_an_earlier_dispatch_is_ignored(self):
+        tid, d1, job = self.retried_review()
+        bad = {"verdict": "bad nut", "issues": ["x.py: stale → ignore"]}
+        with self.f() as f:
+            msg = f.report(tid, "architect", bad, d1)
+        self.assertEqual(msg, f"{tid}: squirrel-architect report is from an earlier dispatch "
+                              f"({d1}, now {job['dispatch']}), ignored")
+        self.assertNotIn("architect", self.ticket(tid)["reports"])
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        with self.f() as f:
+            f.retry(tid)
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+        with self.f() as f:
+            msg = f.report(tid, "backend", bad, d1)
+        self.assertIn("earlier dispatch", msg, "a stale report while pending is ignored, not an error")
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+
+    def test_late_non_squirrel_finish_is_ignored(self):
+        tid = self.add()
+        d1 = self.tick()["jobs"][0]["dispatch"]
+        with self.f() as f:
+            f.retry(tid)
+        d2 = self.tick()["jobs"][0]["dispatch"]
+        self.assertGreater(d2, d1)
+        retries = self.ticket(tid)["retries"]
+        self.assertIn("earlier dispatch", self.finished(tid, "wonka:oompa-loompa-triage", d1))
+        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertEqual(self.ticket(tid)["retries"], retries)
+        self.assertIn("job_started_at", self.ticket(tid), "the live job is untouched")
+        self.assertIn("left no result", self.finished(tid, "wonka:oompa-loompa-triage", None),
+                      "no dispatch behaves as before")
 
     def test_failed_pr_is_retried_each_tick_then_stuck_until_a_human_ticks_retry(self):
         tid = self.add()
