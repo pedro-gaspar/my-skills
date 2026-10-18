@@ -434,6 +434,127 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([j["id"] for j in tick["jobs"]], [tid])
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
 
+    def finished(self, tid, agent):
+        with self.f() as f:
+            return f.finished(tid, agent)
+
+    def ticket(self, tid):
+        with self.f() as f:
+            return dict(f.ticket(tid))
+
+    def test_finished_is_a_noop_when_the_agent_did_its_job(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        msg = self.finished(tid, "wonka:oompa-loompa-triage")
+        self.assertIn("moved on", msg)
+        self.assertTrue(msg.startswith(f"{tid}: "))
+        self.assertEqual(self.state(tid), ("inbox", "done"))
+        self.assertNotIn("retries", self.ticket(tid))
+        self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+            f.drafted(tid, "s", ["architect"])
+        self.assertIn("moved on", self.finished(tid, "wonka:oompa-loompa-analyst"))
+        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.bake(tid)
+        self.assertIn("moved on", self.finished(tid, "oompa-loompa-builder"))
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+        self.assertNotIn("retries", self.ticket(tid))
+
+    def test_finished_retries_an_agent_that_left_no_result(self):
+        tid = self.add()
+        self.tick()
+        msg = self.finished(tid, "wonka:oompa-loompa-triage")
+        self.assertEqual(msg, f"{tid}: wonka:oompa-loompa-triage left no result, back in the queue")
+        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        t = self.ticket(tid)
+        self.assertEqual(t["retries"], 1)
+        self.assertNotIn("job_started_at", t)
+        self.assertIn("moved on", self.finished(tid, "wonka:oompa-loompa-triage"), "no double retry")
+        self.assertEqual(self.ticket(tid)["retries"], 1)
+        self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["triage"])
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        self.assertIn("left no result", self.finished(tid, "wonka:oompa-loompa-analyst"))
+        self.assertEqual(self.state(tid), ("drafting", "pending"))
+        self.assertEqual(self.ticket(tid)["retries"], 1, "a job that moved on resets the count")
+        self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
+
+    def test_parallel_squirrels_do_not_retry_each_other(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "backend"))
+        self.bake(tid)
+        job = self.review(tid, architect={"verdict": "good nut"})
+        msg = self.finished(tid, "wonka:squirrel-architect")
+        self.assertEqual(msg, f"{tid}: squirrel-architect reported, waiting for backend")
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        self.assertEqual(self.ticket(tid)["review_round"], job["review_round"])
+        with self.f() as f:
+            f.report(tid, "backend", {"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertNotIn("finished", self.ticket(tid))
+        self.assertIn("moved on", self.finished(tid, "wonka:squirrel-backend"))
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertNotIn("retries", self.ticket(tid))
+
+    def test_a_silent_squirrel_is_retried_once_the_others_finish(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "backend"))
+        self.bake(tid)
+        job = self.review(tid)
+        msg = self.finished(tid, "wonka:squirrel-architect")
+        self.assertEqual(msg, f"{tid}: squirrel-architect left no report, retrying once backend finish")
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        with self.f() as f:
+            f.report(tid, "backend", {"verdict": "good nut"})
+        msg = self.finished(tid, "wonka:squirrel-backend")
+        self.assertEqual(msg, f"{tid}: no report from architect, back in the queue")
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+        t = self.ticket(tid)
+        self.assertEqual(t["review_round"], job["review_round"] - 1)
+        self.assertNotIn("reports", t)
+        self.assertNotIn("finished", t)
+        again = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(again["review_round"], job["review_round"])
+        self.assertEqual(again["agents"], ["wonka:squirrel-architect", "wonka:squirrel-backend"])
+        self.assertEqual(self.ticket(tid)["finished"], [])
+
+    def test_finished_rejects_unknown_agents(self):
+        tid = self.add()
+        self.tick()
+        with self.assertRaisesRegex(WonkaError, "unknown agent"):
+            self.finished(tid, "wonka:oompa-loompa-chef")
+        with self.assertRaisesRegex(WonkaError, "unknown squirrel"):
+            self.finished(tid, "wonka:squirrel-ux")
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+            f.drafted(tid, "s", ["architect"])
+        self.bake(tid)
+        self.review(tid)
+        with self.assertRaisesRegex(WonkaError, "not reviewing this ticket"):
+            self.finished(tid, "wonka:squirrel-security")
+
+    def test_finished_leaves_a_stuck_ticket_alone(self):
+        tid = self.add()
+        self.tick()
+        for _ in range(3):
+            with self.f() as f:
+                f.retry(tid)
+        before = self.ticket(tid)
+        self.assertEqual(self.finished(tid, "wonka:oompa-loompa-triage"),
+                         f"{tid}: stuck, waiting for a human to tick Retry")
+        self.assertEqual(self.ticket(tid)["retries"], before["retries"])
+        self.assertEqual(self.state(tid), ("inbox", "pending"))
+
     def test_deleted_and_foreign_notes(self):
         tid = self.add()
         with self.f() as f:

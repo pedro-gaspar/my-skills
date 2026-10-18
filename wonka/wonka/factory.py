@@ -14,6 +14,9 @@ from .store import WonkaError
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 MAX_REVIEW_ROUNDS = 3
 MAX_RETRIES = 3
+# the state a ticket is left in while each agent's job is unfinished
+JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
+              "oompa-loompa-builder": ("baking", "progress")}
 REVIEW_LOG = re.compile(r"^## 🐿️ (?:Earlier review|Review) round \d+", re.M)
 
 
@@ -346,6 +349,7 @@ class Factory:
     def _verdict(self, tid):
         t = self.ticket(tid)
         reps, rnd = t.pop("reports"), t["review_round"]
+        t.pop("finished", None)
         for rep in reps.values():
             for f in rep.get("followups", []):
                 self.add(f["idea"], f.get("title"), t["repo"], t["pr_repo"], parent=tid)
@@ -506,6 +510,7 @@ class Factory:
             t["reviewed_head"] = git("rev-parse", "HEAD", cwd=t["worktree"])
             t["review_round"] += 1
             t["reports"] = {}
+            t["finished"] = []
             self.move(tid, ("reviewing", "progress"), "wonka")
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
@@ -523,6 +528,7 @@ class Factory:
             if s[0] == "reviewing":
                 t["review_round"] -= 1
                 t.pop("reports", None)
+                t.pop("finished", None)
             self.move(tid, (s[0], "pending"), "wonka", f"Retry {retries}/{MAX_RETRIES}: the last job did not finish")
         t.pop("job_started_at", None)
         t["retries"] = retries
@@ -532,6 +538,43 @@ class Factory:
             notify(tid, "stuck: tick Retry when it's fixed")
             return f"{tid}: stuck after {retries} tries"
         return f"{tid}: back in the queue"
+
+    def finished(self, tid, agent):
+        """An agent finished: retry its job only if it left no result, else do nothing. Says which."""
+        name = agent.removeprefix("wonka:")
+        squirrel = name.removeprefix("squirrel-") if name.startswith("squirrel-") else None
+        if squirrel is not None:
+            if squirrel not in REVIEWERS:
+                raise WonkaError(f"unknown squirrel {squirrel}; one of {', '.join(REVIEWERS)}")
+            expected = ("reviewing", "progress")
+        elif name in JOB_AGENTS:
+            expected = JOB_AGENTS[name]
+        else:
+            known = [f"wonka:{a}" for a in JOB_AGENTS] + [f"wonka:squirrel-{r}" for r in REVIEWERS]
+            raise WonkaError(f"unknown agent {agent}; one of {', '.join(known)}")
+        t, s = self.ticket(tid), self.state(tid)
+        if t.get("stuck"):
+            return f"{tid}: stuck, waiting for a human to tick Retry"
+        if s != expected or not t.get("job_started_at"):
+            return f"{tid}: {agent} done, the ticket moved on ({fmt(s)})"
+        if squirrel is None:
+            return f"{tid}: {agent} left no result, " + self.retry(tid).split(": ", 1)[1]
+        reviewers = t["reviewers"] or ["architect"]
+        if squirrel not in reviewers:
+            raise WonkaError(f"{tid}: squirrel-{squirrel} is not reviewing this ticket")
+        done = t.setdefault("finished", [])
+        if squirrel not in done:
+            done.append(squirrel)
+        reports = t.get("reports", {})
+        waiting = [r for r in reviewers if r not in reports and r not in done]
+        missing = [r for r in reviewers if r not in reports and r in done]
+        if waiting:
+            if squirrel in reports:
+                return f"{tid}: squirrel-{squirrel} reported, waiting for {', '.join(waiting)}"
+            return f"{tid}: squirrel-{squirrel} left no report, retrying once {', '.join(waiting)} finish"
+        if missing:
+            return f"{tid}: no report from {', '.join(missing)}, " + self.retry(tid).split(": ", 1)[1]
+        return f"{tid}: squirrel-{squirrel} done, every squirrel reported"
 
     def _count(self, status):
         return sum(1 for k in self.live() if self.state(k) in ((status, "pending"), (status, "progress")))
