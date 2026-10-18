@@ -26,5 +26,9 @@ class MachineTest(unittest.TestCase):
         self.assertIsNone(machine.parse("Done-ish", machine.PHASES))
 
 
+    def test_requested_changes_send_an_open_pr_back_to_baking(self):
+        self.assertTrue(machine.allowed(("shipped", "awaiting"), ("baking", "pending")))
+        self.assertFalse(machine.allowed(("shipped", "pending"), ("baking", "pending")))
+
 if __name__ == "__main__":
     unittest.main()

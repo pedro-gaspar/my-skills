@@ -14,16 +14,19 @@ HEADINGS = {
     "toobig": "🫐 Too big",
     "review-questions": "🐿️ Review Questions",
     "stuck": "🎩 Stuck",
+    "changes": "🔁 Request changes",
     "log": "🎩 Factory log",
 }
 
 CLOSE_Q = "🫐 Close this ticket?"
 DRAFT_Q = "🧪 Send it back to Drafting?"
+CHANGES_BOX = "- [ ] 🔁 Request changes"
 
 _Q = re.compile(r"^- \*\*(.+?)\*\*")
 _OPT = re.compile(r"^\s+- \[([ xX])\] (.*)$")
 _APPROVED = re.compile(r"^- \[[xX]\] Approve", re.M)
 _RETRY = re.compile(r"^- \[[xX]\] Retry", re.M)
+_CHANGES = re.compile(r"^- \[([ xX])\] (?:🔁 )?Request changes.*$", re.M)
 
 
 class Raw(str):
@@ -115,7 +118,7 @@ def _bounds(body, heading):
 _HEADING = re.compile(r"^#{1,2}(?= )", re.M)
 
 
-def _demote(content):
+def demote(content):
     """Section content can't hold # or ## headings: they would end the section early (see _bounds)."""
     return _HEADING.sub("###", content)
 
@@ -130,7 +133,7 @@ def get_section(body, key):
 def set_section(body, key, content):
     """Replace a section in place, or add it at the end (but always above the factory log)."""
     heading = HEADINGS.get(key, key)
-    block = f"## {heading}\n{_demote(content.strip())}\n\n"
+    block = f"## {heading}\n{demote(content.strip())}\n\n"
     b = _bounds(body, heading)
     if b:
         return body[:b[0]] + block + body[b[1]:].lstrip("\n")
@@ -262,3 +265,17 @@ def approved(section):
 
 def approved_retry(section):
     return bool(section and _RETRY.search(section))
+
+
+def requested_changes(section):
+    """(ticked, notes) for the 🔁 Request changes section: notes are every line but the checkbox."""
+    if not section:
+        return False, ""
+    m = _CHANGES.search(section)
+    ticked = bool(m and m.group(1) != " ")
+    lines = (section[:m.start()] + section[m.end():] if m else section).splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return ticked, "\n".join(lines)

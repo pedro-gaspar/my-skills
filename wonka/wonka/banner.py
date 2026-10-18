@@ -80,7 +80,9 @@ def _story(tid, t, meta, cfg):
         ("ready", "pending"): ("info", "Spec done, waiting for an oven",
                                f"🍫 Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
         ("baking", "pending"): ("info", "Queued for baking", (
-            f"🍫 A fix round after {_round(t, cfg)}." if t.get("review_round") else "🍫 Baking starts on the next tick.")),
+            f"🍫 A fix round after {_round(t, cfg)}." if t.get("review_round") else
+            "🍫 A fix round for the changes you requested on the PR." if t.get("fixing_changes") else
+            "🍫 Baking starts on the next tick.")),
         ("baking", "progress"): ("info", "A builder Oompa-Loompa is baking",
                                  f"🍫 Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),
         ("baking", "done"): ("info", "Baked", "🐿️ Off to the squirrels."),
@@ -94,7 +96,8 @@ def _story(tid, t, meta, cfg):
         ("shipped", "pending"): ("info", "Opening the pull request", "🛗 On the next tick."),
         ("shipped", "progress"): ("info", "Opening the pull request", "🛗 Pushing the branch and opening the PR."),
         ("shipped", "awaiting"): ("question", "🙋 Your turn: merge the PR", (
-            f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree.")),
+            f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree. "
+            "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
         ("shipped", "done"): ("success", "Shipped 🎉", f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}"),
         ("wontdo", "done"): ("failure", "Rolled away 🫐", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
     }[s]

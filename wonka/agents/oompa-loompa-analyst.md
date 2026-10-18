@@ -17,8 +17,9 @@ and `repo`. Work read-only in the repo: no edits, no commits.
 1. Read the note: `## 💡 Idea`, `## ✅ Answers` (earlier answered rounds: triage and your previous asks) and, if
    present, `## ❓ Questions` (ticked answers, plus any text written under a question) and the review rounds at the
    bottom of the plan file (when the ticket came back from review): `## 🐿️ Review round N`, plus
-   `## 🐿️ Earlier review round N` from earlier re-drafts. `wonka plan` keeps them at the bottom automatically, so do
-   not copy them into the new plan.
+   `## 🐿️ Earlier review round N` from earlier re-drafts, and `## 🔁 Change request N` /
+   `## 🔁 Earlier change request N` (changes the human asked for on an open PR). `wonka plan` keeps them at the
+   bottom automatically, so do not copy them into the new plan.
 2. Study the code until you know exactly what to build: files, functions, data, tests, edge cases.
 3. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash

@@ -1,6 +1,7 @@
 """What the factory does to golden tickets. Every status change goes through Factory.move()."""
 
 import datetime as dt
+import json
 import os
 import re
 import shutil
@@ -16,13 +17,21 @@ MAX_RETRIES = 3
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress")}
-REVIEW_LOG = re.compile(r"^## 🐿️ (?:Earlier review|Review) round \d+", re.M)
+REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?:Earlier change|Change) request) \d+", re.M)
+# PR comments by anyone else are not copied into the plan: the builder runs unattended and would read them as instructions
+TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
 
 
 def _split_reviews(text):
     """Split a plan into (plan, review log): the log starts at the first review-round heading."""
     m = REVIEW_LOG.search(text)
     return (text, "") if not m else (text[:m.start()], text[m.start():])
+
+
+def _age_log(text):
+    """Mark the review rounds and change requests already in a plan's log as done, so only new ones are fixed."""
+    text = re.sub(r"^## 🐿️ Review round", "## 🐿️ Earlier review round", text, flags=re.M)
+    return re.sub(r"^## 🔁 Change request", "## 🔁 Earlier change request", text, flags=re.M)
 
 
 def now():
@@ -184,6 +193,8 @@ class Factory:
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
+        if dst in (("shipped", "done"), KILLED):
+            body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
         self.write(tid, meta, body)
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
         if by != "wonka":
@@ -280,7 +291,7 @@ class Factory:
         # Keep the squirrels' review rounds from an earlier draft, renamed so the builder reads them as context,
         # not as a fix round. Rounds the analyst pasted into the new text are dropped: the old file's copy wins.
         _, log = _split_reviews(path.read_text() if path.exists() else "")
-        log = re.sub(r"^## 🐿️ Review round", "## 🐿️ Earlier review round", log, flags=re.M)
+        log = _age_log(log)
         new, _pasted = _split_reviews(text)
         out = new.rstrip("\n") + "\n"
         if log.strip("\n"):
@@ -374,9 +385,8 @@ class Factory:
             raise WonkaError("the worktree has uncommitted changes: commit them first")
         if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
             raise WonkaError(f"no commits on {t['branch']} yet")
-        if t["review_round"] > 0 and git("rev-parse", "HEAD", cwd=t["worktree"]) == t.get("reviewed_head"):
-            raise WonkaError(f"no new commits on {t['branch']} since review round {t['review_round']}: "
-                             "commit the fixes first")
+        if t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]:
+            raise WonkaError(f"no new commits on {t['branch']} since the last review: commit the fixes first")
         self.move(tid, ("baking", "done"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
 
@@ -472,16 +482,94 @@ class Factory:
             meta, body = self.read(tid)
             spec = (note.get_section(body, "spec") or note.get_section(body, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
             out = gh("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
-                     "--json", "url", "-q", ".[0].url") or gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
-                     "--title", f"{tid}: {meta.get('title', '')}",
-                     "--body", pr_body(tid, meta, spec))
+                     "--json", "url", "-q", ".[0].url")
+            reused = bool(out)
+            if not reused:
+                out = gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
+                         "--title", f"{tid}: {meta.get('title', '')}",
+                         "--body", pr_body(tid, meta, spec))
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
             outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
         t["pr_url"] = out.splitlines()[-1]
+        self.set_section(tid, "changes", note.CHANGES_BOX)
+        if reused:
+            self.move(tid, ("shipped", "awaiting"), "wonka",
+                      f"PR updated with the requested changes, review and merge it: {t['pr_url']}")
+            return f"{tid}: PR updated {t['pr_url']}"
         self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
+
+    def _pr_feedback(self, tid, since=None):
+        """The PR's comments, reviews and inline comments by trusted authors newer than `since`, as markdown
+        bullets, plus how many were skipped because their author is not an owner, member or collaborator."""
+        t = self.ticket(tid)
+        num = t["pr_url"].rstrip("/").rsplit("/", 1)[-1]
+        view = json.loads(gh("pr", "view", t["pr_url"], "--json", "comments,reviews") or "{}")
+        # one page of 100 inline comments is plenty for a change request
+        inline = json.loads(gh("api", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100") or "[]")
+        items = []
+        for c in view.get("comments") or []:
+            items.append(((c.get("author") or {}).get("login"), c.get("authorAssociation"), c.get("body"),
+                          c.get("createdAt"), ""))
+        for r in view.get("reviews") or []:
+            state = (r.get("state") or "").lower().replace("_", " ")
+            items.append(((r.get("author") or {}).get("login"), r.get("authorAssociation"), r.get("body"),
+                          r.get("submittedAt"), f" (review, {state})" if state else " (review)"))
+        for c in inline or []:
+            line = c.get("line") or c.get("original_line")
+            where = f"{c.get('path')}:{line}" if line else f"{c.get('path')}"
+            items.append(((c.get("user") or {}).get("login"), c.get("author_association"), c.get("body"),
+                          c.get("created_at"), f" on `{where}`"))
+        cutoff = dt.datetime.fromisoformat(since) if since else None
+        kept, skipped = [], 0
+        for who, assoc, text, stamp, kind in items:
+            if not (text or "").strip():
+                continue
+            at = dt.datetime.fromisoformat(stamp) if stamp else None
+            if cutoff and (at is None or at <= cutoff):
+                continue
+            if (assoc or "").upper() not in TRUSTED:
+                skipped += 1
+                continue
+            first, *rest = text.strip().splitlines()
+            bullet = "\n".join([f"- **@{who}**{kind}: {first}", *(f"    > {line}".rstrip() for line in rest)])
+            kept.append((at or dt.datetime.min.replace(tzinfo=dt.timezone.utc), note.demote(bullet)))
+        kept.sort(key=lambda k: k[0])
+        return [b for _, b in kept], skipped
+
+    def _request_changes(self, tid, notes):
+        """The human ticked 🔁 Request changes: write their notes and the PR feedback into the plan, back to baking."""
+        t = self.ticket(tid)
+        pr, skipped = self._pr_feedback(tid, t.get("changes_cutoff"))  # fetch first: a gh failure changes nothing
+        if not notes.strip() and not pr:
+            self.set_section(tid, "changes", note.CHANGES_BOX)
+            self.log_event(tid, "Request changes was ticked, but there were no notes under it and no new PR comments: "
+                                "write what to change, then tick it again")
+            return f"{tid}: request changes ticked with nothing to change"
+        n = t.get("change_requests", 0) + 1
+        t["change_requests"], t["changes_cutoff"] = n, _iso(now())
+        plan = Path(t["plan"]) if t.get("plan") else None
+        if plan and plan.exists():
+            head, log = _split_reviews(plan.read_text())
+            text = (head + _age_log(log)).rstrip("\n") + "\n"
+            text += "\n".join([
+                "", f"## 🔁 Change request {n}",
+                f"The human asked for these changes on the open PR {t['pr_url']}. "
+                "Fix them with new commits on the same branch.",
+                "### From the note", note.demote(notes.strip()) if notes.strip() else "(none)",
+                "### PR comments", "\n".join(pr) if pr else "(none)",
+            ]) + "\n"
+            plan.write_text(text)
+        t["review_round"], t["fixing_changes"] = 0, True
+        t.pop("extra_rounds", None)
+        meta, body = self.read(tid)
+        self.write(tid, meta, note.drop_section(body, "changes"))
+        why = f"Changes requested ({len(pr)} PR comment(s)" + (
+            f", {skipped} from non-collaborators skipped" if skipped else "") + "), back to baking"
+        self.move(tid, ("baking", "pending"), "human", why)
+        return f"{tid}: changes requested, back to baking"
 
     # -- the tick ---------------------------------------------------------
 
@@ -552,6 +640,13 @@ class Factory:
             if pr == "CLOSED":
                 self.move(tid, KILLED, "github", "PR closed without merging")
                 return f"{tid}: PR closed"
+            changes = note.get_section(body, "changes")
+            if changes is None:  # a PR opened before change requests existed gets the box too
+                self.set_section(tid, "changes", note.CHANGES_BOX)
+                return None
+            ticked, notes = note.requested_changes(changes)
+            if ticked:
+                return self._request_changes(tid, notes)
         return None
 
     def archive(self, tid):
@@ -583,6 +678,7 @@ class Factory:
             self.ensure_worktree(tid)
             t["reviewed_head"] = git("rev-parse", "HEAD", cwd=t["worktree"])
             t["review_round"] += 1
+            t.pop("fixing_changes", None)
             t["reports"] = {}
             t["finished"] = []
             self.move(tid, ("reviewing", "progress"), "wonka")
