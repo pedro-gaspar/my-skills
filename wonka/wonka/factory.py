@@ -210,6 +210,8 @@ class Factory:
             self.drop_worktree(tid)
             if dst == ("shipped", "done"):
                 self.drop_branch(tid)
+        if t.get("scout") and dst not in (("inbox", "pending"), ("drafting", "pending"), ("drafting", "progress")):
+            self.drop_scout(tid)  # no triage or draft job left to read it
         if dst[1] == "awaiting":
             notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
 
@@ -348,16 +350,60 @@ class Factory:
         if _ref_exists(t["repo"], f"refs/heads/{branch}"):
             git("worktree", "add", str(path), branch, cwd=t["repo"])
         else:
-            start = t["base_branch"]
-            try:
-                git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
-                if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
-                    start = f"origin/{t['base_branch']}"
-            except WonkaError:
-                pass  # offline or no origin: bake from the local base branch
+            start = self._latest_base(t)
             git("worktree", "add", "--no-track", "-b", branch, str(path), start, cwd=t["repo"])
             t["base_ref"] = start
         t["worktree"], t["branch"] = str(path), branch
+
+    def _latest_base(self, t):
+        """Fetch origin's base branch and return the freshest ref to start from: origin/<base>, else the local base."""
+        try:
+            git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
+            if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
+                return f"origin/{t['base_branch']}"
+        except WonkaError:
+            pass  # offline or no origin: use the local base branch
+        return t["base_branch"]
+
+    # -- scout: a read-only checkout of the latest base for triage and drafting --
+
+    def scout_path(self, tid):
+        t = self.ticket(tid)
+        return store.worktrees_dir() / t["project"] / f"{tid}-scout"  # a sibling of the builder's worktree
+
+    def _remove_scout_dir(self, repo, path):
+        """Throw a scout checkout away. --force is safe: it is Wonka's own read-only tree, never user work."""
+        try:
+            git("worktree", "remove", "--force", str(path), cwd=repo)
+        except WonkaError:
+            shutil.rmtree(path, ignore_errors=True)
+            git("worktree", "prune", cwd=repo)
+
+    def fresh_scout(self, tid):
+        """(Re)create the scout at the latest base, so every job starts from a clean tree. Returns (path, ref)."""
+        t = self.ticket(tid)
+        ref = self._latest_base(t)
+        path = self.scout_path(tid)
+        if path.exists():
+            self._remove_scout_dir(t["repo"], path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        git("worktree", "add", "--detach", "--quiet", str(path), ref, cwd=t["repo"])
+        t["scout"], t["scout_ref"] = str(path), ref
+        return str(path), ref
+
+    def drop_scout(self, tid):
+        """Best effort, never raises: the ticket no longer has a triage or draft job."""
+        t = self.ticket(tid)
+        if not t.get("scout"):
+            return
+        path = Path(t["scout"])
+        if path.exists():
+            try:
+                self._remove_scout_dir(t["repo"], path)
+            except (WonkaError, OSError) as e:
+                store.log(f"{tid} wonka: could not remove the scout {path} ({e})")
+        t.pop("scout", None)
+        t.pop("scout_ref", None)
 
     def base_ref(self, tid):
         t = self.ticket(tid)
@@ -632,6 +678,7 @@ class Factory:
             t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "done"}, True, True
             t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/done", "by": "human"})
             self.drop_worktree(tid)
+            self.drop_scout(tid)
             return f"{tid}: note was deleted, ticket dropped"
         meta, body = self.read(tid)
         seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("phase"), machine.PHASES))
@@ -752,6 +799,13 @@ class Factory:
             self._sync_pr_branch(tid)  # before moving: a failed fetch or a diverged branch is retried next tick
             base_ref = t["merge_ref"] = self._fetch_pr_base(tid)  # before moving: a failed fetch is retried next tick
             self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
+        code, ref = t["worktree"], base_ref or self.base_ref(tid)
+        if job in ("triage", "draft"):
+            try:
+                code, ref = self.fresh_scout(tid)
+            except (WonkaError, OSError) as e:  # never strand the job: the draft has already moved to progress
+                self.log_event(tid, f"No fresh checkout of the base, the agent reads the main checkout ({e})")
+                code, ref = t["repo"], self.base_ref(tid)
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
         t["dispatch"] = t.get("dispatch", 0) + 1  # only ever goes up: tells a late agent from the live one
@@ -760,7 +814,7 @@ class Factory:
                   "conflicts": ["oompa-loompa-fixer"]}[job]
         agents = [f"wonka:{a}" for a in agents]
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
-                "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_ref": base_ref or self.base_ref(tid),
+                "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
                 "review_round": t["review_round"], "dispatch": t["dispatch"]}
 
     def retry(self, tid, why="the last job did not finish"):

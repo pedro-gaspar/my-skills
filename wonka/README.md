@@ -43,6 +43,10 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | 🛗-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed. Or tick **🔁 Request changes** (write what to change under it and/or leave PR review comments): back to Baking for a fix round with a fresh 3 review rounds; the fixes are pushed to the same PR. Only comments by the repo's owners, members and collaborators are copied to the builder (others could slip it instructions on a public repo); the number skipped shows in the factory log. Each tick an open PR with merge conflicts gets 🔧 **oompa-loompa-fixer** (Sonnet): it merges the base in, resolves, commits, and the CLI pushes (`wonka resolved`, never a force push); no new review, the PR is back to 🙋 |
 | 🫐-Wont-Do | killed, split or closed (the local branch is kept, it may hold work). You can drag any card here |
 
+Triage and the analyst read a throwaway read-only checkout of the latest `origin/<base>` in
+`~/.wonka/worktrees/<project>/<id>-scout`, made fresh for each job and removed once the ticket leaves triage or
+drafting. Your own checkout is never touched, so they never plan against stale code.
+
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Done. Done tickets and their plans move to
 `wonka/archive/` after 7 days.
 
