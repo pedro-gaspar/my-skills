@@ -216,6 +216,36 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([(j["id"], j["job"]) for j in jobs], [(tid, "draft")])
         self.assertEqual(self.tick()["jobs"], [], "not dispatched twice")
 
+    def test_analyst_questions_keep_the_triage_answers(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"], "recommended": 0}])
+        self.edit_note(tid, lambda t: t.replace("- [ ] Approve", "- [x] Approve").replace("- [ ] Bash", "- [x] Bash"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        with self.f() as f:
+            f.ask(tid, [{"q": "Name?", "options": ["hello", "hi"], "recommended": 0}])
+        body = self.note(tid)[1]
+        answers = note.get_section(body, "answers")
+        self.assertIn("### Round 1", answers)
+        self.assertIn("- [x] Bash", answers)
+        open_round = note.get_section(body, "questions")
+        self.assertIn("Name?", open_round)
+        self.assertNotIn("Bash or Python?", open_round)
+        self.assertEqual(self.state(tid), ("drafting", "awaiting"))
+        self.assertEqual(self.tick()["jobs"], [], "an archived answered round does not resume the analyst")
+        self.edit_note(tid, lambda t: t.replace("- [ ] hello", "- [x] hello"))
+        jobs = self.tick()["jobs"]
+        self.assertEqual([(j["id"], j["job"]) for j in jobs], [(tid, "draft")])
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        with self.f() as f:
+            f.ask(tid, [{"q": "Where?", "options": ["bin", "scripts"], "recommended": 0}])
+        answers = note.get_section(self.note(tid)[1], "answers")
+        self.assertLess(answers.index("### Round 1"), answers.index("### Round 2"))
+        self.assertGreater(answers.index("- [x] hello"), answers.index("### Round 2"))
+        self.assertIn("Where?", note.get_section(self.note(tid)[1], "questions"))
+
     def test_large_ticket_is_split_and_closed(self):
         tid = self.add("Build a whole CMS")
         self.tick()

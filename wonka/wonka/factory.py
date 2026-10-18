@@ -213,7 +213,7 @@ class Factory:
         if size not in machine.AUTO_DONE:
             body = note.set_section(body, "approval", f"- [ ] Approve (size **{size}**: tick to send it to Drafting)")
         if questions:
-            body = note.set_section(body, "questions", note.render_questions(questions))
+            body = note.new_questions(body, note.render_questions(questions))
         self.write(tid, meta, body)
         if size in machine.AUTO_DONE and not questions:
             self.move(tid, ("inbox", "done"), "triage")
@@ -228,7 +228,8 @@ class Factory:
 
     def ask(self, tid, questions):
         self.expect(tid, ("drafting", "progress"))
-        self.set_section(tid, "questions", note.render_questions(questions))
+        meta, body = self.read(tid)
+        self.write(tid, meta, note.new_questions(body, note.render_questions(questions)))
         self.move(tid, ("drafting", "awaiting"), "analyst", "The analyst has questions: tick an answer for each")
 
     def plan_path(self, tid):
