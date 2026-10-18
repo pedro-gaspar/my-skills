@@ -163,6 +163,7 @@ class Factory:
     def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None):
         if size and size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        parent_t = self.ticket(parent) if parent else None  # fail before touching anything
         top, base, origin = repo_info(repo or os.getcwd())
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
@@ -177,9 +178,9 @@ class Factory:
             "last_valid": {"status": "inbox", "phase": "pending"},
             "created_at": _iso(now()), "history": [],
         }
+        if parent_t:
+            parent_t["children"].append(tid)
         self.write(tid, meta, note.set_section("", "idea", idea))
-        if parent:
-            self.ticket(parent)["children"].append(tid)
         return tid
 
     def set_field(self, tid, field, value):
