@@ -1185,18 +1185,184 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(b, [j["id"] for j in tick["jobs"]])
         self.assertFalse(any("not a Wonka ticket" in e for e in tick["events"]))
 
+    def push_upstream(self, name="new.txt"):
+        """Someone else pushes a commit to origin/main: the user's checkout falls behind."""
+        other = self.tmp / "other"
+        if other.exists():
+            sh("git", "pull", "-q", "origin", "main", cwd=other)
+        else:
+            sh("git", "clone", "-q", "-b", "main", str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / name).write_text("upstream\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", f"upstream {name}", cwd=other)
+        sh("git", "push", "-q", "origin", "main", cwd=other)
+
     def test_baking_starts_from_the_latest_origin_base(self):
         tid = self.add()
-        other = self.tmp / "other"
-        sh("git", "clone", "-q", "-b", "main", str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
-        (other / "new.txt").write_text("upstream\n")
-        sh("git", "add", ".", cwd=other)
-        sh("git", "commit", "-qm", "upstream", cwd=other)
-        sh("git", "push", "-q", "origin", "main", cwd=other)
+        self.push_upstream()
         self.to_ready(tid)
         job = self.tick()["jobs"][0]
         self.assertEqual(job["base_ref"], "origin/main")
         self.assertTrue((Path(job["worktree"]) / "new.txt").exists())
+        self.assertEqual(job["code"], job["worktree"], "a builder reads its own worktree")
+
+    # -- the scout: triage and drafting read the latest origin base ------------
+
+    def job_for(self, tid):
+        return [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+
+    def scout_of(self, tid):
+        return self.f_ticket(tid).get("scout")
+
+    def worktrees(self):
+        return sh("git", "worktree", "list", cwd=self.repo)
+
+    def test_triage_reads_the_latest_origin_base(self):
+        tid = self.add()
+        head = sh("git", "rev-parse", "HEAD", cwd=self.repo)
+        self.push_upstream()
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "triage")
+        self.assertEqual(job["base_ref"], "origin/main")
+        self.assertTrue((Path(job["code"]) / "new.txt").exists())
+        self.assertEqual(job["repo"], self.f_ticket(tid)["repo"])
+        self.assertEqual(Path(job["repo"]).resolve(), self.repo.resolve(), "repo stays the user's checkout")
+        self.assertNotEqual(Path(job["code"]).resolve(), self.repo.resolve())
+        self.assertTrue(Path(job["code"]).name.endswith("-scout"))
+        self.assertFalse((self.repo / "new.txt").exists())
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=self.repo), head, "the user's checkout is untouched")
+
+    def test_draft_reads_the_latest_origin_base(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.push_upstream()
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "draft")
+        self.assertEqual(job["base_ref"], "origin/main")
+        self.assertTrue((Path(job["code"]) / "new.txt").exists())
+        self.assertFalse((self.repo / "new.txt").exists())
+
+    def test_user_checkout_local_work_is_untouched(self):
+        (self.repo / "local.txt").write_text("mine\n")
+        sh("git", "add", "local.txt", cwd=self.repo)
+        sh("git", "commit", "-qm", "local work", cwd=self.repo)
+        head = sh("git", "rev-parse", "HEAD", cwd=self.repo)
+        (self.repo / "wip.txt").write_text("uncommitted\n")
+        status = sh("git", "status", "--porcelain", cwd=self.repo)
+        tid = self.add()
+        self.push_upstream()
+        self.assertEqual(self.job_for(tid)["job"], "triage")
+        with self.f() as f:
+            f.triage(tid, "s")
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "draft")
+        self.assertFalse((Path(job["code"]) / "local.txt").exists(), "the scout is origin, not the local branch")
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=self.repo), head)
+        self.assertEqual((self.repo / "wip.txt").read_text(), "uncommitted\n")
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=self.repo), status)
+
+    def test_scout_is_refreshed_and_dropped(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        job = self.job_for(tid)
+        scout = Path(job["code"])
+        self.assertTrue(scout.exists())
+        (scout / "__pycache__").mkdir()  # leftovers from the analyst's tests do not block the refresh
+        with self.f() as f:
+            f.ask(tid, [{"q": "Name?", "options": ["hello", "hi"], "recommended": 0}])
+        self.assertFalse(scout.exists(), "a ticket waiting on a human holds no scout")
+        self.assertIsNone(self.scout_of(tid))
+        self.push_upstream()
+        self.edit_note(tid, lambda t: t.replace("- [ ] hello", "- [x] hello"))
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "draft")
+        self.assertTrue((Path(job["code"]) / "new.txt").exists(), "the resumed draft reads a fresh checkout")
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+            f.drafted(tid, "s", ["architect"])
+        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertFalse(Path(job["code"]).exists())
+        self.assertIsNone(self.scout_of(tid))
+        self.assertNotIn("-scout", self.worktrees())
+
+    def test_retry_keeps_the_scout_and_the_next_start_refreshes_it(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.job_for(tid)
+        with self.f() as f:
+            f.retry(tid)
+        self.assertEqual(self.state(tid), ("drafting", "pending"))
+        self.assertIsNotNone(self.scout_of(tid))
+        self.push_upstream()
+        job = self.job_for(tid)
+        self.assertTrue((Path(job["code"]) / "new.txt").exists())
+        self.assertEqual(self.worktrees().count("-scout"), 1)
+
+    def test_scout_falls_back_to_the_repo_without_origin(self):
+        sh("git", "remote", "remove", "origin", cwd=self.repo)
+        tid = self.add()
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "triage")
+        self.assertEqual(job["base_ref"], "main")
+        self.assertTrue(Path(job["code"]).exists())
+        self.assertTrue((Path(job["code"]) / "README.md").exists())
+        self.assertNotEqual(Path(job["code"]).resolve(), self.repo.resolve())
+
+        real = factory.git
+
+        def fake(*args, cwd):
+            if args[:2] == ("worktree", "add"):
+                raise WonkaError("worktree add failed")
+            return real(*args, cwd=cwd)
+
+        with self.f() as f:
+            f.retry(tid)  # dispatch the triage again
+        with mock.patch.object(factory, "git", fake):
+            job = self.job_for(tid)
+        self.assertEqual(job["job"], "triage")
+        self.assertEqual(job["code"], self.f_ticket(tid)["repo"])
+        self.assertEqual(job["base_ref"], "main")
+        self.assertIn("No fresh checkout", (store.home() / "factory.log").read_text())
+
+    def test_unwritable_worktrees_dir_falls_back_to_the_repo(self):
+        tid = self.add()
+        store.worktrees_dir().parent.mkdir(parents=True, exist_ok=True)
+        store.worktrees_dir().write_text("not a dir\n")
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "triage")
+        self.assertEqual(job["code"], self.f_ticket(tid)["repo"])
+        self.assertTrue(any("No fresh checkout" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+
+    def test_killed_or_deleted_ticket_drops_its_scout(self):
+        a, b = self.add(), self.add("Second")
+        self.tick()
+        with self.f() as f:
+            f.triage(a, "s")
+            f.triage(b, "s")
+        sa = Path(self.job_for(a)["code"])  # one drafting slot: b waits in the Inbox
+        self.assertTrue(sa.exists())
+
+        self.edit_note(a, lambda t: t.replace("🧪-Drafting", "🫐-Wont-Do"))
+        sb = Path(self.job_for(b)["code"])  # a's slot frees up and b is drafted in the same tick
+        self.assertEqual(self.state(a), ("wontdo", "done"))
+        self.assertFalse(sa.exists())
+        self.assertIsNone(self.scout_of(a))
+        self.assertTrue(sb.exists())
+
+        with self.f() as f:
+            path = f.path(b)
+        path.unlink()
+        self.assertIn(f"{b}: note was deleted, ticket dropped", self.tick()["events"])
+        self.assertFalse(sb.exists())
+        self.assertIsNone(self.scout_of(b))
+        self.assertNotIn("-scout", self.worktrees())
 
 
     # -- requesting changes on an open PR ------------------------------------
