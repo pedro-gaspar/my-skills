@@ -36,7 +36,7 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | Column | What happens |
 |---|---|
 | ✉️-Inbox | 📏 **oompa-loompa-triage** (Sonnet) sizes it. xs/s with a clear idea → 🌟 Done. m/l/xl or unclear → 🙋, tick **Approve** and answer the questions |
-| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed, splits l/xl into new Inbox tickets (`## 🫐 Too big`, then Wont-Do) |
+| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Inbox tickets (`## 🫐 Too big`, then Wont-Do) |
 | 🎫-Ready | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Opus) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
 | 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (Opus, picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); a clean round ships once every answer is the recommended one, otherwise rebakes. Max 3 rounds with issues, then Wont-Do |

@@ -14,10 +14,11 @@ and `repo`. Work read-only in the repo: no edits, no commits.
 - reading code: use the Read, Grep and Glob tools, not `cat`, `ls` or shell loops.
 - in heredoc text (plan, spec) never write `{` directly followed by `"`: write `{ "` (with a space) instead.
 
-1. Read the note: `## 💡 Idea`, and if present `## ❓ Questions` (ticked answers, plus any text written under a
-   question) and the review rounds at the bottom of the plan file (when the ticket came back from review):
-   `## 🐿️ Review round N`, plus `## 🐿️ Earlier review round N` from earlier re-drafts. `wonka plan` keeps them
-   at the bottom automatically, so do not copy them into the new plan.
+1. Read the note: `## 💡 Idea`, `## ✅ Answers` (earlier answered rounds: triage and your previous asks) and, if
+   present, `## ❓ Questions` (ticked answers, plus any text written under a question) and the review rounds at the
+   bottom of the plan file (when the ticket came back from review): `## 🐿️ Review round N`, plus
+   `## 🐿️ Earlier review round N` from earlier re-drafts. `wonka plan` keeps them at the bottom automatically, so do
+   not copy them into the new plan.
 2. Study the code until you know exactly what to build: files, functions, data, tests, edge cases.
 3. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash

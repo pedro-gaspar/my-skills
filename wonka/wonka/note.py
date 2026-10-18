@@ -9,6 +9,7 @@ HEADINGS = {
     "idea": "💡 Idea",
     "approval": "🎫 Approval",
     "questions": "❓ Questions",
+    "answers": "✅ Answers",
     "spec": "📜 Spec",
     "toobig": "🫐 Too big",
     "review-questions": "🐿️ Review Questions",
@@ -128,6 +129,17 @@ def render_questions(items):
         if item.get("other", True):
             out.append("  - [ ] Other (write below)")
     return "\n".join(out)
+
+
+def new_questions(body, rendered):
+    """Open a new questions round; an answered previous round moves to the Answers history first."""
+    old = get_section(body, "questions")
+    if old and any(c for q in questions(old) for c, _ in q["options"]):
+        history = get_section(body, "answers") or ""
+        n = len(re.findall(r"^### Round \d+", history, re.M)) + 1
+        entry = f"### Round {n}\n{old.strip()}"
+        body = set_section(drop_section(body, "questions"), "answers", f"{history}\n\n{entry}".strip())
+    return set_section(body, "questions", rendered)
 
 
 def questions(section):
