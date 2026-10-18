@@ -141,7 +141,8 @@ class FactoryTest(unittest.TestCase):
         self.assertFalse(wt.exists())
         meta, body = self.note(tid)
         self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
-        self.assertTrue(body.startswith("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7."))
+        self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
+        self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
         self.assertEqual(body.count("> [!"), 2, "one banner, one log, nothing piled up")
 
@@ -170,7 +171,7 @@ class FactoryTest(unittest.TestCase):
             f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"], "recommended": 0}])
         self.assertEqual(self.state(tid), ("inbox", "awaiting"))
         body = self.note(tid)[1]
-        self.assertTrue(body.startswith("> [!question] 🙋 Your turn: approve it\n> Grandpa Joe sized it **m**"))
+        self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!question] 🙋 Your turn: approve it\n> Grandpa Joe sized it **m**"))
         self.assertIn("· grandpa-joe · ✉️-Inbox 🕰️-Pending → ✉️-Inbox 🙋-Awaiting-Human", body)
         self.assertGreater(body.index("## 🎩 Factory log"), body.index("## ❓ Questions"), "log stays last")
         self.edit_note(tid, lambda t: t.replace("- [ ] Approve", "- [x] Approve"))

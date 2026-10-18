@@ -113,7 +113,8 @@ def render(tid, t, meta, cfg):
     if meta.get("jira"):
         facts.append(f"Jira {meta['jira']}")
     quip = STUCK_QUIP if t.get("stuck") else QUIPS[s]
-    return f"> [!{kind}] {headline}\n> {text}\n> *{quip}*\n> \n> {' · '.join(facts)}"
+    title = f"# 🎫 {meta.get('title') or tid}"
+    return f"{title}\n\n> [!{kind}] {headline}\n> {text}\n> *{quip}*\n> \n> {' · '.join(facts)}"
 
 
 def log(t):

@@ -11,7 +11,7 @@ class BannerTest(unittest.TestCase):
                 t = {"last_valid": {"status": status, "phase": sub}, "project": "app", "history": [],
                      "review_round": 1, "reviewers": ["architect"], "entered_done_at": "2026-10-18T10:00:00+00:00"}
                 text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
-                self.assertTrue(text.startswith("> [!"), (status, sub))
+                self.assertTrue(text.startswith("# 🎫 WONKA-00001\n\n> [!"), (status, sub))
                 self.assertIn(banner.QUIPS[(status, sub)], text)
 
     def test_log_is_newest_first_and_folded(self):

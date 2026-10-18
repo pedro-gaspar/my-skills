@@ -100,10 +100,10 @@ def drop_section(body, key):
 
 
 def set_banner(body, callout):
-    """The banner is the callout above the first section; it is replaced wholesale."""
+    """The banner (title heading + callout) sits above the first section; it is replaced wholesale."""
     first = re.search(r"^## ", body, re.M)
     head = body[:first.start()] if first else body
-    kept = "\n".join(line for line in head.splitlines() if not line.startswith(">")).strip()
+    kept = "\n".join(line for line in head.splitlines() if not line.startswith((">", "# "))).strip()
     return callout + "\n\n" + (kept + "\n\n" if kept else "") + (body[first.start():] if first else "")
 
 
