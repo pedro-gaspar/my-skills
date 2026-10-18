@@ -249,6 +249,26 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("wontdo", "done"))
         self.assertIn("3 review rounds", self.note(tid)[1])
 
+    def test_fix_round_needs_a_new_commit_before_baked(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "no new commits"):
+                f.baked(tid)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        wt = Path(job["worktree"])
+        (wt / "fix.sh").write_text("echo fixed\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "fix", cwd=wt)
+        with self.f() as f:
+            f.baked(tid)
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+
     def test_review_questions_can_close_or_redraft(self):
         a, b = self.add(), self.add("Other")
         for tid, suggest in ((a, "close"), (b, "draft")):
@@ -261,6 +281,8 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(a), ("wontdo", "done"))
         self.assertEqual(self.state(b), ("drafting", "progress"), "back to drafting and re-claimed")
+        with self.f() as f:
+            self.assertNotIn("reviewed_head", f.ticket(b), "redrafting clears the reviewed head")
 
     def test_wip_limits(self):
         ids = [self.add(f"t{n}") for n in range(3)]
