@@ -1,0 +1,44 @@
+filters:
+  and:
+    - file.inFolder("{{folder}}/tickets")
+    - file.ext == "md"
+properties:
+  note.id:
+    displayName: Ticket
+  note.title:
+    displayName: Title
+  note.sub-status:
+    displayName: Now
+views:
+  - type: kanban
+    name: 🏭 Factory floor
+    groupBy:
+      property: status
+      direction: ASC
+    groupOrder:
+      - ✉️-Inbox
+      - 🧪-Drafting
+      - 🎫-Ready
+      - 🍫-Baking
+      - 🐿️-Reviewing
+      - 🛗-Shipped
+      - 🫐-Wont-Do
+    order:
+      - id
+      - title
+      - sub-status
+    sort:
+      - property: file.name
+        direction: ASC
+  - type: table
+    name: 🎫 All golden tickets
+    order:
+      - id
+      - title
+      - status
+      - sub-status
+      - size
+      - jira
+    sort:
+      - property: file.name
+        direction: ASC

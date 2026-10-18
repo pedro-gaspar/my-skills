@@ -1,0 +1,11 @@
+{
+  "name": "wonka",
+  "owner": { "name": "Pedro Gaspar" },
+  "plugins": [
+    {
+      "name": "wonka",
+      "source": "./",
+      "description": "🎩 A slim software factory run from an Obsidian Bases kanban."
+    }
+  ]
+}

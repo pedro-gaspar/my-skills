@@ -1,0 +1,468 @@
+"""What the factory does to golden tickets. Every status change goes through Factory.move()."""
+
+import datetime as dt
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+from . import machine, note, store
+from .machine import KILLED
+from .store import WonkaError
+
+SQUIRRELS = ("architect", "backend", "frontend", "security")
+MAX_REVIEW_ROUNDS = 3
+
+
+def now():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _iso(t):
+    return t.isoformat(timespec="seconds")
+
+
+def _age(stamp):
+    return now() - dt.datetime.fromisoformat(stamp)
+
+
+def _run(cmd, cwd=None):
+    try:
+        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
+    except FileNotFoundError:
+        raise WonkaError(f"{cmd[0]} is not installed")
+    except subprocess.CalledProcessError as e:
+        raise WonkaError(f"{' '.join(cmd[:3])} failed: {(e.stderr or e.stdout).strip()}")
+    return out.stdout.strip()
+
+
+def git(*args, cwd):
+    return _run(["git", *args], cwd=cwd)
+
+
+def gh(*args, cwd=None):
+    return _run([os.environ.get("WONKA_GH", "gh"), *args], cwd=cwd)
+
+
+def slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].rstrip("-") or "ticket"
+
+
+def parse_remote(url):
+    m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$", url or "")
+    return m.group(1) if m else None
+
+
+def repo_info(path):
+    top = git("rev-parse", "--show-toplevel", cwd=path)
+    try:
+        base = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=top).split("/", 1)[1]
+    except WonkaError:
+        base = git("branch", "--show-current", cwd=top) or "main"
+    try:
+        origin = parse_remote(git("remote", "get-url", "origin", cwd=top))
+    except WonkaError:
+        origin = None
+    return top, base, origin
+
+
+def fmt(state):
+    return "/".join(machine.label(state)) if machine.valid(state) else "/".join(map(str, state))
+
+
+def notify(tid, title):
+    if os.environ.get("WONKA_NO_NOTIFY"):
+        return
+    try:
+        subprocess.run(["notify-send", "-a", "Wonka", "🎩 Wonka needs you", f"{tid} — {title}"], check=False)
+    except FileNotFoundError:
+        pass
+
+
+class Factory:
+    def __init__(self, cfg, db):
+        self.cfg, self.db = cfg, db
+
+    # -- tickets and notes ------------------------------------------------
+
+    def ticket(self, tid):
+        try:
+            return self.db["tickets"][tid]
+        except KeyError:
+            raise WonkaError(f"No ticket {tid}")
+
+    def path(self, tid):
+        folder = store.archive_dir if self.ticket(tid).get("archived") else store.tickets_dir
+        return folder(self.cfg) / f"{tid}.md"
+
+    def read(self, tid):
+        return note.read(self.path(tid))
+
+    def write(self, tid, meta, body):
+        note.write(self.path(tid), meta, body)
+
+    def state(self, tid):
+        lv = self.ticket(tid)["last_valid"]
+        return lv["status"], lv["sub_status"]
+
+    def expect(self, tid, *states):
+        if self.state(tid) not in states:
+            raise WonkaError(f"{tid} is {fmt(self.state(tid))}, expected {' or '.join(map(fmt, states))}")
+
+    def move(self, tid, dst, by, why=None):
+        t, src = self.ticket(tid), self.state(tid)
+        if not machine.allowed(src, dst):
+            raise WonkaError(f"{tid}: {fmt(src)} → {fmt(dst)} is not a legal move")
+        meta, body = self.read(tid)
+        meta["status"], meta["sub-status"] = machine.label(dst)
+        self.write(tid, meta, note.add_note(body, why) if why else body)
+        t["last_valid"] = {"status": dst[0], "sub_status": dst[1]}
+        t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by})
+        t.pop("job_started_at", None)
+        if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
+            t["entered_done_at"] = _iso(now())
+            self.drop_worktree(tid)
+        if dst[1] == "awaiting":
+            notify(tid, meta.get("title", ""))
+
+    # -- intake -----------------------------------------------------------
+
+    def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None):
+        if size and size not in machine.SIZES:
+            raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        top, base, origin = repo_info(repo or os.getcwd())
+        tid = f"WONKA-{self.db['next_id']:05d}"
+        self.db["next_id"] += 1
+        title = title or idea.strip().splitlines()[0][:60]
+        meta = {"id": tid, "title": title, "size": size or "", "jira": jira or ""}
+        meta["status"], meta["sub-status"] = machine.label(("inbox", "pending"))
+        store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
+        self.db["tickets"][tid] = {
+            "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
+            "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
+            "review_round": 0, "parent": parent, "children": [],
+            "last_valid": {"status": "inbox", "sub_status": "pending"},
+            "created_at": _iso(now()), "history": [],
+        }
+        self.write(tid, meta, note.set_section("", "idea", idea))
+        if parent:
+            self.ticket(parent)["children"].append(tid)
+        return tid
+
+    def set_field(self, tid, field, value):
+        if field == "size" and value not in machine.SIZES:
+            raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        if field in ("title", "size", "jira"):
+            meta, body = self.read(tid)
+            meta[field] = value
+            self.write(tid, meta, body)
+        elif field == "pr_repo":
+            self.ticket(tid)["pr_repo"] = value
+        else:
+            raise WonkaError("settable fields: title, size, jira, pr_repo")
+
+    def triage(self, tid, size, title=None, questions=None):
+        self.expect(tid, ("inbox", "pending"))
+        if size not in machine.SIZES:
+            raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        meta, body = self.read(tid)
+        meta["size"] = size
+        if title:
+            meta["title"] = title
+        if questions:
+            body = note.set_section(body, "questions", note.render_questions(questions))
+        if size not in machine.AUTO_DONE:
+            body = note.set_section(body, "approval", f"- [ ] Approve (size **{size}**: tick to send it to Drafting)")
+        self.write(tid, meta, body)
+        if size in machine.AUTO_DONE and not questions:
+            self.move(tid, ("inbox", "done"), "grandpa-joe")
+        else:
+            self.move(tid, ("inbox", "awaiting"), "grandpa-joe", "Grandpa Joe needs a human: see Approval / Questions")
+
+    # -- drafting ---------------------------------------------------------
+
+    def set_section(self, tid, key, content):
+        meta, body = self.read(tid)
+        self.write(tid, meta, note.set_section(body, key, content))
+
+    def ask(self, tid, questions):
+        self.expect(tid, ("drafting", "progress"))
+        self.set_section(tid, "questions", note.render_questions(questions))
+        self.move(tid, ("drafting", "awaiting"), "charlie", "Charlie has questions: tick an answer for each")
+
+    def plan_path(self, tid):
+        return store.plans_dir(self.cfg) / f"{tid}-plan.md"
+
+    def drafted(self, tid, size, reviewers=()):
+        self.expect(tid, ("drafting", "progress"))
+        t = self.ticket(tid)
+        self.set_field(tid, "size", size)
+        meta, body = self.read(tid)
+        if size not in machine.BUILDABLE:
+            kids = [k for k in t["children"] if k in self.db["tickets"]]
+            if not kids:
+                raise WonkaError(f"{tid} is {size}: split it first with `wonka add --parent {tid} ...`")
+            lines = [f"- [[{k}]] {self.read(k)[0].get('title', '')}" for k in kids]
+            self.write(tid, meta, note.set_section(body, "toobig", "\n".join(lines)))
+            self.move(tid, KILLED, "charlie", f"Too big ({size}): split into {len(kids)} tickets")
+            return
+        bad = [r for r in reviewers if r not in SQUIRRELS]
+        if bad:
+            raise WonkaError(f"unknown reviewers {bad}; pick from {', '.join(SQUIRRELS)}")
+        plan = self.plan_path(tid)
+        if not plan.exists():
+            raise WonkaError(f"write the detailed plan to {plan} first")
+        spec = note.get_section(body, "spec")
+        if not spec:
+            raise WonkaError(f"add the Spec first: wonka section {tid} spec < spec.md")
+        if f"[[{tid}-plan]]" not in spec:
+            body = note.set_section(body, "spec", f"{spec}\n\n📋 Plan: [[{tid}-plan]]")
+        self.write(tid, meta, body)
+        t["plan"], t["reviewers"] = str(plan), list(reviewers) or ["architect"]
+        self.move(tid, ("ready", "pending"), "charlie")
+
+    # -- baking -----------------------------------------------------------
+
+    def ensure_worktree(self, tid):
+        t = self.ticket(tid)
+        if t["worktree"] and Path(t["worktree"]).exists():
+            return
+        title = self.read(tid)[0].get("title", "")
+        path = store.worktrees_dir() / t["project"] / tid
+        branch = t["branch"] or f"wonka/{tid}-{slug(title)}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        exists = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+                                cwd=t["repo"], capture_output=True).returncode == 0
+        if exists:
+            git("worktree", "add", str(path), branch, cwd=t["repo"])
+        else:
+            git("worktree", "add", "-b", branch, str(path), t["base_branch"], cwd=t["repo"])
+        t["worktree"], t["branch"] = str(path), branch
+
+    def drop_worktree(self, tid):
+        t = self.ticket(tid)
+        if not t.get("worktree"):
+            return
+        if Path(t["worktree"]).exists():
+            try:
+                git("worktree", "remove", t["worktree"], cwd=t["repo"])
+            except WonkaError as e:
+                meta, body = self.read(tid)
+                self.write(tid, meta, note.add_note(body, f"Worktree kept, it has local changes: {t['worktree']} ({e})"))
+                return
+        t["worktree"] = None
+
+    def baked(self, tid):
+        self.expect(tid, ("baking", "progress"))
+        t = self.ticket(tid)
+        if git("status", "--porcelain", cwd=t["worktree"]):
+            raise WonkaError("the worktree has uncommitted changes: commit them first")
+        if git("rev-list", "--count", f"{t['base_branch']}..HEAD", cwd=t["worktree"]) == "0":
+            raise WonkaError(f"no commits on {t['branch']} yet")
+        self.move(tid, ("baking", "done"), "oompa-loompa")
+        self.move(tid, ("reviewing", "pending"), "wonka")
+
+    # -- reviewing --------------------------------------------------------
+
+    def report(self, tid, squirrel, rep):
+        self.expect(tid, ("reviewing", "progress"))
+        if squirrel not in SQUIRRELS:
+            raise WonkaError(f"unknown squirrel {squirrel}")
+        t = self.ticket(tid)
+        t.setdefault("reports", {})[squirrel] = rep
+        missing = [r for r in t["reviewers"] if r not in t["reports"]]
+        if missing:
+            return f"{tid}: waiting for {', '.join(missing)}"
+        return self._verdict(tid)
+
+    def _verdict(self, tid):
+        t = self.ticket(tid)
+        reps, rnd = t.pop("reports"), t["review_round"]
+        for rep in reps.values():
+            for f in rep.get("followups", []):
+                self.add(f["idea"], f.get("title"), t["repo"], t["pr_repo"], parent=tid)
+        issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
+        if t["plan"] and Path(t["plan"]).exists():
+            log = [f"\n## 🐿️ Review round {rnd}"]
+            for name, rep in reps.items():
+                log.append(f"### squirrel-{name}: {rep.get('verdict', '?')}")
+                log += [f"- {i}" for i in rep.get("issues", [])]
+            with open(t["plan"], "a") as fh:
+                fh.write("\n".join(log) + "\n")
+        qs = [q for rep in reps.values() for q in rep.get("questions", [])]
+        why = {s: [r.get("why", "") for r in reps.values() if r.get("suggest") == s] for s in ("close", "draft")}
+        if why["close"]:
+            qs.append({"q": note.CLOSE_Q, "options": ["Yes", "No"], "recommended": 0, "why": "; ".join(why["close"]), "other": False})
+        if why["draft"]:
+            qs.append({"q": note.DRAFT_Q, "options": ["Yes", "No"], "recommended": 0, "why": "; ".join(why["draft"]), "other": False})
+        if qs:
+            self.set_section(tid, "review-questions", note.render_questions(qs))
+            self.move(tid, ("reviewing", "awaiting"), "squirrels", f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: the squirrels have questions")
+            return f"{tid}: review questions for a human"
+        if issues:
+            return self._back_to_baking(tid, f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: {len(issues)} issue(s), back to baking")
+        self.move(tid, ("reviewing", "done"), "squirrels", f"Review round {rnd}/{MAX_REVIEW_ROUNDS}: a good nut")
+        self.move(tid, ("shipped", "pending"), "wonka")
+        return f"{tid}: clean review, off to ship"
+
+    def _back_to_baking(self, tid, why):
+        if self.ticket(tid)["review_round"] >= MAX_REVIEW_ROUNDS:
+            self.move(tid, KILLED, "wonka", f"Bad nut: {MAX_REVIEW_ROUNDS} review rounds without a clean bill, rolled away")
+            return f"{tid}: killed after {MAX_REVIEW_ROUNDS} review rounds"
+        self.move(tid, ("baking", "pending"), "wonka", why)
+        return f"{tid}: back to baking"
+
+    # -- shipping ---------------------------------------------------------
+
+    def ship(self, tid):
+        self.expect(tid, ("shipped", "pending"))
+        t = self.ticket(tid)
+        self.move(tid, ("shipped", "progress"), "wonka")
+        try:
+            if not t["pr_repo"]:
+                raise WonkaError("no pr_repo: set it with `wonka set ID pr_repo owner/name`")
+            git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
+            origin = parse_remote(git("remote", "get-url", "origin", cwd=t["worktree"]))
+            head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
+            meta, body = self.read(tid)
+            spec = (note.get_section(body, "spec") or note.get_section(body, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
+            out = gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
+                     "--title", f"{tid}: {meta.get('title', '')}",
+                     "--body", f"🎫 **{tid}**\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory")
+        except WonkaError as e:
+            meta, body = self.read(tid)
+            self.write(tid, meta, note.add_note(body, f"Could not open the PR: {e}"))
+            t["job_started_at"] = _iso(now())
+            return f"{tid}: PR failed: {e}"
+        t["pr_url"] = out.splitlines()[-1]
+        self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
+        return f"{tid}: PR {t['pr_url']}"
+
+    # -- the tick ---------------------------------------------------------
+
+    def reconcile(self, tid):
+        """Put illegal board edits back and act on ticked checkboxes and merged PRs."""
+        t = self.ticket(tid)
+        if not self.path(tid).exists():
+            return f"{tid}: note is missing"
+        meta, body = self.read(tid)
+        seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("sub-status"), machine.SUBS))
+        last = self.state(tid)
+        if seen != last:
+            if seen[0] == "wontdo" and last != KILLED:
+                self.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
+                return f"{tid}: killed by a human"
+            shown = f"{meta.get('status')}/{meta.get('sub-status')}"
+            meta["status"], meta["sub-status"] = machine.label(last)
+            self.write(tid, meta, note.add_note(body, f"Reverted {shown}: not a legal move, back to {fmt(last)}"))
+            return f"{tid}: reverted illegal {shown}"
+        if last == ("inbox", "awaiting"):
+            appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
+            if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
+                self.move(tid, ("inbox", "done"), "human", "Approved")
+                return f"{tid}: approved"
+        elif last == ("drafting", "awaiting") and note.all_answered(note.get_section(body, "questions")):
+            self.move(tid, ("drafting", "progress"), "human", "Questions answered, Charlie resumes")
+            t["resume"] = True
+            return f"{tid}: answered, drafting resumes"
+        elif last == ("reviewing", "awaiting"):
+            sec = note.get_section(body, "review-questions")
+            if note.all_answered(sec):
+                if note.picked_yes(sec, note.CLOSE_Q):
+                    self.move(tid, KILLED, "human", "Closed after review")
+                    return f"{tid}: closed after review"
+                if note.picked_yes(sec, note.DRAFT_Q):
+                    t["review_round"] = 0
+                    self.move(tid, ("drafting", "pending"), "human", "Back to drafting after review")
+                    return f"{tid}: back to drafting"
+                return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{MAX_REVIEW_ROUNDS})")
+        elif last == ("shipped", "awaiting") and t["pr_url"]:
+            pr = gh("pr", "view", t["pr_url"], "--json", "state", "-q", ".state")
+            if pr == "MERGED":
+                self.move(tid, ("shipped", "done"), "github", "PR merged 🎉")
+                return f"{tid}: shipped"
+            if pr == "CLOSED":
+                self.move(tid, KILLED, "github", "PR closed without merging")
+                return f"{tid}: PR closed"
+        return None
+
+    def archive(self, tid):
+        t = self.ticket(tid)
+        stamp = t.get("entered_done_at")
+        if t.get("archived") or self.state(tid) not in (("shipped", "done"), KILLED) or not stamp:
+            return None
+        if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
+            return None
+        src = self.path(tid)
+        store.archive_dir(self.cfg).mkdir(parents=True, exist_ok=True)
+        t["archived"] = True
+        shutil.move(src, self.path(tid))
+        return f"{tid}: archived"
+
+    def start(self, tid):
+        """Claim a job for an agent and return what it needs to know."""
+        t, s = self.ticket(tid), self.state(tid)
+        job = {"inbox": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review"}[s[0]]
+        if s == ("drafting", "pending"):
+            self.move(tid, ("drafting", "progress"), "wonka")
+        elif s == ("baking", "pending"):
+            self.ensure_worktree(tid)
+            self.move(tid, ("baking", "progress"), "wonka")
+        elif s == ("reviewing", "pending"):
+            t["review_round"] += 1
+            t["reports"] = {}
+            self.move(tid, ("reviewing", "progress"), "wonka")
+        t.pop("resume", None)
+        t["job_started_at"] = _iso(now())
+        agents = {"triage": ["grandpa-joe"], "draft": ["charlie"], "bake": ["oompa-loompa"],
+                  "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]]}[job]
+        return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
+                "repo": t["repo"], "worktree": t["worktree"], "branch": t["branch"], "base_branch": t["base_branch"],
+                "review_round": t["review_round"]}
+
+    def retry(self, tid):
+        t, s = self.ticket(tid), self.state(tid)
+        if s[1] == "progress":
+            if s[0] == "reviewing":
+                t["review_round"] -= 1
+                t.pop("reports", None)
+            self.move(tid, (s[0], "pending"), "wonka", "Retrying: the last job did not finish")
+        t.pop("job_started_at", None)
+
+    def _count(self, status):
+        return sum(1 for k in self.live() if self.state(k) in ((status, "pending"), (status, "progress")))
+
+    def live(self):
+        return sorted(k for k, t in self.db["tickets"].items() if not t.get("archived"))
+
+    def _safe(self, tid, fn):
+        try:
+            return fn(tid)
+        except WonkaError as e:
+            return f"{tid}: ⚠️ {e}"
+
+    def tick(self):
+        events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
+        for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
+                                (("ready", "pending"), ("baking", "pending"), "baking")):
+            for k in self.live():
+                if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
+                    self.move(k, dst, "wonka")
+                    events.append(f"{k}: → {fmt(dst)}")
+        jobs = []
+        for k in self.live():
+            t, s = self.ticket(k), self.state(k)
+            if s == ("shipped", "pending"):
+                events.append(self.ship(k))
+            elif t.get("job_started_at") and not t.get("resume"):
+                continue
+            elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
+                    or (s == ("drafting", "progress") and t.get("resume")):
+                job = self._safe(k, self.start)
+                (events if isinstance(job, str) else jobs).append(job)
+        stale_after = dt.timedelta(hours=self.cfg["stale_hours"])
+        stale = [k for k in self.live() if self.ticket(k).get("job_started_at")
+                 and _age(self.ticket(k)["job_started_at"]) > stale_after]
+        awaiting = [k for k in self.live() if self.state(k)[1] == "awaiting"]
+        return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale}
