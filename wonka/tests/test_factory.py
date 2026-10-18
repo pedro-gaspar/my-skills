@@ -284,6 +284,78 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             self.assertNotIn("reviewed_head", f.ticket(b), "redrafting clears the reviewed head")
 
+    QUESTION = {"q": "Rename it?", "options": ["Keep hello", "Rename to hi"], "recommended": 0}
+
+    def bad_rounds(self, tid, n=2):
+        for i in range(n):
+            self.bake(tid, f"f{i}.sh")
+            self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+
+    def test_clean_review_with_questions_ships_when_answers_match(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
+        self.assertEqual(self.state(tid), ("reviewing", "awaiting"))
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
+        tick = self.tick()
+        self.assertIn(f"{tid}: clean review answered, off to ship", tick["events"])
+        self.assertNotIn("bake", [j["job"] for j in tick["jobs"] if j["id"] == tid])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"), "reconciled, shipped and PR opened in one tick")
+        with self.f() as f:
+            self.assertNotIn("round_issues", f.ticket(tid))
+
+    def test_clean_review_answer_off_recommendation_rebakes_without_kill(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bad_rounds(tid)
+        self.bake(tid, "f2.sh")
+        self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
+        self.assertEqual(self.state(tid), ("reviewing", "awaiting"))
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Rename to hi", "  - [x] Rename to hi"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"), "back to baking (and re-claimed), not killed")
+        with self.f() as f:
+            self.assertNotIn("round_issues", f.ticket(tid))
+            wt = Path(f.ticket(tid)["worktree"])
+        (wt / "hi.sh").write_text("echo hi\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "rename", cwd=wt)
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+
+    def test_round_three_clean_review_with_questions_is_not_killed(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bad_rounds(tid)
+        self.bake(tid, "f2.sh")
+        self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_review_with_issues_and_questions_still_rebakes(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"), "back to baking and re-claimed")
+
+    def test_round_three_review_with_issues_and_questions_is_killed(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bad_rounds(tid)
+        self.bake(tid, "f2.sh")
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+
     def test_wip_limits(self):
         ids = [self.add(f"t{n}") for n in range(3)]
         self.tick()

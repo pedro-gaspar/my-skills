@@ -53,6 +53,7 @@ _EDGES = [
     ("reviewing/progress", "baking/pending"),
     ("reviewing/awaiting", "baking/pending"),
     ("reviewing/awaiting", "drafting/pending"),
+    ("reviewing/awaiting", "reviewing/done"),
     ("reviewing/done", "shipped/pending"),
     ("shipped/pending", "shipped/progress"),
     ("shipped/progress", "shipped/pending"),  # retry

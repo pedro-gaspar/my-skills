@@ -67,6 +67,30 @@ class NoteTest(unittest.TestCase):
         self.assertTrue(note.picked_yes(sec, note.CLOSE_Q))
         self.assertFalse(note.picked_yes(sec, note.DRAFT_Q))
 
+    def test_all_recommended(self):
+        skip = (note.CLOSE_Q, note.DRAFT_Q)
+        sec = note.render_questions([
+            {"q": "Redis or Postgres?", "options": ["Redis", "Postgres"], "recommended": 1, "why": "in stack"},
+            {"q": note.CLOSE_Q, "options": ["Yes", "No"], "recommended": 0, "other": False},
+        ])
+        self.assertFalse(note.all_recommended(sec, skip=skip), "unanswered")
+        answered = sec.replace("- [ ] Postgres", "- [x] Postgres").replace("- [ ] No", "- [x] No")
+        self.assertTrue(note.all_recommended(answered, skip=skip))
+        self.assertFalse(note.all_recommended(answered), "the CLOSE_Q 'No' is not recommended")
+        other_opt = sec.replace("- [ ] Redis", "- [x] Redis").replace("- [ ] No", "- [x] No")
+        self.assertFalse(note.all_recommended(other_opt, skip=skip))
+        other = sec.replace("- [ ] Other (write below)", "- [x] Other (write below)").replace("- [ ] No", "- [x] No")
+        self.assertFalse(note.all_recommended(other, skip=skip))
+        lines = answered.splitlines()
+        lines.insert(1, "    I'd rather use X")
+        self.assertFalse(note.all_recommended("\n".join(lines), skip=skip), "free text under a question")
+        lines[1] = "   "
+        self.assertTrue(note.all_recommended("\n".join(lines), skip=skip), "blank lines are not free text")
+        no_rec = note.render_questions([{"q": "Name?", "options": ["hello", "hi"]}]).replace("- [ ] hello", "- [x] hello")
+        self.assertFalse(note.all_recommended(no_rec))
+        self.assertFalse(note.all_recommended(""))
+        self.assertFalse(note.all_recommended(None))
+
     def test_approval_and_retry_checkboxes(self):
         self.assertFalse(note.approved("- [ ] Approve (size m)"))
         self.assertTrue(note.approved("- [x] Approve (size m)"))
