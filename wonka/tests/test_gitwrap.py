@@ -525,6 +525,7 @@ class WrapperTest(unittest.TestCase):
         (wt / "hello.sh").write_text("echo hi\n")
         code = self.hostile_git(tid, "--dispatch", str(self.dispatch), "add", "hello.sh")
         self.assertEqual(code, 1)
+
     def test_write_needs_dispatch(self):
         tid = self.add()
         wt = self.to_baking(tid)
