@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from . import machine
+from . import machine, note
 
 ARCHIVE_DAYS_KEY = "archive_after_days"
 MAX_ROUNDS_KEY = "max_review_rounds"
@@ -157,10 +157,10 @@ def render(tid, t, meta, cfg, waiting=(), dead=()):
         facts.append(f"plan [[{tid}-plan]]")
     if t.get("pr_url"):
         facts.append(f"[PR]({t['pr_url']})")
-    if meta.get("jira"):
-        facts.append(f"Jira {meta['jira']}")
+    if note.one_line(meta.get("jira")):  # a hand-edited multi-line value must not break the callout or the heading
+        facts.append(f"Jira {note.one_line(meta['jira'])}")
     quip = STUCK_QUIP if t.get("stuck") else QUIPS[s]
-    title = f"# 🎫 {meta.get('title') or tid}"
+    title = f"# 🎫 {note.one_line(meta.get('title')) or tid}"
     return f"{title}\n\n> [!{kind}] {headline}\n> {text}\n> *{quip}*\n> \n> {' · '.join(facts)}"
 
 

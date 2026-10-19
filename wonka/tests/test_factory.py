@@ -2838,6 +2838,41 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(a, [j["id"] for j in tick["jobs"]])
         self.assertEqual(self.note(a)[0]["title"], "Café \x1b ok")
 
+    def test_newlines_in_title_and_jira_are_folded_so_banners_never_pile_up(self):
+        tid = self.add(title="Two\nlines", jira="KEY-1\n")
+        self.assertEqual((self.note(tid)[0]["title"], self.note(tid)[0]["jira"]), ("Two lines", "KEY-1"))
+        with self.f() as f:
+            f.set_field(tid, "title", "New title")
+            f.set_field(tid, "jira", "KEY-2\r\nx")
+            f.set_field(tid, "size", "s")
+        meta, body = self.note(tid)
+        self.assertEqual((meta["title"], meta["jira"]), ("New title", "KEY-2 x"))
+        self.assertTrue(body.startswith("# 🎫 New title\n\n> [!"), body)
+        self.assertEqual(body.count("# 🎫 "), 1)
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s", title="Triaged\ntitle")
+        self.assertEqual(self.note(tid)[0]["title"], "Triaged title")
+
+    def test_a_hand_written_multi_line_title_keeps_one_banner(self):
+        tid = self.add()
+        with self.f() as f:
+            path = f.path(tid)
+        path.write_text(path.read_text().replace("title: Add a hello script", "title: |\n  Add a\n  hello script"))
+        for size in ("s", "m"):
+            with self.f() as f:
+                f.set_field(tid, "size", size)
+        body = self.note(tid)[1]
+        self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!"), body)
+        self.assertEqual(body.count("> [!"), 2, "one banner, one log")
+
+    def test_an_empty_idea_is_refused(self):
+        for idea in ("", "  \n\t"):
+            with self.subTest(idea=idea), self.assertRaisesRegex(WonkaError, "the idea is empty"):
+                self.add(idea)
+        with self.f() as f:
+            self.assertEqual((f.db["next_id"], f.db["tickets"]), (1, {}))
+
     def test_unreadable_frontmatter_is_an_error_on_its_ticket_only(self):
         a = self.add("Add a hello script")
         b = self.add("Add a bye script")
