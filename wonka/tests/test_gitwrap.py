@@ -46,6 +46,16 @@ class CheckTest(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(WonkaError):
                 check(sub, args)
 
+    def test_diff_paths_must_stay_inside_the_tree(self):
+        for args in (["/etc/hostname", "/dev/null"], ["--", "/etc/hostname", "/dev/null"],
+                     ["--stat", "/home/u/.bashrc", "/dev/null"], ["../x", "a"], ["a/../../x"], ["HEAD", "--", ".."],
+                     [".."]):
+            with self.subTest(args=args), self.assertRaises(WonkaError):
+                check("diff", args)
+        for args in (["a", "b/c"], ["HEAD", "--", "src/x.py"], ["a/../b"], ["main...HEAD", "--", "."]):
+            with self.subTest(args=args):
+                self.assertIsNone(check("diff", args))
+
     def test_merge_only_takes_the_fixer_forms(self):
         for args in ([], ["origin/main"], ["--no-edit"], ["--no-edit", "-s", "ours"], ["--no-edit", "--squash"],
                      ["--no-edit", "a", "b"], ["--abort", "x"], ["-X", "theirs", "origin/main"]):
@@ -198,6 +208,14 @@ class WrapperTest(unittest.TestCase):
             self.assertEqual(self.git(tid, "diff", "--output=/tmp/x")[0], 1)
         run.assert_not_called()
         self.assertIn(f"git {tid} diff", (self.tmp / "home" / "factory.log").read_text())
+
+    def test_diff_outside_the_tree_never_runs_git(self):
+        tid = self.add()
+        with mock.patch.object(gitwrap.subprocess, "run") as run:
+            code, err = self.git(tid, "diff", "/etc/hostname", "/dev/null")
+        self.assertEqual(code, 1)
+        self.assertIn("inside the worktree", err)
+        run.assert_not_called()
 
     def test_usage(self):
         self.assertEqual(self.git()[0], 1)

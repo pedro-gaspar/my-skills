@@ -36,6 +36,17 @@ def _check_merge(args):
         raise WonkaError("git merge only runs as 'merge --no-edit <ref>' or 'merge --abort'")
 
 
+def _inside(sub, arg):
+    """git diff silently turns into `diff --no-index` when a path is outside the work tree, which reads any file:
+    so its paths must stay inside the tree (no absolute path, no `..` that climbs out)."""
+    if sub != "diff":
+        return
+    norm = os.path.normpath(arg)
+    if os.path.isabs(arg) or norm == ".." or norm.startswith(".." + os.sep):
+        raise WonkaError(f"git diff {arg} is not allowed: paths must stay inside the worktree "
+                         "(a path outside it turns diff into diff --no-index)")
+
+
 def check(sub, args):
     """Raise WonkaError when the subcommand or one of its options is not allowed."""
     if sub not in SUBCOMMANDS:
@@ -50,8 +61,12 @@ def check(sub, args):
         arg = args[i]
         i += 1
         if arg == "--":
+            for rest in args[i:]:
+                _inside(sub, rest)
             return
-        if arg.startswith("--"):
+        if not arg.startswith("-") or arg == "-":
+            _inside(sub, arg)
+        elif arg.startswith("--"):
             name = arg.split("=", 1)[0]
             if any(b.startswith(name) for b in banned):
                 raise WonkaError(f"git {sub} {name} is not allowed (it can run programs, write or read files outside "
