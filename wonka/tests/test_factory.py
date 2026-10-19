@@ -3950,6 +3950,24 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(note.SPEC_Q, note.get_section(body, "questions"))
         self.assertEqual(note.picked(note.get_section(body, "questions"), note.SPEC_Q), [])
 
+    def test_redraft_then_agent_archives_the_round(self):
+        tid = self.add(spec_review="human")
+        self.draft_human(tid)
+        self.tick_box(tid, "Re-draft")
+        self.write_under_question(tid, "Cover the edge case")
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        with self.f() as f:
+            f.set_field(tid, "spec_review", "agent")
+            f.drafted(tid, "s", ["architect"])
+        self.assertEqual(self.state(tid), ("planned", "pending"))
+        body = self.note(tid)[1]
+        self.assertIsNone(note.get_section(body, "questions"))
+        answers = note.get_section(body, "answers")
+        self.assertIn(note.SPEC_Q, answers)
+        self.assertIn("[x] Re-draft", answers)
+        self.assertIn("Cover the edge case", answers)
+
     def test_close_and_mixed_ticks(self):
         for ticks in (("Close",), ("Approve", "Close")):
             tid = self.add(spec_review="human")

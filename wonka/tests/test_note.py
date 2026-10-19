@@ -150,6 +150,22 @@ class NoteTest(unittest.TestCase):
                 self.assertIn("Round B?", open_round)
                 self.assertNotIn("Round A?", open_round)
 
+    def test_archive_questions(self):
+        body = note.set_section("", "idea", "an idea")
+        self.assertEqual(note.archive_questions(body), body)
+        body = note.set_section(body, "log", "> - event")
+        body = note.set_section(body, "questions", note.render_questions([{"q": "Round A?", "options": ["a1"]}]))
+        self.assertEqual(note.archive_questions(body), body)
+        answered = body.replace("- [ ] a1", "- [x] a1")
+        out = note.archive_questions(answered)
+        self.assertIsNone(note.get_section(out, "questions"))
+        self.assertNotIn("## ❓ Questions", out)
+        self.assertTrue(note.get_section(out, "answers").startswith("### Round 1\n"))
+        self.assertGreater(out.index("## 🎩 Factory log"), out.index("## ✅ Answers"), "log stays last")
+        again = note.set_section(out, "questions", note.render_questions([{"q": "Round B?", "options": ["b1"]}]))
+        again = note.archive_questions(again.replace("- [ ] b1", "- [x] b1"))
+        self.assertIn("### Round 2", note.get_section(again, "answers"))
+
     def test_new_questions_replaces_an_unanswered_round(self):
         body = note.set_section("", "idea", "an idea")
         body = note.new_questions(body, note.render_questions([{"q": "Round A?", "options": ["a1"]}]))
