@@ -4152,6 +4152,65 @@ class FactoryTest(unittest.TestCase):
         self.assertFalse({"stuck", "ci_stuck"} & set(t))
         self.assertEqual(t["ci_fixes"], 3)
 
+    def conflicting_ci_stuck(self, tid):
+        self.ci_stuck(tid)
+        self.ci_state([self.check_run()], head="c" * 40, mergeable="CONFLICTING")
+        return self.tick()
+
+    def test_conflicts_on_a_ci_stuck_ticket_call_the_fixer(self):
+        tid = self.add()
+        tick = self.conflicting_ci_stuck(tid)
+        self.assertIn(f"{tid}: PR has merge conflicts", tick["events"])
+        jobs = [j for j in tick["jobs"] if j["id"] == tid]
+        self.assertEqual([j["job"] for j in jobs], ["conflicts"])
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+        t = self.f_ticket(tid)
+        self.assertFalse({"stuck", "ci_stuck"} & set(t))
+        self.assertEqual(t["ci_fixes"], factory.MAX_CI_FIXES)
+        self.assertIsNone(self.stuck_section(tid))
+        self.assertIn("while stuck on red CI", self.note(tid)[1])
+
+    def rebased_after_ci_stuck(self, tid):
+        tick = self.conflicting_ci_stuck(tid)
+        job = [j for j in tick["jobs"] if j["id"] == tid][0]
+        self.upstream_change()
+        self.rebase_onto(Path(job["worktree"]), job["base_ref"])
+        with self.f() as f:
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_rebased_head_still_red_goes_ci_stuck_again(self):
+        tid = self.add()
+        self.rebased_after_ci_stuck(tid)
+        tick = self.red_round(tid, head="d" * 40)
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"] and t["ci_stuck"])
+        self.assertFalse([j for j in tick["jobs"] if j["id"] == tid and j["job"] == "bake"])
+        self.assertNotIn("## 🔴 CI failure", self.plan_text(tid))
+
+    def test_rebased_head_green_after_ci_stuck_resets_ci_fixes(self):
+        tid = self.add()
+        self.rebased_after_ci_stuck(tid)
+        self.red_round(tid, head="d" * 40, items=[self.check_run(conclusion="SUCCESS")])
+        t = self.f_ticket(tid)
+        self.assertNotIn("ci_fixes", t)
+        self.assertNotIn("stuck", t)
+
+    def test_ci_stuck_with_spent_conflict_budget_goes_conflict_stuck(self):
+        tid = self.add()
+        self.ci_stuck(tid)
+        with self.f() as f:
+            f.ticket(tid)["conflict_fixes"] = factory.MAX_CONFLICT_FIXES
+        self.ci_state([self.check_run()], head="c" * 40, mergeable="CONFLICTING")
+        tick = self.tick()
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"])
+        self.assertNotIn("ci_stuck", t)
+        self.assertIn("as conflicting with", self.stuck_section(tid))
+        self.assertFalse([j for j in tick["jobs"] if j["id"] == tid])
+        again = self.tick()
+        self.assertFalse([e for e in again["events"] if e.startswith(tid)])
+
     def test_merged_pr_ignores_red_ci(self):
         tid = self.add()
         self.to_awaiting_merge(tid)
