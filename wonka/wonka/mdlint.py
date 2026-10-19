@@ -74,7 +74,8 @@ def isolated(text):
 
 _ITEM = re.compile(r"^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$")
 _BREAK = re.compile(r"^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$")
-_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")  # outside a list: at most 3 spaces, else indented code or text
+_LIST_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")  # inside a list item: indented relative to the item
 
 
 def _item(line):
@@ -117,7 +118,7 @@ def space_lists(text):
                 in_list, prev = False, "text"
         elif item and item[0] <= 3:
             number = item[1][:-1]
-            interrupts = bool(item[2]) if item[1] in "-*+" else number == "1"
+            interrupts = bool(item[2]) and (item[1] in "-*+" or number == "1")
             if prev in (None, "blank") or interrupts:
                 if prev == "text":
                     out.append("")
@@ -127,7 +128,7 @@ def space_lists(text):
         else:
             prev = "text"
         out.append(line)
-        opener = _FENCE.match(line)
+        opener = (_LIST_FENCE if in_list else _FENCE).match(line)
         if opener:
             end = _fence_end(lines, i, opener)
             out.extend(lines[i + 1:end + 1])
