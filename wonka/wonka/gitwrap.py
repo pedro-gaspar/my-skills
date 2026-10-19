@@ -22,6 +22,8 @@ BANNED = {
     "commit": ("--amend", "--interactive", "--patch", "--file", "--template"),
     "ls-files": ("--exclude-from", "--exclude-per-directory"),
     "blame": ("--ignore-revs-file",),
+    # these rev-parse options test whether a path outside the worktree exists (or is a git dir)
+    "rev-parse": ("--resolve-git-dir", "--prefix"),
 }
 # short flags refused, also inside clusters (-vp); -X, -S and -O<orderfile> read a file given by path
 BANNED_SHORT = {"add": "pieA", "commit": "pFt", "ls-files": "X", "blame": "S", "diff": "O", "log": "O", "show": "O"}
@@ -35,6 +37,8 @@ EXACT_OK = {"ls-files": ("--exclude",), "blame": ("--ignore-rev",)}
 NO_EXTERNAL = ("diff", "log", "show", "blame")        # these get --no-ext-diff --no-textconv injected
 # only identity and dates pass through: every GIT_CONFIG_* (GLOBAL, SYSTEM, NOSYSTEM, PARAMETERS, COUNT/KEY/VALUE)
 # is dropped, since a config the caller picks can run programs (core.pager, gpg.program, filters, hooksPath)
+# paths must stay inside the tree: diff turns into --no-index for an outside path; rev-parse reports whether one exists
+PATHS_INSIDE = ("diff", "rev-parse")
 KEEP_ENV = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
             "GIT_COMMITTER_DATE")
 
@@ -48,13 +52,14 @@ def _check_merge(args):
 
 def _inside(sub, arg):
     """git diff silently turns into `diff --no-index` when a path is outside the work tree, which reads any file:
-    so its paths must stay inside the tree (no absolute path, no `..` that climbs out)."""
-    if sub != "diff":
+    so its paths must stay inside the tree (no absolute path, no `..` that climbs out). rev-parse says whether an
+    outside path exists, so it gets the same rule."""
+    if sub not in PATHS_INSIDE:
         return
     norm = os.path.normpath(arg)
     if os.path.isabs(arg) or norm == ".." or norm.startswith(".." + os.sep):
-        raise WonkaError(f"git diff {arg} is not allowed: paths must stay inside the worktree "
-                         "(a path outside it turns diff into diff --no-index)")
+        why = " (a path outside it turns diff into diff --no-index)" if sub == "diff" else ""
+        raise WonkaError(f"git {sub} {arg} is not allowed: paths must stay inside the worktree{why}")
 
 
 def check(sub, args):
