@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-from wonka import store
+from wonka import factory, store
 from wonka.factory import Factory
 
 
@@ -46,11 +46,10 @@ class RepoFixture:
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.repo = self.tmp / "app"
         env_ = {"WONKA_HOME": str(self.tmp / "home"), "WONKA_NO_NOTIFY": "1", "WONKA_MDLINT": "off",
-                "WONKA_GH": "false",
                 "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        patcher = mock.patch.dict(os.environ, env_)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.dict(os.environ, env_), mock.patch.object(factory, "GH", "false")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         sh("git", "init", "-q", "--bare", str(self.tmp / "origin.git"), cwd=self.tmp)
         self.repo.mkdir()
         sh("git", "init", "-q", "-b", "main", cwd=self.repo)

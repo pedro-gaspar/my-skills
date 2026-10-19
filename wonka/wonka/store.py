@@ -155,7 +155,21 @@ class CriticalError(WonkaError):
 
 
 def home():
-    return Path(os.environ.get("WONKA_HOME") or Path.home() / ".wonka")
+    """~/.wonka, or WONKA_HOME (the tests, a second factory). An agent that set it could load a config and state it
+    wrote, but a background agent cannot: `WONKA_HOME=<dir> wonka git ...` does not match the per-command allow rules
+    (`Bash(wonka git *)`), so Claude Code would ask a human. As a cheap second line, a relative WONKA_HOME (it would
+    resolve against the agent's worktree) or one inside the default home (its worktrees and drafts, which agents
+    write) is refused."""
+    default = Path.home() / ".wonka"
+    raw = os.environ.get("WONKA_HOME")
+    if not raw:
+        return default
+    path = Path(raw)
+    if not path.is_absolute():
+        raise WonkaError(f"WONKA_HOME must be an absolute path, not {raw!r}")
+    if default.resolve() in path.resolve().parents:
+        raise WonkaError(f"WONKA_HOME {raw} is inside {default}, whose worktrees agents write: refusing it")
+    return path
 
 
 def load_config():

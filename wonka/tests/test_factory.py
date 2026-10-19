@@ -66,12 +66,12 @@ class FactoryTest(unittest.TestCase):
         gh.chmod(0o755)
         self.pr_state = self.tmp / "pr_state"
         self.pr_state.write_text("OPEN")
-        env = {"WONKA_HOME": str(self.tmp / "home"), "WONKA_NO_NOTIFY": "1", "WONKA_GH": str(gh), "WONKA_MDLINT": "off",
+        env = {"WONKA_HOME": str(self.tmp / "home"), "WONKA_NO_NOTIFY": "1", "WONKA_MDLINT": "off",
                "WONKA_FAKE_PR_STATE": str(self.pr_state),
                "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        patcher = mock.patch.dict(os.environ, env)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.dict(os.environ, env), mock.patch.object(factory, "GH", str(gh))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         sh("git", "init", "-q", "--bare", str(self.tmp / "origin.git"), cwd=self.tmp)
         self.repo.mkdir()
         sh("git", "init", "-q", "-b", "main", cwd=self.repo)
@@ -3806,7 +3806,7 @@ class FactoryTest(unittest.TestCase):
         gh = self.tmp / "gh_bad"
         gh.write_text(factory_fake_gh_failing_runs())
         gh.chmod(0o755)
-        with mock.patch.dict(os.environ, {"WONKA_GH": str(gh)}):
+        with mock.patch.object(factory, "GH", str(gh)):
             self.red_round(tid)
         self.assertIn("(could not fetch the log:", self.plan_text(tid))
         self.assertEqual(self.state(tid), ("baking", "progress"))
@@ -5813,6 +5813,15 @@ class FactoryTest(unittest.TestCase):
         self.rebase_onto(wt, "origin/main")
         with self.f() as f:
             f.resolved(tid, dispatch=job["dispatch"])
+
+
+class GhCommandTest(unittest.TestCase):
+    def test_wonka_gh_in_the_environment_is_ignored(self):
+        """Only the tests pick the gh program (factory.GH): a caller's WONKA_GH must not run its own program."""
+        with mock.patch.dict(os.environ, {"WONKA_GH": "/tmp/not-gh"}), \
+                mock.patch.object(factory, "_run", return_value="[]") as run:
+            factory.gh("pr", "list")
+        self.assertEqual(run.call_args.args[0], ["gh", "pr", "list"])
 
 
 if __name__ == "__main__":

@@ -443,7 +443,9 @@ class WrapperTest(RepoFixture, unittest.TestCase):
         gh = self.tmp / "gh"
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
-        os.environ["WONKA_GH"] = str(gh)  # the setUp patcher restores os.environ
+        patcher = mock.patch.object(factory, "GH", str(gh))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         tid = self.add()
         wt = self.to_baking(tid)
         (wt / "hello.sh").write_text("echo hi\n")

@@ -109,6 +109,12 @@ to the worktree (`./scripts/ci.sh`), which the builder could edit.
 filters would run outside the sandbox. `wonka git add` refuses to run while the worktree holds a submodule or a nested
 repo, since git add looks inside them anyway, so repos that use submodules need a human to commit.
 
+Agents cannot point wonka at a config they wrote: a command that starts with a variable (`WONKA_HOME=<dir> wonka git
+...`) does not match the per-command allow rules, so Claude Code asks you instead of running it for a background
+agent; never approve one. `WONKA_HOME` itself (for the tests, or a second factory) must be an absolute path, and not
+inside `~/.wonka` (whose worktrees and drafts agents write). gh is always the `gh` on PATH: the old `WONKA_GH`
+override is gone.
+
 What stays open: sandboxed commands can still read most of your home, `~/.ssh` included (close it with
 `sandbox.filesystem.denyRead`), and git hooks run outside the sandbox: commit hooks with `wonka git commit`, and
 pre-push hooks when Wonka pushes the PR branch (`wonka tick`, `wonka resolved`). In a repo whose hooks live in

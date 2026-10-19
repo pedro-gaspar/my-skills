@@ -31,6 +31,16 @@ class CliTest(unittest.TestCase):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def test_a_refused_wonka_home_stops_every_command_cleanly(self):
+        for argv in (["status"], ["git", "WONKA-00001", "status"], ["test", "WONKA-00001", "--", "./t.sh"],
+                     ["config"], ["doctor"]):
+            with self.subTest(argv=argv), mock.patch.dict(os.environ, {"WONKA_HOME": "rel/home"}):
+                code, out, err = self.run_cli(*argv)
+            self.assertEqual(code, 1)
+            self.assertIn("WONKA_HOME must be an absolute path", err)
+            self.assertNotIn("Traceback", err)
+        self.assertFalse((self.tmp / "home").exists())
+
     def test_init_writes_settings_board_and_link(self):
         code, out, _ = self.run_cli("init", "--vault", str(self.tmp / "vault"), "--drafting", "2", "--baking", "3",
                                     "--archive-days", "14", "--max-review-rounds", "4")

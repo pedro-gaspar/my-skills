@@ -407,6 +407,11 @@ def parser():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        store.home()  # a refused WONKA_HOME stops here, before anything (the log too) is read or written
+    except WonkaError as e:
+        print(f"🗑️ wonka: {e}", file=sys.stderr)
+        return 1
     if argv[:1] and argv[0] in PASSTHROUGH:
         try:
             run_main = importlib.import_module(f".{PASSTHROUGH[argv[0]]}", __package__).main
