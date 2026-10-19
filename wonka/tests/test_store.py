@@ -57,5 +57,39 @@ class StateTest(unittest.TestCase):
         self.assertEqual(store.load_config()["max_review_rounds"], 3)
 
 
+    def test_corrupt_state_is_a_friendly_error(self):
+        self.path.write_text("")  # a crash mid-write on an old version
+        with self.assertRaisesRegex(store.WonkaError, r"not valid JSON.*\.bak"):
+            with store.state():
+                pass
+        with self.assertRaisesRegex(store.WonkaError, "not valid JSON"):
+            store.snapshot()
+
+    def test_corrupt_config_is_a_friendly_error(self):
+        (self.tmp / "config.json").write_text("{")
+        with self.assertRaisesRegex(store.WonkaError, "config.json is not valid JSON"):
+            store.load_config()
+
+    def test_a_held_lock_times_out_but_snapshots_still_read(self):
+        with store.state() as db:
+            db["next_id"] = 5
+        import fcntl
+        with open(self.tmp / ".lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.assertEqual(store.snapshot()["next_id"], 5)
+            with mock.patch.object(store, "LOCK_TIMEOUT", 0.3), \
+                    self.assertRaisesRegex(store.WonkaError, "the factory is busy"):
+                with store.state():
+                    pass
+
+    def test_writes_leave_no_temp_file(self):
+        with store.state() as db:
+            db["next_id"] = 2
+        with store.state() as db:
+            db["next_id"] = 3
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()),
+                         [".lock", store.STATE_FILE, store.STATE_FILE + ".bak"])
+
+
 if __name__ == "__main__":
     unittest.main()

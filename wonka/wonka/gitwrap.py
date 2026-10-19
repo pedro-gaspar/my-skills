@@ -244,16 +244,15 @@ def main(argv):
     """argv is everything after `wonka git`; returns git's exit code. Writes need `--dispatch <n>` after the id."""
     tid, dispatch, sub, args = _parse(argv)
     check(sub, args)
-    cfg = store.load_config()
-    with store.state() as db:
-        f = Factory(cfg, db)
-        t = f.ticket(tid)
-        path = target(t, f.state(tid), sub)
-        check_dispatch(t, sub, dispatch)
-        repo, branch = t["repo"], t["branch"]
-        if sub in WRITES:
-            check_branch(t)
-    # the state lock is released: a commit hook may run for minutes
+    # a snapshot, not the lock: agents call this all the time and must not wait for a tick's network calls (the
+    # lock would be released before git runs anyway, since a commit hook may run for minutes)
+    f = Factory(store.load_config(), store.snapshot())
+    t = f.ticket(tid)
+    path = target(t, f.state(tid), sub)
+    check_dispatch(t, sub, dispatch)
+    repo, branch = t["repo"], t["branch"]
+    if sub in WRITES:
+        check_branch(t)
     try:
         gd = git_dir(repo, path)
         if sub in WRITES:
