@@ -23,7 +23,7 @@ def _moves(t):
 
 
 def hours(t, now):
-    """(hours_in per status, hours waiting on a human); the final shipped/wontdo state accrues nothing."""
+    """(hours_in per status, hours waiting on a human, parked Ideas excluded); the final shipped/wontdo state accrues nothing."""
     secs, waiting = {}, 0.0
     hist = t.get("history", [])
     stamp = t.get("created_at") or (hist[0]["at"] if hist else None)
@@ -38,7 +38,7 @@ def hours(t, now):
             return
         d = max(0.0, (b - a).total_seconds())
         secs[status] = secs.get(status, 0.0) + d
-        if phase == "awaiting":
+        if phase == "awaiting" and status != "idea":
             waiting += d
 
     moves = _moves(t)

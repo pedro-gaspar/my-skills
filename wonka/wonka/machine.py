@@ -22,10 +22,18 @@ OLD_PHASE_KEYS = {"done": "ready"}
 OLD_STATUSES = {"ready": "🎫-Ready", "inbox": "✉️-Inbox"}
 OLD_PHASES = {"done": "🌟-Done"}
 START = ("idea", "triage")  # where `Factory.add` may start a ticket
+IDEA = ("idea", "awaiting")  # an Idea waits only on a human
+OLD_STATES = {("idea", "pending"): IDEA}  # (before WONKA-00167) retired state -> its replacement
 SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
 SPEC_REVIEWS = ("agent", "human")
 AUTO_READY = ("xs", "s")  # Triage tickets this small need no human approval
+
+
+def current(state):
+    """Map a retired (status, phase) pair to its replacement; any other state comes back unchanged."""
+    state = tuple(state)
+    return OLD_STATES.get(state, state)
 
 
 def review_budget(t, max_rounds):
@@ -34,7 +42,7 @@ def review_budget(t, max_rounds):
 
 
 VALID = {
-    "idea": {"pending"},
+    "idea": {"awaiting"},
     "triage": {"pending", "awaiting", "ready"},
     "drafting": {"pending", "progress", "awaiting"},
     "planned": {"pending"},
@@ -47,7 +55,7 @@ VALID = {
 KILLED = ("wontdo", "ready")
 
 _EDGES = [
-    ("idea/pending", "triage/pending"),  # a human started the idea
+    ("idea/awaiting", "triage/pending"),  # a human started the idea
     ("triage/pending", "triage/ready"),
     ("triage/pending", "triage/awaiting"),
     ("triage/awaiting", "triage/ready"),
@@ -126,7 +134,7 @@ def migrate(db):
     changed = False
 
     def fix(status, phase):
-        return OLD_STATUS_KEYS.get(status, status), OLD_PHASE_KEYS.get(phase, phase)
+        return current((OLD_STATUS_KEYS.get(status, status), OLD_PHASE_KEYS.get(phase, phase)))
 
     for t in db.get("tickets", {}).values():
         lv = t.get("last_valid")

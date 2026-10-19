@@ -190,7 +190,7 @@ class CliTest(unittest.TestCase):
             self.assertIn("📏 Triage", out)
         with store.state() as db:
             got = {k: (v["last_valid"]["status"], v["last_valid"]["phase"]) for k, v in db["tickets"].items()}
-        self.assertEqual(got, {"WONKA-00001": ("idea", "pending"), "WONKA-00002": ("triage", "pending")})
+        self.assertEqual(got, {"WONKA-00001": ("idea", "awaiting"), "WONKA-00002": ("triage", "pending")})
 
     def test_analyst_doc_adds_children_to_triage(self):
         root = Path(cli.__file__).resolve().parent.parent

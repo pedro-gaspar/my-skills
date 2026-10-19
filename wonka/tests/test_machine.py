@@ -32,13 +32,25 @@ class MachineTest(unittest.TestCase):
         self.assertTrue(machine.allowed(("shipped", "awaiting"), ("shipped", "progress")))
 
     def test_idea_only_goes_to_triage_or_wont_do(self):
-        idea = ("idea", "pending")
+        idea = ("idea", "awaiting")
         self.assertTrue(machine.allowed(idea, ("triage", "pending")))
         for dst in (("baking", "pending"), ("triage", "ready"), ("drafting", "pending")):
             self.assertFalse(machine.allowed(idea, dst), dst)
         self.assertTrue(machine.allowed(idea, machine.KILLED))
+        self.assertFalse(machine.valid(("idea", "pending")))
         self.assertEqual(machine.parse("💡-Idea", machine.STATUSES), "idea")
         self.assertEqual(machine.parse("Idea", machine.STATUSES), "idea")
+
+    def test_migrate_moves_ideas_to_awaiting(self):
+        db = {"tickets": {"A": {"last_valid": {"status": "idea", "phase": "pending"},
+                                "history": [{"from": "idea/pending", "to": "triage/pending"}]}}}
+        self.assertTrue(machine.migrate(db))
+        t = db["tickets"]["A"]
+        self.assertEqual(t["last_valid"], {"status": "idea", "phase": "awaiting"})
+        self.assertEqual(t["history"][0]["from"], "idea/awaiting")
+        before = repr(db)
+        self.assertFalse(machine.migrate(db))
+        self.assertEqual(repr(db), before)
 
     def test_parse_accepts_labels_with_or_without_emoji(self):
         self.assertEqual(machine.parse("🐿️-Reviewing", machine.STATUSES), "reviewing")

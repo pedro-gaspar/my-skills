@@ -112,7 +112,7 @@ push.
 
 | Column | What happens |
 |---|---|
-| 💡-Idea | parked: no agent touches it and it uses no WIP slot. Refine the idea in the note, then tick **Start** in `## 💡 Start` or drag the card to 📏-Triage; drag it to 🗑️-Wont-Do to drop it. `wonka add` starts here unless `--triage`; squirrel follow-ups start here too |
+| 💡-Idea | parked in 🙋-Awaiting-Human (so it shows in 🙋 Your turn): no agent touches it and it uses no WIP slot. Refine the idea in the note, then tick **Start** in `## 💡 Start` or drag the card to 📏-Triage; drag it to 🗑️-Wont-Do to drop it. `wonka add` starts here unless `--triage`; squirrel follow-ups start here too |
 | 📏-Triage | 📏 **oompa-loompa-triage** (Sonnet) sizes it. xs/s with a clear idea → 🌟 Ready. m/l/xl or unclear → 🙋, tick **Approve** and answer the questions. A duplicate of an open ticket → 🗑️ Wont-Do (`## 🗑️ Duplicate`) |
 | 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Triage tickets (`wonka add --triage`) (`## 🗑️ Too big`, then Wont-Do); an idea that spans several repos is split into one Triage ticket per repo (`## 🗑️ Split by repo`, then Wont-Do): a ticket always builds in one repo. A ticket with `spec_review: human` (set with `--needs-human-spec-review`, `wonka set <id> spec_review human`, or the note's property) waits in 🧪-Drafting 🙋 once the analyst is done: **Approve** sends it to 🎫-Planned, **Re-draft** back to the analyst with your notes, **Close** to Wont-Do. Children inherit it; anything but `agent` or empty counts as human; it only matters while the ticket is in Drafting |
 | 🎫-Planned | waits for a Baking slot |
@@ -149,7 +149,7 @@ test command that starts with one of them through `wonka test <id> --dispatch <n
 timeout, run it again on exit 75 (up to 5 tries), and run anything else as before. So two tickets of one project never
 run its tests at the same time.
 
-Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Ready. Finished tickets (Shipped or Wont-Do) and their plans move to
+Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Ready (Ideas filed as 🕰️-Pending before are migrated to 🙋-Awaiting-Human). Finished tickets (Shipped or Wont-Do) and their plans move to
 `wonka/archive/` after 7 days. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) are
 migrated automatically on the next tick.
 
