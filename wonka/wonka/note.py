@@ -12,6 +12,7 @@ HEADINGS = {
     "answers": "✅ Answers",
     "spec": "📜 Spec",
     "toobig": "🫐 Too big",
+    "duplicate": "🫐 Duplicate",
     "review-questions": "🐿️ Review Questions",
     "stuck": "🎩 Stuck",
     "changes": "🔁 Request changes",

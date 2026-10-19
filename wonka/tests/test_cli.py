@@ -139,6 +139,11 @@ class CliTest(unittest.TestCase):
         a = cli.parser().parse_args(["resolved", "WONKA-00001"])
         self.assertEqual((a.cmd, a.id), ("resolved", "WONKA-00001"))
 
+    def test_triage_takes_a_duplicate_of(self):
+        args = ["triage", "WONKA-00002", "--size", "s"]
+        self.assertEqual(cli.parser().parse_args(args + ["--duplicate-of", "WONKA-00001"]).duplicate_of, "WONKA-00001")
+        self.assertIsNone(cli.parser().parse_args(args).duplicate_of)
+
     def test_agent_commands_never_need_json(self):
         """Claude Code blocks '{"' in background agents' Bash commands, so agent docs must not use it."""
         root = Path(cli.__file__).resolve().parent.parent
