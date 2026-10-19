@@ -401,7 +401,7 @@ def parser():
     sub.add_parser("test", help="agents: run a project's test command under a per-project lock: "
                                 "wonka test <id> [--dispatch <n>] -- <command> ...")
     sub.add_parser("ci-logs", help="agents: fetch a failed CI log with the project's log tool, only from its CI "
-                                   "hosts: wonka ci-logs <id> [--dispatch <n>] <url>")
+                                   "hosts: wonka ci-logs <id> --dispatch <n> <url>")
     return p
 
 

@@ -117,15 +117,8 @@ def set_setting(cfg, key, raw):
             raise WonkaError("usage: wonka config ci_log_command.<project> <command>")
         value = raw.strip()
         if value:
-            try:
-                tokens = shlex.split(value)
-            except ValueError as e:
-                raise WonkaError(f"{value}: not a valid command prefix ({e})")
-            if not tokens:
-                value = ""
-        if value:
-            from .cilogs import command_problem  # lazily: cilogs imports store
-            problem = command_problem(value)
+            from .cilogs import parse_command  # lazily: cilogs imports store
+            problem = parse_command(value)[1]
             if problem:
                 raise WonkaError(f"ci_log_command.{project} {problem}")
         cur = dict(cfg.get("ci_log_command") or {})

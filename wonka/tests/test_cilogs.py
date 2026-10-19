@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import shutil
 import unittest
 from unittest import mock
 
@@ -20,6 +21,22 @@ class ParseTest(unittest.TestCase):
         for argv in (["T"], ["T", "a", "b"]):
             with self.subTest(argv=argv), self.assertRaisesRegex(WonkaError, "usage"):
                 cilogs._parse(argv)
+
+
+class ParseCommandTest(unittest.TestCase):
+    """One parse and check, shared by wonka config, wonka ci-logs and the doctor."""
+
+    def test_tokens_and_problem(self):
+        self.assertEqual(cilogs.parse_command("beyond ci  logs"), (["beyond", "ci", "logs"], None))
+        for empty in ('""', "''", '"" logs'):
+            self.assertEqual(cilogs.parse_command(empty)[1], "is empty, so the URL itself would run as the program")
+        tokens, problem = cilogs.parse_command('"oops')
+        self.assertIsNone(tokens)
+        self.assertIn("not a valid command prefix", problem)
+        self.assertEqual(cilogs.parse_command(3), (None, "is not a string command"))
+        self.assertIn("relative to the ticket's worktree", cilogs.parse_command("./ci.sh")[1])
+        self.assertIn("outside the sandbox", cilogs.parse_command("bash")[1])
+        self.assertEqual(cilogs.command_problem("bash"), cilogs.parse_command("bash")[1])
 
 
 class CheckUrlTest(unittest.TestCase):
@@ -53,6 +70,14 @@ class RunTest(RepoFixture, unittest.TestCase):
         self.cfg = {**self.cfg, "ci_hosts": {"app": HOSTS}, "ci_log_command": {"app": cmd}}
         store.save_config(self.cfg)
 
+    def ci_round(self):
+        """A ticket whose builder is in a CI fix round; returns (tid, worktree)."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        with store.state() as db:
+            db["tickets"][tid]["fixing_ci"] = True
+        return tid, wt
+
     def run_logs(self, *argv):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -60,81 +85,109 @@ class RunTest(RepoFixture, unittest.TestCase):
         return code, err.getvalue()
 
     def test_allowed_url_runs_in_the_worktree_and_passes_the_exit_code(self):
-        tid = self.add()
-        wt = self.to_baking(tid)
-        code, _ = self.run_logs(tid, "--dispatch", "1", self.URL)
+        tid, wt = self.ci_round()
+        code, _ = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
         self.assertEqual(code, 3)
         self.assertTrue((wt / "args.txt").read_text().endswith(" " + self.URL))
         self.assertFalse((self.repo / "args.txt").exists())
 
     def test_open_command_is_refused(self):
-        tid = self.add()
-        self.to_baking(tid)
+        tid, _ = self.ci_round()
         for cmd in ("bash", "sh -c", "env", "python3 -c", "env FOO=1 bash"):
             with self.subTest(cmd=cmd):
                 store.save_config({**self.cfg, "ci_log_command": {"app": cmd}})
                 with mock.patch("wonka.cilogs.subprocess.run") as run:
-                    code, err = self.run_logs(tid, self.URL)
+                    code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
                 self.assertEqual(code, 1)
                 self.assertIn("outside the sandbox", err)
                 run.assert_not_called()
 
     def test_non_string_and_unparseable_commands_are_refused(self):
-        tid = self.add()
-        self.to_baking(tid)
+        tid, _ = self.ci_round()
         for cmd in (123, ["beyond"], '"oops'):
             with self.subTest(cmd=cmd):
                 store.save_config({**self.cfg, "ci_log_command": {"app": cmd}})
                 with mock.patch("wonka.cilogs.subprocess.run") as run:
-                    code, err = self.run_logs(tid, self.URL)
+                    code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
                 self.assertEqual(code, 1)
                 self.assertNotIn("Traceback", err)
                 run.assert_not_called()
 
     def test_empty_and_worktree_relative_commands_are_refused(self):
         """An empty command would run the URL itself as a program; ./x runs a file the builder can edit."""
-        tid = self.add()
-        self.to_baking(tid)
+        tid, _ = self.ci_round()
         for cmd, why in (("   ", "is empty"), ("./scripts/ci.sh", "relative to the ticket's worktree"),
                          ("tools/ci logs", "relative to the ticket's worktree")):
             with self.subTest(cmd=cmd):
                 store.save_config({**self.cfg, "ci_log_command": {"app": cmd}})
                 with mock.patch("wonka.cilogs.subprocess.run") as run:
-                    code, err = self.run_logs(tid, self.URL)
+                    code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
                 self.assertEqual(code, 1)
                 self.assertIn(why, err)
                 run.assert_not_called()
         self.assertIsNone(cilogs.command_problem("/opt/ci/bin/logs --json"))
 
     def test_disallowed_url_never_runs(self):
-        tid = self.add()
-        self.to_baking(tid)
+        tid, _ = self.ci_round()
         with mock.patch("wonka.cilogs.subprocess.run") as run:
-            code, err = self.run_logs(tid, "https://evil.com/x")
+            code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), "https://evil.com/x")
         self.assertEqual(code, 1)
         self.assertIn("not on a CI host", err)
         run.assert_not_called()
 
     def test_missing_command_is_refused(self):
-        tid = self.add()
-        self.to_baking(tid)
+        tid, _ = self.ci_round()
         store.save_config({**self.cfg, "ci_log_command": {}})
-        code, err = self.run_logs(tid, self.URL)
+        code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
         self.assertEqual(code, 1)
         self.assertIn("wonka config ci_log_command.", err)
 
     def test_no_worktree_is_refused(self):
+        tid, wt = self.ci_round()
+        shutil.rmtree(wt)
+        with mock.patch("wonka.cilogs.subprocess.run") as run:
+            code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
+        self.assertEqual(code, 1)
+        self.assertIn("no worktree or scout", err)
+        run.assert_not_called()
+
+    def test_only_the_current_dispatch_may_run_it(self):
+        """Like a git write: an agent left over from an earlier dispatch, or one with no --dispatch, is refused."""
+        tid, _ = self.ci_round()
+        for argv, why in (([tid, self.URL], "needs --dispatch"),
+                          ([tid, "--dispatch", str(self.dispatch - 1), self.URL], "earlier dispatch"),
+                          ([tid, "--dispatch", str(self.dispatch + 1), self.URL], "earlier dispatch")):
+            with self.subTest(argv=argv), mock.patch("wonka.cilogs.subprocess.run") as run:
+                code, err = self.run_logs(*argv)
+            self.assertEqual(code, 1)
+            self.assertIn(why, err)
+            run.assert_not_called()
+
+    def test_only_runs_in_the_builders_ci_fix_round(self):
         tid = self.add()
         with mock.patch("wonka.cilogs.subprocess.run") as run:
-            code, _ = self.run_logs(tid, self.URL)
+            code, err = self.run_logs(tid, "--dispatch", "1", self.URL)  # an Idea
         self.assertEqual(code, 1)
+        self.assertIn("CI fix round", err)
+        self.to_baking(tid)  # baking, but not for a CI failure
+        with mock.patch("wonka.cilogs.subprocess.run") as run:
+            code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
+        self.assertEqual(code, 1)
+        self.assertIn("no CI failure to fix", err)
+        run.assert_not_called()
+        with store.state() as db:
+            db["tickets"][tid]["fixing_ci"] = True
+            db["tickets"][tid]["last_valid"]["phase"] = "pending"
+        with mock.patch("wonka.cilogs.subprocess.run") as run:
+            code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
+        self.assertEqual(code, 1)
+        self.assertIn("CI fix round", err)
         run.assert_not_called()
 
     def test_command_not_found(self):
-        tid = self.add()
-        self.to_baking(tid)
+        tid, _ = self.ci_round()
         store.save_config({**self.cfg, "ci_log_command": {"app": "no-such-log-tool-xyz"}})
-        code, err = self.run_logs(tid, self.URL)
+        code, err = self.run_logs(tid, "--dispatch", str(self.dispatch), self.URL)
         self.assertEqual(code, 1)
         self.assertIn("command not found", err)
 
@@ -144,8 +197,11 @@ class RunStdinTest(RepoFixture, unittest.TestCase):
         store.save_config({**self.cfg, "ci_hosts": {"app": HOSTS}, "ci_log_command": {"app": "beyond ci logs"}})
         tid = self.add()
         self.to_baking(tid)
+        with store.state() as db:
+            db["tickets"][tid]["fixing_ci"] = True
         with mock.patch("wonka.cilogs.subprocess.run", return_value=mock.Mock(returncode=0)) as run, \
                 contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(cli.main(["ci-logs", tid, "https://ci.example.com/x/1"]), 0)
+            argv = ["ci-logs", tid, "--dispatch", str(self.dispatch), "https://ci.example.com/x/1"]
+            self.assertEqual(cli.main(argv), 0)
         self.assertEqual(run.call_args.args[0], ["beyond", "ci", "logs", "https://ci.example.com/x/1"])
         self.assertIs(run.call_args.kwargs["stdin"], cilogs.subprocess.DEVNULL)

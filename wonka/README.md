@@ -96,7 +96,7 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
 
 Projects whose CI is not GitHub Actions configure their log tool and CI host, e.g.
 `wonka config ci_log_command.beyondpricing "beyond ci logs"` and
-`wonka config ci_hosts.beyondpricing <concourse host>`. Builders then fetch a failed log with `wonka ci-logs <id> <url>`,
+`wonka config ci_hosts.beyondpricing <concourse host>`. Builders then fetch a failed log with `wonka ci-logs <id> --dispatch <n> <url>` (only in a CI fix round, from the current dispatch),
 which refuses any URL that is not https on one of those hosts (a check URL on a PR can be set by anyone who can post a
 commit status). It runs under `Bash(wonka ci-logs *)` and outside the sandbox with `wonka ci-logs *`, so no `Bash(beyond ci logs *)`
 rule or sandbox exclusion is needed: remove them if you added them, they let an agent run the tool on any URL (the
@@ -130,7 +130,7 @@ push.
 | `wonka config [key value]` | show or change settings (it also shows the factory folder and log paths): `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `ci_hosts.<project>`, `ci_log_command.<project>`, `test_lock_wait_minutes` (numbers must be finite: `inf` and `nan` are refused). A hand-edited `config.json` with a value of the wrong type (a null `vault` or `wip`, a string where a list goes) stops every command with an error naming the key |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
-| `wonka ci-logs <id> [--dispatch <n>] <url>` | what builders use to fetch a failed CI log: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
+| `wonka ci-logs <id> --dispatch <n> <url>` | what builders use to fetch a failed CI log, only in a CI fix round and from the current dispatch: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
 | `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, the sandbox (on, with every wonka command but `test` excluded), open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
 
 ## The floor

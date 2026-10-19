@@ -256,14 +256,17 @@ def _parse(argv):
 def check_dispatch(t, sub, dispatch):
     """Writes carry the agent's dispatch and only the ticket's current one may write: an agent left over from an
     earlier dispatch must not commit next to its replacement. Reads are not checked."""
-    if sub not in WRITES:
-        return
+    if sub in WRITES:
+        require_dispatch(t, f"git {sub}", dispatch, f"wonka git <id> --dispatch <n> {sub} ...")
+
+
+def require_dispatch(t, what, dispatch, usage):
+    """Refuse unless dispatch is the ticket's current one (also for wonka ci-logs)."""
     if dispatch is None:
-        raise WonkaError(f"git {sub} needs --dispatch <n> (the dispatch number from your job JSON): "
-                         f"wonka git <id> --dispatch <n> {sub} ...")
+        raise WonkaError(f"{what} needs --dispatch <n> (the dispatch number from your job JSON): {usage}")
     if dispatch != t.get("dispatch"):
-        raise WonkaError(f"git {sub} is from an earlier dispatch ({dispatch}, now {t.get('dispatch')}): "
-                         "this job was handed to another agent, stop writing")
+        raise WonkaError(f"{what} is from an earlier dispatch ({dispatch}, now {t.get('dispatch')}): "
+                         "this job was handed to another agent, stop")
 
 
 def main(argv):

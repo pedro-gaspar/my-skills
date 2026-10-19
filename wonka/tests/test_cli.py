@@ -145,7 +145,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("config", "ci_hosts.", "x")[0], 1)
         self.assertEqual(self.run_cli("config", "ci_log_command.app", "beyond ci logs")[0], 0)
         self.assertEqual(json.loads(cfg_file.read_text())["ci_log_command"], {"app": "beyond ci logs"})
-        for bad in ["bash", "python3 -c", "env", '"oops', "./scripts/ci.sh"]:
+        for bad in ["bash", "python3 -c", "env", '"oops', "./scripts/ci.sh", '""', '"" logs']:
             with self.subTest(bad=bad):
                 self.assertEqual(self.run_cli("config", "ci_log_command.app", bad)[0], 1)
         self.assertEqual(self.run_cli("config", "ci_log_command.app", "")[0], 0)
