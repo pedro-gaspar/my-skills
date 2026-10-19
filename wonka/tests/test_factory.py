@@ -339,8 +339,10 @@ class FactoryTest(unittest.TestCase):
         tid = self.planned_with_template()
         self.bake(tid, body=self.GOOD_BODY)
         if reuse:
-            Path(f"{self.pr_state}.list").write_text(
-                '[{ "url": "https://github.com/acme/app/pull/7", "body": "<!-- wonka:%s -->\\n\\nAdd" }]\n' % tid)
+            listed = f"<!-- wonka:{tid} -->\n\nAdd"
+            Path(f"{self.pr_state}.list").write_text(json.dumps([{"url": "https://github.com/acme/app/pull/7", "body": listed}]))
+            with self.f() as f:
+                f.ticket(tid)["pr_body_sha"] = factory._body_sha(listed)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
         return tid
