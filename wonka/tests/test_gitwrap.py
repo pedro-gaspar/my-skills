@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from wonka import cli, gitwrap, store
-from wonka.factory import Factory
+from wonka.factory import JOB_AGENTS, Factory
 from wonka.gitwrap import check, command, env, target
 from wonka.store import WonkaError
 
@@ -75,6 +75,10 @@ class CheckTest(unittest.TestCase):
                    "GIT_CONFIG_PARAMETERS": "'core.pager'='sh'", "GIT_CONFIG_COUNT": "1", "GIT_AUTHOR_NAME": "t"})
         self.assertEqual(out, {"PATH": "/bin", "GIT_AUTHOR_NAME": "t", "GIT_EDITOR": "true", "GIT_PAGER": "cat",
                                "GIT_TERMINAL_PROMPT": "0"})
+
+    def test_write_states_follow_the_job_map(self):
+        self.assertEqual(gitwrap.WRITE_STATES, {JOB_AGENTS["oompa-loompa-builder"], JOB_AGENTS["oompa-loompa-fixer"]})
+        self.assertEqual(gitwrap.WRITE_STATES, {("baking", "progress"), ("shipped", "progress")})
 
     def test_target(self):
         tmp = Path(tempfile.mkdtemp())
