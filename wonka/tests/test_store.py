@@ -90,10 +90,6 @@ class StateTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.tmp.iterdir()),
                          [".lock", store.STATE_FILE, store.STATE_FILE + ".bak"])
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_old_state_keys_are_migrated_on_read_and_saved_with_a_backup(self):
         old = {"next_id": 2, "tickets": {"WONKA-1": {"last_valid": {"status": "ready", "phase": "pending"},
                                                       "history": [{"from": "inbox/done", "to": "ready/pending"}]}}}
@@ -115,3 +111,7 @@ if __name__ == "__main__":
         self.assertTrue(store.migrate_base(cfg))
         self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
         self.assertFalse(store.migrate_base(cfg))
+
+
+if __name__ == "__main__":
+    unittest.main()
