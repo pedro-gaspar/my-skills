@@ -1549,6 +1549,94 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
         self.assertEqual(self.f_ticket(tid)["review_round"], 1)
 
+    def push_from_github(self, branch, filename):
+        """Commit `filename` on the PR branch from a second clone and push it, as a suggestion applied on GitHub."""
+        other = self.tmp / f"github-{filename}"
+        sh("git", "clone", "-q", "-b", branch, str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / filename).write_text("committed on GitHub\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", f"github: {filename}", cwd=other)
+        sh("git", "push", "-q", "origin", branch, cwd=other)
+        return sh("git", "rev-parse", "HEAD", cwd=other)
+
+    def test_fix_round_starts_from_the_pr_branch_on_github(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        suggestion = self.push_from_github(branch, "suggestion.txt")
+        self.pr_feedback()
+        tick = self.request_changes(tid, "add a test")
+        job = [j for j in tick["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        wt = Path(job["worktree"])
+        self.assertTrue((wt / "suggestion.txt").exists(), "the fix round bakes on top of the PR branch on GitHub")
+        self.commit_and_bake(wt, "test.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated"))
+        origin = self.tmp / "origin.git"
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=origin), sh("git", "rev-parse", "HEAD", cwd=wt))
+        sh("git", "merge-base", "--is-ancestor", suggestion, branch, cwd=origin)
+
+    def test_rejected_push_is_stuck_at_once_with_a_reason(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        self.pr_feedback()
+        tick = self.request_changes(tid, "add a test")
+        job = [j for j in tick["jobs"] if j["id"] == tid][0]
+        wt = Path(job["worktree"])
+        self.push_from_github(branch, "suggestion.txt")  # after baking started: the sync at start cannot see it
+        self.commit_and_bake(wt, "test.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        tick = self.tick()
+        failed = [e for e in tick["events"] if e.startswith(f"{tid}: PR failed: push rejected")]
+        self.assertTrue(failed, tick["events"])
+        self.assertIn("stuck, needs a human", failed[0])
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
+        body = self.note(tid)[1]
+        stuck = note.get_section(body, "stuck")
+        self.assertIn("push rejected", stuck)
+        self.assertIn("tick Retry", stuck)
+        self.assertIn(f"git pull --no-rebase origin {branch}", stuck)
+        self.assertNotIn("3 tries", stuck)
+        self.assertIn("Push rejected", body)
+
+        sh("git", "pull", "-q", "--no-rebase", "--no-edit", "origin", branch, cwd=wt)
+        self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
+        self.tick()
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated"))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "the open PR is reused")
+        self.assertFalse(self.f_ticket(tid).get("stuck"))
+
+    def test_push_rejected_detects_both_git_wordings(self):
+        fetch_first = ("git push -u failed: To /tmp/origin.git\n ! [rejected]        b -> b (fetch first)\n"
+                       "error: failed to push some refs to '/tmp/origin.git'")
+        non_ff = ("git push -u failed: To /tmp/origin.git\n ! [rejected]        b -> b (non-fast-forward)\n"
+                  "error: failed to push some refs to '/tmp/origin.git'")
+        self.assertTrue(factory._push_rejected(WonkaError(fetch_first)))
+        self.assertTrue(factory._push_rejected(non_ff))
+        self.assertFalse(factory._push_rejected("git push -u failed: fatal: could not read from remote"))
+
+    def test_diverged_branch_does_not_block_baking(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.push_from_github(branch, "theirs.txt")
+        (wt / "mine.txt").write_text("local\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "local commit", cwd=wt)
+        self.pr_feedback()
+        tick = self.request_changes(tid, "add a test")
+        self.assertEqual([j["job"] for j in tick["jobs"] if j["id"] == tid], ["bake"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertIn("Could not catch up with the PR branch", self.note(tid)[1])
+
     def test_json_pages_reads_one_or_several_concatenated_arrays(self):
         self.assertEqual(factory._json_pages(""), [])
         self.assertEqual(factory._json_pages("[]"), [])
