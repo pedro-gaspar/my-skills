@@ -56,7 +56,7 @@ class BannerTest(unittest.TestCase):
         lines = banner.log(t).splitlines()
         self.assertEqual(lines[0], "> [!note]- 2 events")
         self.assertIn("Reverted", lines[1])
-        self.assertIn("📏-Triage 🕰️-Pending → 📏-Triage 🌟-Ready", lines[2])
+        self.assertIn("📏 Triage 🕰️ Pending → 📏 Triage 🌟 Ready", lines[2])
 
     def test_review_round_uses_the_max_rounds_setting(self):
         cfg = {**store.DEFAULT_CONFIG, "max_review_rounds": 5}

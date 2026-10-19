@@ -288,7 +288,7 @@ def parser():
     s.add_argument("--baking", help="tickets the builder works on at once; "
                                     "reviewing and shipped tickets don't count (default 2)")
     s.add_argument("--triage", help="tickets the triage Oompa-Loompa sizes at once (default 2)")
-    s.add_argument("--archive-days", help="days before finished tickets (Shipped or Wont-Do) are archived (default 7)")
+    s.add_argument("--archive-days", help="days before finished tickets (Shipped or Wont Do) are archived (default 7)")
     s.add_argument("--stale-hours", help="hours before a running job is offered for retry (default 2)")
     s.add_argument("--max-review-rounds", help="review rounds with issues before a ticket is rolled away (default 3)")
     s = sub.add_parser("config", help="show settings, or change one: wonka config wip.baking 3")
@@ -325,7 +325,7 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
     s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
-    s.add_argument("--duplicate-of", help="an existing ticket this one duplicates: closes it as Wont-Do")
+    s.add_argument("--duplicate-of", help="an existing ticket this one duplicates: closes it as Wont Do")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("ask", help="analyst: ask a human, one --question per question")
     s.add_argument("id")

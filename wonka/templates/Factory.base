@@ -16,14 +16,14 @@ views:
       property: status
       direction: ASC
     groupOrder:
-      - 💡-Idea
-      - 📏-Triage
-      - 🧪-Drafting
-      - 🎫-Planned
-      - 🍫-Baking
-      - 🐿️-Reviewing
-      - 🚢-Shipped
-      - 🗑️-Wont-Do
+      - 💡 Idea
+      - 📏 Triage
+      - 🧪 Drafting
+      - 🎫 Planned
+      - 🍫 Baking
+      - 🐿️ Reviewing
+      - 🚢 Shipped
+      - 🗑️ Wont Do
     order:
       - id
       - title
@@ -35,7 +35,7 @@ views:
     name: 🙋 Your turn
     filters:
       and:
-        - phase == "🙋-Awaiting-Human"
+        - phase == "🙋 Awaiting Human"
     order:
       - id
       - title

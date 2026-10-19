@@ -203,7 +203,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "merged branch is deleted")
 
         meta, body = self.note(tid)
-        self.assertEqual((meta["status"], meta["phase"]), ("🚢-Shipped", "🌟-Ready"))
+        self.assertEqual((meta["status"], meta["phase"]), ("🚢 Shipped", "🌟 Ready"))
         self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
         self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
@@ -615,11 +615,11 @@ class FactoryTest(unittest.TestCase):
 
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
-        self.edit_note(a, lambda t: t.replace("📏-Triage", "🍫-Baking"))
-        self.edit_note(b, lambda t: t.replace("📏-Triage", "🗑️-Wont-Do"))
+        self.edit_note(a, lambda t: t.replace("📏 Triage", "🍫 Baking"))
+        self.edit_note(b, lambda t: t.replace("📏 Triage", "🗑️ Wont Do"))
         events = self.tick()["events"]
-        self.assertIn(f"{a}: reverted illegal 🍫-Baking/🕰️-Pending", events)
-        self.assertEqual(self.note(a)[0]["status"], "📏-Triage")
+        self.assertIn(f"{a}: reverted illegal 🍫 Baking/🕰️ Pending", events)
+        self.assertEqual(self.note(a)[0]["status"], "📏 Triage")
         self.assertIn("Reverted", self.note(a)[1])
         self.assertEqual(self.state(b), ("wontdo", "ready"))
 
@@ -638,16 +638,22 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(a, "s")
-        self.check_old_label(a, ("triage", "ready"), "phase", "🌟-Done", "🌟-Ready")
+        self.check_old_label(a, ("triage", "ready"), "phase", "🌟-Done", "🌟 Ready")
 
     def test_old_inbox_status_in_a_note_is_migrated_silently(self):
         a = self.add()
-        self.check_old_label(a, ("triage", "pending"), "status", "✉️-Inbox", "📏-Triage")
+        self.check_old_label(a, ("triage", "pending"), "status", "✉️-Inbox", "📏 Triage")
 
     def test_old_ready_status_in_a_note_is_migrated_silently(self):
         b = self.add()
         self.to_planned(b)
-        self.check_old_label(b, ("planned", "pending"), "status", "🎫-Ready", "🎫-Planned")
+        self.check_old_label(b, ("planned", "pending"), "status", "🎫-Ready", "🎫 Planned")
+
+    def test_hyphenated_labels_in_a_note_are_relabelled_silently(self):
+        b = self.add()
+        self.to_planned(b)
+        self.check_old_label(b, ("planned", "pending"), "phase", "🕰️-Pending", "🕰️ Pending")
+        self.check_old_label(b, ("planned", "pending"), "status", "🎫-Planned", "🎫 Planned")
 
     def test_triage_closes_a_duplicate(self):
         a = self.add("Add a hello script")
@@ -696,7 +702,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("triage", "awaiting"))
         body = self.note(tid)[1]
         self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!question] 🙋 Your turn: approve it\n> The triage Oompa-Loompa sized it **m**"))
-        self.assertIn("· triage · 📏-Triage 🕰️-Pending → 📏-Triage 🙋-Awaiting-Human", body)
+        self.assertIn("· triage · 📏 Triage 🕰️ Pending → 📏 Triage 🙋 Awaiting Human", body)
         self.assertGreater(body.index("## 🎩 Factory log"), body.index("## ❓ Questions"), "log stays last")
         self.edit_note(tid, lambda t: t.replace("- [ ] Approve", "- [x] Approve"))
         self.tick()
@@ -1334,7 +1340,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_a_stuck_ticket_dragged_to_wont_do_drops_stuck(self):
         tid = self.stuck_ticket()
-        self.edit_note(tid, lambda t: t.replace("📏-Triage", "🗑️-Wont-Do"))
+        self.edit_note(tid, lambda t: t.replace("📏 Triage", "🗑️ Wont Do"))
         self.tick()
         self.assert_finished_clean(tid)
 
@@ -1616,12 +1622,12 @@ class FactoryTest(unittest.TestCase):
         tid = self.add()
         self.tick()
         with self.f() as f:
-            with self.assertRaisesRegex(WonkaError, "expected 🧪-Drafting"):
+            with self.assertRaisesRegex(WonkaError, "expected 🧪 Drafting"):
                 f.write_spec(tid, "early spec", 1)
             f.triage(tid, "m")
         self.assertEqual(self.state(tid), ("triage", "awaiting"))
         with self.f() as f:
-            with self.assertRaisesRegex(WonkaError, "expected 🧪-Drafting"):
+            with self.assertRaisesRegex(WonkaError, "expected 🧪 Drafting"):
                 f.write_spec(tid, "- [x] Approve", f.ticket(tid)["dispatch"])
         self.assertNotIn("[x] Approve", self.note(tid)[1])
         self.edit_note(tid, lambda s: s.replace("- [ ] Approve", "- [x] Approve"))
@@ -1854,26 +1860,37 @@ class FactoryTest(unittest.TestCase):
                       "a note that comes back is reported again")
 
     def test_tick_migrates_an_old_factory_base(self):
-        event = "🍫 Factory.base: column 🎫-Ready renamed to 🎫-Planned"
+        event = "🍫 Factory.base: column 🎫-Ready renamed to 🎫 Planned"
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.assertNotIn(event, self.tick()["events"], "no base file: nothing to migrate")
         base = store.board(self.cfg) / store.BASE_FILE
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
         self.assertIn(event, self.tick()["events"])
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫 Planned\n# mine\n")
         self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
 
+    def test_tick_migrates_a_hyphenated_factory_base(self):
+        store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
+        base = store.board(self.cfg) / store.BASE_FILE
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text('groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n  - 🗑️-Wont-Do\nfilter: phase == "🙋-Awaiting-Human"\n')
+        events = self.tick()["events"]
+        self.assertIn("🍫 Factory.base: column 🗑️-Wont-Do renamed to 🗑️ Wont Do", events)
+        self.assertEqual(base.read_text(),
+                         'groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n  - 🗑️ Wont Do\nfilter: phase == "🙋 Awaiting Human"\n')
+        self.assertFalse([e for e in self.tick()["events"] if "Factory.base" in e], "migrated once")
+
     def test_tick_migrates_an_old_inbox_column(self):
-        event = "🍫 Factory.base: column ✉️-Inbox renamed to 📏-Triage"
+        event = "🍫 Factory.base: column ✉️-Inbox renamed to 📏 Triage"
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         base = store.board(self.cfg) / store.BASE_FILE
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text("groupOrder:\n  - ✉️-Inbox\n# mine\n")
         events = self.tick()["events"]
         self.assertIn(event, events)
-        self.assertIn("🍫 Factory.base: column 💡-Idea added", events)
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n# mine\n")
+        self.assertIn("🍫 Factory.base: column 💡 Idea added", events)
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n# mine\n")
         self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
 
     def test_add_with_unknown_parent_leaves_nothing_behind(self):
@@ -2549,10 +2566,10 @@ class FactoryTest(unittest.TestCase):
     # -- a killed ticket's worktree waits for the agent still in it ---------
 
     def kill(self, tid):
-        """Drag the ticket's note to Wont-Do and tick: the factory kills it."""
+        """Drag the ticket's note to Wont Do and tick: the factory kills it."""
         with self.f() as f:
             label = f.read(tid)[0]["status"]
-        self.edit_note(tid, lambda t: t.replace(f"status: {label}", "status: 🗑️-Wont-Do", 1))
+        self.edit_note(tid, lambda t: t.replace(f"status: {label}", "status: 🗑️ Wont Do", 1))
         self.assertIn(f"{tid}: killed by a human", self.tick()["events"])
         self.assertEqual(self.state(tid), ("wontdo", "ready"))
 
@@ -2568,11 +2585,11 @@ class FactoryTest(unittest.TestCase):
         self.pr_state.write_text("MERGED")
         self.tick()
         done_at = self.f_ticket(tid)["entered_done_at"]
-        self.edit_note(tid, lambda t: t.replace("status: 🚢-Shipped", "status: 🗑️-Wont-Do", 1))
+        self.edit_note(tid, lambda t: t.replace("status: 🚢 Shipped", "status: 🗑️ Wont Do", 1))
         events = self.tick()["events"]
-        self.assertIn(f"{tid}: reverted illegal 🗑️-Wont-Do/🌟-Ready", events)
+        self.assertIn(f"{tid}: reverted illegal 🗑️ Wont Do/🌟 Ready", events)
         self.assertEqual(self.state(tid), ("shipped", "ready"))
-        self.assertEqual(self.note(tid)[0]["status"], "🚢-Shipped")
+        self.assertEqual(self.note(tid)[0]["status"], "🚢 Shipped")
         self.assertEqual(self.f_ticket(tid)["entered_done_at"], done_at)
         with self.f() as f:
             self.assertEqual(f.metrics()[0]["outcome"], "merged")
@@ -3230,7 +3247,7 @@ class FactoryTest(unittest.TestCase):
         sa = Path(self.job_for(a)["code"])  # one drafting slot: b waits in Triage
         self.assertTrue(sa.exists())
 
-        self.edit_note(a, lambda t: t.replace("🧪-Drafting", "🗑️-Wont-Do"))
+        self.edit_note(a, lambda t: t.replace("🧪 Drafting", "🗑️ Wont Do"))
         sb = Path(self.job_for(b)["code"])  # a's slot frees up and b is drafted in the same tick
         self.assertEqual(self.state(a), ("wontdo", "ready"))
         self.assertFalse(sa.exists())
@@ -4101,7 +4118,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("reviewing", "progress"))
         self.assertEqual(self.f_ticket(tid)["round_kind"], "ci")
         with self.f() as f:
-            f.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
+            f.move(tid, KILLED, "human", "Dragged to Wont Do by a human")
         self.assertNotIn("round_kind", self.f_ticket(tid))
 
     def test_stats_survive_the_retries_and_stuck_resets(self):
@@ -5613,8 +5630,8 @@ class FactoryTest(unittest.TestCase):
         tid = self.idea()
         self.assertEqual(self.state(tid), ("idea", "awaiting"))
         meta, body = self.note(tid)
-        self.assertEqual(meta["status"], "💡-Idea")
-        self.assertEqual(meta["phase"], "🙋-Awaiting-Human")
+        self.assertEqual(meta["status"], "💡 Idea")
+        self.assertEqual(meta["phase"], "🙋 Awaiting Human")
         self.assertIn("## 💡 Start", body)
         self.assertIn(note.START_BOX, body)
         self.assertIn("Just an idea", body)
@@ -5651,7 +5668,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_dragging_an_idea_to_triage_promotes_it(self):
         tid = self.idea()
-        self.edit_note(tid, lambda t: t.replace("💡-Idea", "📏-Triage", 1))
+        self.edit_note(tid, lambda t: t.replace("💡 Idea", "📏 Triage", 1))
         res = self.tick()
         self.assertFalse([e for e in res["events"] if "reverted" in e], res["events"])
         self.assertEqual(self.state(tid)[0], "triage")
@@ -5661,31 +5678,31 @@ class FactoryTest(unittest.TestCase):
 
     def test_old_pending_idea_note_is_relabelled_silently(self):
         tid = self.idea()
-        self.edit_note(tid, lambda t: t.replace("🙋-Awaiting-Human", "🕰️-Pending", 1))
+        self.edit_note(tid, lambda t: t.replace("🙋 Awaiting Human", "🕰️ Pending", 1))
         res = self.tick()
         self.assertFalse([e for e in res["events"] if "reverted" in e], res["events"])
-        self.assertEqual(self.note(tid)[0]["phase"], "🙋-Awaiting-Human")
+        self.assertEqual(self.note(tid)[0]["phase"], "🙋 Awaiting Human")
         self.assertEqual(self.state(tid), ("idea", "awaiting"))
         self.assertFalse([h for h in self.f_ticket(tid)["history"] if str(h.get("why", "")).startswith("Reverted")])
 
     def test_dragging_an_idea_to_triage_with_pending_phase_promotes_it(self):
         tid = self.idea()
-        self.edit_note(tid, lambda t: t.replace("💡-Idea", "📏-Triage", 1).replace("🙋-Awaiting-Human", "🕰️-Pending", 1))
+        self.edit_note(tid, lambda t: t.replace("💡 Idea", "📏 Triage", 1).replace("🙋 Awaiting Human", "🕰️ Pending", 1))
         self.tick()
         moves = [h for h in self.f_ticket(tid)["history"] if h.get("to")]
         self.assertEqual((moves[-1]["by"], moves[-1]["why"]), ("human", "Dragged to Triage by a human"))
 
     def test_illegal_drag_from_idea_is_reverted(self):
         tid = self.idea()
-        self.edit_note(tid, lambda t: t.replace("💡-Idea", "🍫-Baking", 1))
+        self.edit_note(tid, lambda t: t.replace("💡 Idea", "🍫 Baking", 1))
         res = self.tick()
         self.assertTrue([e for e in res["events"] if "reverted illegal" in e], res["events"])
         self.assertEqual(self.state(tid), ("idea", "awaiting"))
-        self.assertEqual(self.note(tid)[0]["status"], "💡-Idea")
+        self.assertEqual(self.note(tid)[0]["status"], "💡 Idea")
 
     def test_dragging_an_idea_to_wont_do_kills_it(self):
         tid = self.idea()
-        self.edit_note(tid, lambda t: t.replace("💡-Idea", "🗑️-Wont-Do", 1))
+        self.edit_note(tid, lambda t: t.replace("💡 Idea", "🗑️ Wont Do", 1))
         self.tick()
         self.assertEqual(self.state(tid), KILLED)
 
