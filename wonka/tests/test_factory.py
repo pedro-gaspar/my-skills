@@ -92,6 +92,10 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.read(tid)
 
+    def f_ticket(self, tid):
+        with self.f() as f:
+            return dict(f.ticket(tid))
+
     def edit_note(self, tid, fn):
         with self.f() as f:
             path = f.path(tid)
@@ -143,8 +147,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(job["agents"], ["wonka:squirrel-architect", "wonka:squirrel-security"])
         self.assertEqual(self.state(tid), ("baking", "pending"))
         self.assertEqual(self.state("WONKA-00002"), ("inbox", "pending"))
-        with self.f() as f:
-            self.assertIn("no shebang", Path(f.ticket(tid)["plan"]).read_text())
+        self.assertIn("no shebang", Path(self.f_ticket(tid)["plan"]).read_text())
 
         self.bake(tid, "fix.sh")
         self.review(tid, architect={"verdict": "good nut"}, security={"verdict": "good nut"})
@@ -154,8 +157,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertTrue(wt.exists(), "worktree lives until shipped")
         self.assertIn("pull/7", self.note(tid)[1])
-        with self.f() as f:
-            branch = f.ticket(tid)["branch"]
+        branch = self.f_ticket(tid)["branch"]
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
 
         self.pr_state.write_text("MERGED")
@@ -203,10 +205,6 @@ class FactoryTest(unittest.TestCase):
         skipped = [h["why"] for h in self.f_ticket(tid)["history"] if "skipped" in h.get("why", "")]
         self.assertEqual(len(skipped), 3, "one skip in round 1 (same round), two in round 2")
         self.assertIn("Follow-up already on the board, skipped: add A BYE script", skipped)
-
-    def f_ticket(self, tid):
-        with self.f() as f:
-            return f.ticket(tid)
 
     def test_pr_description_carries_the_wonka_and_jira_ids(self):
         tid = self.add(jira="CALC-42")
@@ -377,8 +375,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(a), ("wontdo", "done"))
         self.assertEqual(self.state(b), ("drafting", "progress"), "back to drafting and re-claimed")
-        with self.f() as f:
-            self.assertNotIn("reviewed_head", f.ticket(b), "redrafting clears the reviewed head")
+        self.assertNotIn("reviewed_head", self.f_ticket(b), "redrafting clears the reviewed head")
 
     def test_redraft_keeps_earlier_review_rounds(self):
         tid = self.add()
@@ -441,8 +438,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: clean review answered, off to ship", tick["events"])
         self.assertNotIn("bake", [j["job"] for j in tick["jobs"] if j["id"] == tid])
         self.assertEqual(self.state(tid), ("shipped", "awaiting"), "reconciled, shipped and PR opened in one tick")
-        with self.f() as f:
-            self.assertNotIn("round_issues", f.ticket(tid))
+        self.assertNotIn("round_issues", self.f_ticket(tid))
 
     def test_clean_review_answer_off_recommendation_rebakes_without_kill(self):
         tid = self.add()
@@ -454,9 +450,9 @@ class FactoryTest(unittest.TestCase):
         self.edit_note(tid, lambda t: t.replace("  - [ ] Rename to hi", "  - [x] Rename to hi"))
         self.tick()
         self.assertEqual(self.state(tid), ("baking", "progress"), "back to baking (and re-claimed), not killed")
-        with self.f() as f:
-            self.assertNotIn("round_issues", f.ticket(tid))
-            wt = Path(f.ticket(tid)["worktree"])
+        t = self.f_ticket(tid)
+        self.assertNotIn("round_issues", t)
+        wt = Path(t["worktree"])
         (wt / "hi.sh").write_text("echo hi\n")
         sh("git", "add", ".", cwd=wt)
         sh("git", "commit", "-qm", "rename", cwd=wt)
@@ -470,8 +466,7 @@ class FactoryTest(unittest.TestCase):
         self.to_ready(tid)
         self.bad_rounds(tid)
         self.clean_rebake(tid, "f2.sh")
-        with self.f() as f:
-            self.assertEqual(f.ticket(tid)["extra_rounds"], 1)
+        self.assertEqual(self.f_ticket(tid)["extra_rounds"], 1)
         self.assertIn("round 3/4, 1 extra round granted", self.note(tid)[1])
 
     def clean_rebake(self, tid, filename):
@@ -481,7 +476,7 @@ class FactoryTest(unittest.TestCase):
         self.edit_note(tid, lambda t: t.replace("  - [ ] Rename to hi", "  - [x] Rename to hi"))
         self.tick()
         self.assertEqual(self.state(tid), ("baking", "progress"))
-        wt = Path(self.ticket(tid)["worktree"])
+        wt = Path(self.f_ticket(tid)["worktree"])
         (wt / f"re-{filename}").write_text("echo hi\n")
         sh("git", "add", ".", cwd=wt)
         sh("git", "commit", "-qm", "rebake", cwd=wt)
@@ -518,7 +513,7 @@ class FactoryTest(unittest.TestCase):
         self.edit_note(tid, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
         self.tick()
         self.assertEqual(self.state(tid), ("drafting", "progress"))
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertNotIn("extra_rounds", t)
         self.assertEqual(t["review_round"], 0)
 
@@ -581,7 +576,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("inbox", "awaiting"))
         with self.f() as f, self.assertRaisesRegex(WonkaError, "nothing to retry"):
             f.retry(tid)
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertNotIn("retries", t)
         self.assertNotIn("stuck", t)
 
@@ -654,10 +649,6 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.finished(tid, agent, dispatch)
 
-    def ticket(self, tid):
-        with self.f() as f:
-            return dict(f.ticket(tid))
-
     def test_finished_is_a_noop_when_the_agent_did_its_job(self):
         tid = self.add()
         self.tick()
@@ -667,7 +658,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("moved on", msg)
         self.assertTrue(msg.startswith(f"{tid}: "))
         self.assertEqual(self.state(tid), ("inbox", "done"))
-        self.assertNotIn("retries", self.ticket(tid))
+        self.assertNotIn("retries", self.f_ticket(tid))
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
         with self.f() as f:
             f.write_plan(tid, "# plan\n")
@@ -678,7 +669,7 @@ class FactoryTest(unittest.TestCase):
         self.bake(tid)
         self.assertIn("moved on", self.finished(tid, "oompa-loompa-builder"))
         self.assertEqual(self.state(tid), ("reviewing", "pending"))
-        self.assertNotIn("retries", self.ticket(tid))
+        self.assertNotIn("retries", self.f_ticket(tid))
 
     def test_finished_retries_an_agent_that_left_no_result(self):
         tid = self.add()
@@ -686,11 +677,11 @@ class FactoryTest(unittest.TestCase):
         msg = self.finished(tid, "wonka:oompa-loompa-triage")
         self.assertEqual(msg, f"{tid}: wonka:oompa-loompa-triage left no result, back in the queue")
         self.assertEqual(self.state(tid), ("inbox", "pending"))
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertEqual(t["retries"], 1)
         self.assertNotIn("job_started_at", t)
         self.assertIn("moved on", self.finished(tid, "wonka:oompa-loompa-triage"), "no double retry")
-        self.assertEqual(self.ticket(tid)["retries"], 1)
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["triage"])
         with self.f() as f:
             f.triage(tid, "s")
@@ -698,7 +689,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("drafting", "progress"))
         self.assertIn("left no result", self.finished(tid, "wonka:oompa-loompa-analyst"))
         self.assertEqual(self.state(tid), ("drafting", "pending"))
-        self.assertEqual(self.ticket(tid)["retries"], 1, "a job that moved on resets the count")
+        self.assertEqual(self.f_ticket(tid)["retries"], 1, "a job that moved on resets the count")
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
 
     def test_parallel_squirrels_do_not_retry_each_other(self):
@@ -709,14 +700,14 @@ class FactoryTest(unittest.TestCase):
         msg = self.finished(tid, "wonka:squirrel-architect")
         self.assertEqual(msg, f"{tid}: squirrel-architect reported, waiting for backend")
         self.assertEqual(self.state(tid), ("reviewing", "progress"))
-        self.assertEqual(self.ticket(tid)["review_round"], job["review_round"])
+        self.assertEqual(self.f_ticket(tid)["review_round"], job["review_round"])
         with self.f() as f:
             f.report(tid, "backend", {"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        self.assertNotIn("finished", self.ticket(tid))
+        self.assertNotIn("finished", self.f_ticket(tid))
         self.assertIn("moved on", self.finished(tid, "wonka:squirrel-backend"))
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        self.assertNotIn("retries", self.ticket(tid))
+        self.assertNotIn("retries", self.f_ticket(tid))
 
     def test_a_silent_squirrel_is_retried_once_the_others_finish(self):
         tid = self.add()
@@ -731,14 +722,14 @@ class FactoryTest(unittest.TestCase):
         msg = self.finished(tid, "wonka:squirrel-backend")
         self.assertEqual(msg, f"{tid}: no report from architect, back in the queue")
         self.assertEqual(self.state(tid), ("reviewing", "pending"))
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertEqual(t["review_round"], job["review_round"] - 1)
         self.assertNotIn("reports", t)
         self.assertNotIn("finished", t)
         again = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(again["review_round"], job["review_round"])
         self.assertEqual(again["agents"], ["wonka:squirrel-architect", "wonka:squirrel-backend"])
-        self.assertEqual(self.ticket(tid)["finished"], [])
+        self.assertEqual(self.f_ticket(tid)["finished"], [])
 
     def test_finished_rejects_unknown_agents(self):
         tid = self.add()
@@ -765,10 +756,10 @@ class FactoryTest(unittest.TestCase):
         for _ in range(3):
             with self.f() as f:
                 f.retry(tid)
-        before = self.ticket(tid)
+        before = self.f_ticket(tid)
         self.assertEqual(self.finished(tid, "wonka:oompa-loompa-triage"),
                          f"{tid}: stuck, waiting for a human to tick Retry")
-        self.assertEqual(self.ticket(tid)["retries"], before["retries"])
+        self.assertEqual(self.f_ticket(tid)["retries"], before["retries"])
         self.assertEqual(self.state(tid), ("inbox", "pending"))
 
     def test_start_bumps_the_dispatch_number(self):
@@ -782,7 +773,7 @@ class FactoryTest(unittest.TestCase):
             f.set_section(tid, "spec", "Add hello.sh")
             f.drafted(tid, "s", ["architect"])
         self.bake(tid)
-        seen.append(self.ticket(tid)["dispatch"])
+        seen.append(self.f_ticket(tid)["dispatch"])
         first = self.review(tid)
         seen.append(first["dispatch"])
         with self.f() as f:
@@ -808,10 +799,10 @@ class FactoryTest(unittest.TestCase):
     def test_late_squirrel_finish_from_an_earlier_dispatch_is_ignored(self):
         tid, d1, job = self.retried_review()
         d2 = job["dispatch"]
-        retries = self.ticket(tid)["retries"]
+        retries = self.f_ticket(tid)["retries"]
         msg = self.finished(tid, "wonka:squirrel-architect", d1)
         self.assertEqual(msg, f"{tid}: wonka:squirrel-architect is from an earlier dispatch ({d1}, now {d2}), ignored")
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertEqual(t["finished"], [])
         self.assertEqual(t["retries"], retries)
         self.assertEqual(self.state(tid), ("reviewing", "progress"))
@@ -827,7 +818,7 @@ class FactoryTest(unittest.TestCase):
             msg = f.report(tid, "architect", bad, d1)
         self.assertEqual(msg, f"{tid}: squirrel-architect report is from an earlier dispatch "
                               f"({d1}, now {job['dispatch']}), ignored")
-        self.assertNotIn("architect", self.ticket(tid)["reports"])
+        self.assertNotIn("architect", self.f_ticket(tid)["reports"])
         self.assertEqual(self.state(tid), ("reviewing", "progress"))
         with self.f() as f:
             f.retry(tid)
@@ -844,11 +835,11 @@ class FactoryTest(unittest.TestCase):
             f.retry(tid)
         d2 = self.tick()["jobs"][0]["dispatch"]
         self.assertGreater(d2, d1)
-        retries = self.ticket(tid)["retries"]
+        retries = self.f_ticket(tid)["retries"]
         self.assertIn("earlier dispatch", self.finished(tid, "wonka:oompa-loompa-triage", d1))
         self.assertEqual(self.state(tid), ("inbox", "pending"))
-        self.assertEqual(self.ticket(tid)["retries"], retries)
-        self.assertIn("job_started_at", self.ticket(tid), "the live job is untouched")
+        self.assertEqual(self.f_ticket(tid)["retries"], retries)
+        self.assertIn("job_started_at", self.f_ticket(tid), "the live job is untouched")
         self.assertIn("left no result", self.finished(tid, "wonka:oompa-loompa-triage", None),
                       "no dispatch behaves as before")
 
@@ -864,9 +855,9 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "pending"))
         self.assertTrue(any(e.startswith(f"{tid}: PR failed") for e in tick["events"]), tick["events"])
         self.assertEqual(tick["stale"], [])
-        with self.f() as f:
-            self.assertEqual(f.ticket(tid)["retries"], 1)
-            self.assertNotIn("job_started_at", f.ticket(tid))
+        t = self.f_ticket(tid)
+        self.assertEqual(t["retries"], 1)
+        self.assertNotIn("job_started_at", t)
         body = self.note(tid)[1]
         self.assertIn("Retry 1/3", body)
         self.assertIn("Bad credentials", body)
@@ -874,8 +865,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         events = self.tick()["events"]
         self.assertTrue(any("stuck after 3 tries" in e for e in events), events)
-        with self.f() as f:
-            self.assertTrue(f.ticket(tid).get("stuck"))
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
         stuck = note.get_section(self.note(tid)[1], "stuck")
         self.assertTrue(stuck.startswith("- [ ] Retry"), stuck)
         self.assertIn("Bad credentials", stuck)
@@ -905,8 +895,7 @@ class FactoryTest(unittest.TestCase):
         events = self.tick()["events"]
         self.assertTrue(any(e.startswith(f"{tid}: PR failed: no pr_repo") for e in events), events)
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        with self.f() as f:
-            self.assertEqual(f.ticket(tid)["retries"], 1)
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
 
     def _shipping_ticket(self):
         tid = self.add()
@@ -918,9 +907,9 @@ class FactoryTest(unittest.TestCase):
 
     def _assert_retried_once(self, tid):
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        with self.f() as f:
-            self.assertEqual(f.ticket(tid)["retries"], 1)
-            self.assertNotIn("job_started_at", f.ticket(tid))
+        t = self.f_ticket(tid)
+        self.assertEqual(t["retries"], 1)
+        self.assertNotIn("job_started_at", t)
 
     def test_ship_with_deleted_worktree_is_retried(self):
         tid, wt = self._shipping_ticket()
@@ -941,8 +930,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         events = self.tick()["events"]
         self.assertTrue(any("stuck after 3 tries" in e for e in events), events)
-        with self.f() as f:
-            self.assertTrue(f.ticket(tid).get("stuck"))
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
 
     def test_run_names_a_missing_working_directory(self):
         missing = self.tmp / "nope"
@@ -1036,8 +1024,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
         self.assertEqual(self.state(tid), ("wontdo", "done"))
         self.assertTrue(wt.exists())
-        with self.f() as f:
-            history = f.ticket(tid)["history"]
+        history = self.history(tid)
         self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in history))
         self.tick()
 
@@ -1048,14 +1035,12 @@ class FactoryTest(unittest.TestCase):
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
-        with self.f() as f:
-            branch = f.ticket(tid)["branch"]
+        branch = self.f_ticket(tid)["branch"]
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         return wt, branch
 
     def history(self, tid):
-        with self.f() as f:
-            return list(f.ticket(tid)["history"])
+        return list(self.f_ticket(tid)["history"])
 
     def test_killed_ticket_keeps_its_branch(self):
         tid = self.add()
@@ -1375,7 +1360,6 @@ class FactoryTest(unittest.TestCase):
         self.assertIsNone(self.scout_of(b))
         self.assertNotIn("-scout", self.worktrees())
 
-
     # -- requesting changes on an open PR ------------------------------------
 
     def pr_feedback(self, comments=(), reviews=(), inline=()):
@@ -1394,8 +1378,7 @@ class FactoryTest(unittest.TestCase):
         sh("git", "commit", "-qm", filename, cwd=wt)
 
     def plan_text(self, tid):
-        with self.f() as f:
-            return Path(f.ticket(tid)["plan"]).read_text()
+        return Path(self.f_ticket(tid)["plan"]).read_text()
 
     def test_request_changes_rebakes_and_updates_the_same_pr(self):
         tid = self.add()
@@ -1414,7 +1397,7 @@ class FactoryTest(unittest.TestCase):
         job = [j for j in tick["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
         self.assertEqual(self.state(tid), ("baking", "progress"))
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertEqual((t["review_round"], t["change_requests"]), (0, 1))
         self.assertTrue(t["changes_cutoff"])
         api = Path(f"{self.pr_state}.api").read_text()
@@ -1447,8 +1430,8 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "the open PR is reused")
         self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated"))
         self.assertEqual(note.get_section(self.note(tid)[1], "changes"), note.CHANGES_BOX)
-        self.assertEqual(self.ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
-        self.assertEqual(self.ticket(tid)["review_round"], 1)
+        self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
+        self.assertEqual(self.f_ticket(tid)["review_round"], 1)
 
     def test_request_changes_with_nothing_to_change_stays_put(self):
         tid = self.add()
@@ -1457,7 +1440,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertEqual(note.get_section(self.note(tid)[1], "changes"), note.CHANGES_BOX)
         self.assertTrue(any("no notes under it" in h.get("why", "") for h in self.history(tid)))
-        self.assertNotIn("change_requests", self.ticket(tid))
+        self.assertNotIn("change_requests", self.f_ticket(tid))
 
     def test_second_change_request_reads_only_new_comments(self):
         tid = self.add()
@@ -1484,7 +1467,7 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("old remark", second)
         self.assertIn("## 🔁 Earlier change request 1", plan)
         self.assertNotRegex(plan, r"(?m)^## 🔁 Change request 1")
-        self.assertEqual(self.ticket(tid)["change_requests"], 2)
+        self.assertEqual(self.f_ticket(tid)["change_requests"], 2)
 
     def test_change_request_gets_a_fresh_review_budget(self):
         tid = self.add()
@@ -1497,8 +1480,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.ticket(tid)["extra_rounds"] = 1  # earned before the PR opened, not carried into the change request
         job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
-        with self.f() as f:
-            self.assertNotIn("extra_rounds", f.ticket(tid))
+        self.assertNotIn("extra_rounds", self.f_ticket(tid))
         self.commit_and_bake(Path(job["worktree"]), "g0.sh")
         with self.f() as f:
             f.baked(tid)
@@ -1563,10 +1545,6 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(len(jobs), 1, tick)
         return jobs[0]
 
-    def ticket(self, tid):
-        with self.f() as f:
-            return dict(f.ticket(tid))
-
     def test_conflicting_pr_dispatches_a_fixer(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
@@ -1592,7 +1570,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
-        t = self.ticket(tid)
+        t = self.f_ticket(tid)
         self.assertNotIn("conflicts", t)
         self.assertNotIn("merge_ref", t)
         self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
@@ -1637,7 +1615,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
         self.assertTrue(any(e.startswith(f"{tid}: ⚠️") and "diverged" in e for e in tick["events"]), tick["events"])
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
-        self.assertTrue(self.ticket(tid).get("conflicts"))
+        self.assertTrue(self.f_ticket(tid).get("conflicts"))
 
     def test_resolved_refuses_unfinished_merge(self):
         tid = self.add()
@@ -1666,7 +1644,7 @@ class FactoryTest(unittest.TestCase):
             tick = self.tick()
             self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [], state)
             self.assertEqual(self.state(tid), ("shipped", "awaiting"), state)
-            self.assertNotIn("conflicts", self.ticket(tid))
+            self.assertNotIn("conflicts", self.f_ticket(tid))
 
     def test_conflicts_fixed_by_hand_drop_the_flag(self):
         tid = self.add()
@@ -1677,7 +1655,7 @@ class FactoryTest(unittest.TestCase):
             self.assertIn("The PR has merge conflicts", f.read(tid)[1])
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
-        self.assertNotIn("conflicts", self.ticket(tid))
+        self.assertNotIn("conflicts", self.f_ticket(tid))
         self.assertIn("merge the PR", self.note(tid)[1])
 
     def test_failed_fixer_is_retried_through_ship(self):
@@ -1688,13 +1666,13 @@ class FactoryTest(unittest.TestCase):
             out = f.finished(tid, "wonka:oompa-loompa-fixer")
         self.assertIn("left no result, back in the queue", out)
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        self.assertNotIn("conflicts", self.ticket(tid))
+        self.assertNotIn("conflicts", self.f_ticket(tid))
         tick = self.tick()  # ship() runs again and finds the PR
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
         job = self.fixer_job(tid)  # the next tick sees the conflicts again
         self.assertEqual(job["job"], "conflicts")
-        self.assertEqual(self.ticket(tid)["retries"], 1)
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
 
     def test_leftover_merge_is_aborted_on_start(self):
         tid = self.add()
@@ -1729,7 +1707,7 @@ class FactoryTest(unittest.TestCase):
         tick = self.tick()
         self.assertTrue(any(e.startswith(f"{tid}: ⚠️") for e in tick["events"]), tick["events"])
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
-        self.assertTrue(self.ticket(tid)["conflicts"])
+        self.assertTrue(self.f_ticket(tid)["conflicts"])
 
 
 if __name__ == "__main__":
