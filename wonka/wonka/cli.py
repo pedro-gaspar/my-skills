@@ -205,7 +205,10 @@ def run(a, f):
             print(json.dumps(m, ensure_ascii=False))
     elif c == "status":
         for k in f.live():
-            meta = f.read(k)[0]
+            try:
+                meta = f.read(k)[0]
+            except (WonkaError, OSError) as e:  # a lost or broken note never hides the other tickets
+                meta = {"title": f"⚠️ {e}"}
             print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('title', '')}"
                   + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
 

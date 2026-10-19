@@ -172,6 +172,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("WONKA-00001: "), out)
 
+    def add_ticket(self, *argv):
+        """init, a repo and one ticket added with `wonka add x <argv>`: returns add's (code, out, err)."""
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = self.tmp / "app"
+        repo.mkdir(exist_ok=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
+        with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
+            return self.run_cli("add", *(argv or ("x",)), "--repo", str(repo))
+
+    def test_a_lost_note_is_a_clean_error(self):
+        self.add_ticket("x")
+        self.add_ticket("y")
+        note_path = self.tmp / "vault/wonka/golden-tickets/WONKA-00001.md"
+        note_path.unlink()
+        code, out, err = self.run_cli("status")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(f"⚠️ the note {note_path} is gone", out)
+        self.assertIn("WONKA-00002", out)
+        for argv in (("set", "WONKA-00001", "title", "T"), ("set", "WONKA-00001", "jira", "AB-1")):
+            with self.subTest(argv=argv), mock.patch.object(cli.sys, "stdin", io.StringIO("spec")):
+                code, _, err = self.run_cli(*argv)
+                self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: the note {note_path} is gone (deleted or moved?)"))
+
     def test_add_makes_an_idea_unless_triage(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = self.tmp / "app"
