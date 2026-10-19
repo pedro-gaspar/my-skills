@@ -21,11 +21,13 @@ Then run `/wonka init`. It asks for your vault and how many tickets to draft and
 existing `🍫 Factory.base`; an older vault's `Wonka.base` is renamed to `🍫 Factory.base` by `wonka init` (keeping
 any view changes), and the doctor warns until it is. The doctor prints the permission snippet that lets background
 agents run unattended (`Bash(wonka *)`, plus the worktree and factory folders as `additionalDirectories`). Agents
-run git only through `wonka git <id> <subcommand>`, which pins it to the ticket's worktree and that worktree's
+run git only through `wonka git <id> [--dispatch <n>] <subcommand>`, which pins it to the ticket's worktree and that worktree's
 registered git dir (a rewritten `.git` file is ignored) and allows only status, diff, log, show, rev-parse,
 ls-files, blame, add and commit (plus the fixer's `rebase <ref>`, `rebase --continue` and `rebase --abort`; no `-c`, config,
 push or options that run programs), so no git permission rule is needed; the doctor warns if an old `Bash(git *)`
-rule is still there. Wonka only ever commits and pushes the ticket's own `wonka/` branch: `wonka git` writes, the PR
+rule is still there. Writes (add, commit, rebase) must carry the agent's `--dispatch` and are refused unless it
+is the ticket's current dispatch, so a builder or fixer left over from an earlier dispatch cannot commit next to its
+replacement. Wonka only ever commits and pushes the ticket's own `wonka/` branch: `wonka git` writes, the PR
 push and `wonka resolved` refuse main, master, the base branch, or a worktree that is no longer on its branch. On
 GitHub it only changes PRs it opened itself: before every push it checks the open PRs on the branch, and one opened
 by anyone else (by hand, or another tool) makes the ticket 🎩 Stuck instead of being pushed to or taken over.
@@ -83,7 +85,7 @@ next commit.
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
 | `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds` |
-| `wonka git <id> <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
+| `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
 
 ## The floor
