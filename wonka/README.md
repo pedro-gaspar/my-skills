@@ -69,9 +69,9 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
        "excludedCommands": [
          "wonka git *", "wonka ci-logs *", "wonka triage *", "wonka ask *", "wonka section *", "wonka plan *",
          "wonka drafted *", "wonka pr-body *", "wonka baked *", "wonka resolved *", "wonka report *",
-         "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *", "wonka tick *",
-         "wonka finished *", "wonka retry *", "wonka init *", "wonka config *", "wonka set *", "wonka move *",
-         "wonka block *", "wonka unblock *", "wonka doctor *"
+         "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *",
+         "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka init *",
+         "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *", "wonka doctor *"
        ]
      }
    }

@@ -25,7 +25,7 @@ OPT_INT = (int, type(None))
 @unittest.skipUnless(os.environ.get("WONKA_GH_CONTRACT") == "1", "set WONKA_GH_CONTRACT=1 to run against the real gh")
 class GhContractTest(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.dict(os.environ, {"WONKA_GH": "gh"})  # the real gh, whatever the other tests set
+        patcher = mock.patch.object(factory, "GH", "gh")  # the real gh, whatever the other tests set
         patcher.start()
         self.addCleanup(patcher.stop)
 

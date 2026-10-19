@@ -35,7 +35,8 @@ def _parse(argv):
 # - shells and interpreters (RUNNERS) are open until a script, module or code operand pins them (python3 -m pytest);
 # - wrappers and launchers (WRAPPERS, RUNNER_SUBCOMMANDS) are open when the command they wrap is (env FOO=1 bash), and
 #   a launcher with no subcommand is open too (uv, npm, cargo: the caller could add run or exec);
-# - ALWAYS_OPEN programs take a command anywhere in their arguments (find -exec, watch, script -c): nothing pins them;
+# - ALWAYS_OPEN programs take a command anywhere in their arguments (find -exec, watch, script -c), or run a container
+#   whose command the caller can append (docker compose run tests bash): nothing pins them;
 # - build and test tools that run the repo's own files are not open, even bare: make, npm test, cargo test and pytest
 #   run what the Makefile, package.json or conftest.py say, files the builder can edit anyway, like ./test.sh.
 # This only catches the obvious: with Claude Code's sandbox on, wonka test runs inside it whatever the prefix.
@@ -58,7 +59,7 @@ WRAPPERS = frozenset(
     "env exec command xargs nice ionice nohup timeout time sudo doas busybox setsid setpriv stdbuf flock unshare "
     "nsenter chroot taskset chrt strace ltrace valgrind fakeroot eatmydata firejail systemd-run".split())
 # Programs that run a command given anywhere in their arguments, or a shell without one.
-ALWAYS_OPEN = frozenset("find watch script parallel gdb su runuser".split())
+ALWAYS_OPEN = frozenset("find watch script parallel gdb su runuser docker podman nerdctl".split())
 # Options that take the next token as their value (not the program or code to run), by program.
 OPTION_VALUES = {
     "python": frozenset({"-W", "-X"}),

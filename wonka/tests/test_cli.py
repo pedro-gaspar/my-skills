@@ -457,7 +457,7 @@ class CliTest(unittest.TestCase):
         gh.write_text(f'#!/bin/sh\necho "$@" >> {calls}\np="${{3#repos/acme/app/}}"; p="${{p%%\\?*}}"\n'
                       f'cat "{out}/$(echo "$p" | tr / _)"\n')
         gh.chmod(0o755)
-        with mock.patch.dict(os.environ, {"WONKA_GH": str(gh)}), \
+        with mock.patch.object(factory, "GH", str(gh)), \
                 mock.patch.object(store, "state", side_effect=AssertionError("took the lock")):
             code, stdout, err = self.run_cli("pr-comments", "WONKA-00001")
         self.assertEqual(code, 0, err)

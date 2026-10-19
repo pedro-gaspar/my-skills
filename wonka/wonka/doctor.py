@@ -150,7 +150,8 @@ def _worktree_file_checks(cfg, tickets):
 # hostile CI log or diff must not be able to switch the sandbox off (`wonka config test_commands.<p> bash`) or pass
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
 AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "baked",
-                  "resolved", "report", "add", "show", "status", "repos", "metrics", "tick", "finished", "retry")
+                  "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
+                  "retry")
 HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor")
 # Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
 # repo's git dir, and talk to GitHub. wonka test needs none of that (its lock is in the worktrees folder), so it stays
