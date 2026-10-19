@@ -109,19 +109,19 @@ push.
 
 | | |
 |---|---|
-| `/wonka add "idea"` | drop a ticket on the board as a 💡 Idea (`--triage` to put it straight in Triage when you want it built now; run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`, `--needs-human-spec-review` to approve the spec yourself before baking; `--blocked-by WONKA-00001[,…]` to record tickets it waits on) |
+| `/wonka add "idea"` | drop a ticket on the board as a 💡 Idea (`--triage` to put it straight in Triage when you want it built now; run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`, `--needs-human-spec-review` to approve the spec yourself before baking; `--blocked-by WONKA-00001[,…]` to record tickets it waits on). An empty idea is refused; a line break in a title or Jira key (here, in `wonka set` or `wonka triage --title`) becomes a space |
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `wonka block <id> <blocker>[,…]` / `wonka unblock <id> [<blocker>…]` | record or remove "this ticket waits on those", only while the ticket is an Idea or in Triage, Drafting or Planned. Refuses unknown ids, a ticket blocking itself, Won't-do blockers and cycles. `unblock` with no ids clears all. A ticket with unmerged blockers waits in its column until every blocker has merged (see The floor); the banner shows `⛓️ blocked by [[…]]` |
-| `/wonka status` | one line per ticket, with ` ⛓️ <ids>` for blockers that have not merged yet |
+| `/wonka status` | one line per ticket, with ` ⛓️ <ids>` for blockers that have not merged yet; a ticket whose note is gone shows `⚠️` and why in place of its title |
 | `wonka repos` | the repos the factory knows (project, local path, PR repo); the analyst uses it to file a ticket in another repo |
 | `wonka metrics [--since YYYY-MM-DD]` | one JSON line per ticket, archived ones too: `id, project, size, created_at, reviewers, outcome` (merged / bad nut / duplicate / split / closed by human / PR closed, null while live), `hours_in` per status, `hours_awaiting_human` (time in 🙋), `rounds`, `stats`, `followups_filed`, `pr_url`; `--since` filters on the creation date. Reads a snapshot, never the lock |
 | `/wonka retro [YYYY-MM-DD]` | look back over the tickets created since the date (default 7 days ago): 🔍 **oompa-loompa-inspector** (Opus, read-only) reads `wonka metrics`, the plans' review logs and decisions, the notes' answers, `~/.wonka/factory.log` and the human review comments on merged PRs, and reports flow (hours per status, time waiting on you, gates that fire most), recurring issues (3+ tickets), squirrel quality per reviewer and planning quality. Each proposal (cheapest fix first: a CLI check, an agent prompt, the squirrel focus or reviewer choice, then the repo's AGENTS.md) is yours to Apply (a 💡 Idea ticket in the my-skills clone or the product repo), Apply and start, or Skip; nothing is edited directly, never the plugin cache in ~/.claude/plugins |
-| `wonka config [key value]` | show or change settings (it also shows the factory folder and log paths): `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `ci_hosts.<project>`, `ci_log_command.<project>`, `test_lock_wait_minutes` |
+| `wonka config [key value]` | show or change settings (it also shows the factory folder and log paths): `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `ci_hosts.<project>`, `ci_log_command.<project>`, `test_lock_wait_minutes` (numbers must be finite: `inf` and `nan` are refused). A hand-edited `config.json` with a value of the wrong type (a null `vault` or `wip`, a string where a list goes) stops every command with an error naming the key |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
 | `wonka ci-logs <id> [--dispatch <n>] <url>` | what builders use to fetch a failed CI log: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
-| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
+| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
 
 ## The floor
 
@@ -210,6 +210,10 @@ Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed 
 next tick (found by the `id` in its frontmatter); a deleted note drops its ticket to Wont-Do. Since that is final, a
 tick refuses to run when the tickets folder is missing (an unmounted or moved vault, a changed `vault` setting) or
 when every live ticket's note is gone at once; if you really deleted them all, run `wonka tick --drop-missing`.
+Frontmatter is read as YAML (Obsidian's own escapes and `# comments` included), and bytes that are not UTF-8 read as
+`�`, as Obsidian shows them. A note Wonka still can't read only holds up its own ticket: the tick reports it as a
+`⚠️` event naming the note and carries on with the others. Outside a tick, a command on a ticket whose note is gone
+says so in one line.
 Errors that stop the whole factory (that refusal, an unreadable state or config file, a lock held for 10 minutes)
 also send an urgent desktop notification, so a `/loop` running in the background doesn't fail silently.
 
