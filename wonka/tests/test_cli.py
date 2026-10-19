@@ -123,6 +123,25 @@ class CliTest(unittest.TestCase):
         suite = unittest.TestLoader().discover(start_dir=str(root), top_level_dir=str(root), pattern="test_banner.py")
         self.assertGreater(suite.countTestCases(), 0)
 
+    def test_agent_docs_point_to_the_plans_test_command(self):
+        """Agents use the plan's test command and treat a run of 0 tests as a wrong command, not a pass."""
+        root = Path(cli.__file__).resolve().parent.parent
+        agents = root / "agents"
+        runners = [agents / "oompa-loompa-builder.md", agents / "oompa-loompa-fixer.md"]
+        runners += sorted(agents.glob("squirrel-*.md"))
+        self.assertGreater(len(runners), 2)
+        for path in runners:
+            text = path.read_text()
+            self.assertIn("0 tests", text, path.name)
+            self.assertIn("how to verify", text, path.name)
+        analyst = (agents / "oompa-loompa-analyst.md").read_text()
+        self.assertIn("0 tests", analyst)
+        self.assertIn("discover -s wonka -t wonka", analyst)
+        readme = (root / "README.md").read_text()
+        develop = readme.split("## Develop", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("discover -s wonka -t wonka", develop)
+        self.assertIn("NO TESTS RAN", develop)
+
     def test_squirrel_docs_differ_only_in_name_emoji_and_focus(self):
         """The squirrel agents share one body; only who they are and what they look at may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"

@@ -24,7 +24,8 @@ Steps:
 3. For each one, read both sides and the plan (it says what this ticket changes). Keep the intent of both: the
    base's changes are already merged upstream, the branch's changes are this ticket. Remove every conflict marker,
    then `wonka git <id> add <path>`.
-4. Run the project's tests (see its README / CLAUDE.md / AGENTS.md) until they pass.
+4. Run the project's tests until they pass: the test command in the plan's how to verify section, otherwise the one in
+   the repo's README / CLAUDE.md / AGENTS.md. A run that reports 0 tests used the wrong command, not a pass.
 5. `wonka git <id> commit --no-edit` (if git asks for a message, use the default merge message and add
    `Refs: <id>`). Check `wonka git <id> status` is clean.
 6. `wonka resolved <id>`: it checks the merge is committed, pushes the branch and hands the PR back to the human.
