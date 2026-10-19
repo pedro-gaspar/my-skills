@@ -1,6 +1,7 @@
 """The golden ticket state machine: which (status, phase) pairs exist and how they may change."""
 
 STATUSES = {
+    "idea": "💡-Idea",
     "triage": "📏-Triage",
     "drafting": "🧪-Drafting",
     "planned": "🎫-Planned",
@@ -20,6 +21,7 @@ OLD_STATUS_KEYS = {"ready": "planned", "inbox": "triage"}
 OLD_PHASE_KEYS = {"done": "ready"}
 OLD_STATUSES = {"ready": "🎫-Ready", "inbox": "✉️-Inbox"}
 OLD_PHASES = {"done": "🌟-Done"}
+START = ("idea", "triage")  # where `Factory.add` may start a ticket
 SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
 SPEC_REVIEWS = ("agent", "human")
@@ -32,6 +34,7 @@ def review_budget(t, max_rounds):
 
 
 VALID = {
+    "idea": {"pending"},
     "triage": {"pending", "awaiting", "ready"},
     "drafting": {"pending", "progress", "awaiting"},
     "planned": {"pending"},
@@ -44,6 +47,7 @@ VALID = {
 KILLED = ("wontdo", "ready")
 
 _EDGES = [
+    ("idea/pending", "triage/pending"),  # a human started the idea
     ("triage/pending", "triage/ready"),
     ("triage/pending", "triage/awaiting"),
     ("triage/awaiting", "triage/ready"),

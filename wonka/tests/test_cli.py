@@ -59,7 +59,7 @@ class CliTest(unittest.TestCase):
         board.mkdir(parents=True)
         (board / "🍫 Factory.base").write_text("order:\n  - ✉️-Inbox\n  - 🎫-Ready\nmine: 1\n")
         self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
-        self.assertEqual((board / "🍫 Factory.base").read_text(), "order:\n  - 📏-Triage\n  - 🎫-Planned\nmine: 1\n")
+        self.assertEqual((board / "🍫 Factory.base").read_text(), "order:\n  - 💡-Idea\n  - 📏-Triage\n  - 🎫-Planned\nmine: 1\n")
 
     def test_init_keeps_both_when_both_exist(self):
         board = self.tmp / "vault/wonka"
@@ -138,6 +138,44 @@ class CliTest(unittest.TestCase):
             code, out, _ = self.run_cli("set", "WONKA-00001", "title", "New title")
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("WONKA-00001: "), out)
+
+    def test_add_makes_an_idea_unless_triage(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = self.tmp / "app"
+        repo.mkdir()
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
+        with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
+            code, out, _ = self.run_cli("add", "x", "--repo", str(repo))
+            self.assertEqual(code, 0)
+            self.assertIn("💡 Idea", out)
+            code, out, _ = self.run_cli("add", "--triage", "y", "--repo", str(repo))
+            self.assertEqual(code, 0)
+            self.assertIn("📏 Triage", out)
+        with store.state() as db:
+            got = {k: (v["last_valid"]["status"], v["last_valid"]["phase"]) for k, v in db["tickets"].items()}
+        self.assertEqual(got, {"WONKA-00001": ("idea", "pending"), "WONKA-00002": ("triage", "pending")})
+
+    def test_analyst_doc_adds_children_to_triage(self):
+        root = Path(cli.__file__).resolve().parent.parent
+        lines = [x for x in (root / "agents/oompa-loompa-analyst.md").read_text().splitlines()
+                 if "wonka add" in x and "--parent" in x]
+        self.assertGreaterEqual(len(lines), 2)
+        for line in lines:
+            self.assertIn("--triage", line)
+
+    def test_squirrel_docs_file_followups_as_ideas(self):
+        agents = Path(cli.__file__).resolve().parent.parent / "agents"
+        for p in agents.glob("squirrel-*.md"):
+            text = p.read_text()
+            self.assertNotIn("Triage tickets", text, p.name)
+            self.assertIn("Idea", text, p.name)
+
+    def test_skill_add_mentions_triage_flag(self):
+        root = Path(cli.__file__).resolve().parent.parent
+        self.assertIn("--triage", (root / "skills/wonka/SKILL.md").read_text())
 
     def test_question_flags_mark_the_recommendation_with_a_star(self):
         q = cli.parse_question("Store sessions where? | Redis | *Postgres, already in the stack")

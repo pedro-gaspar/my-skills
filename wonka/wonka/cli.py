@@ -123,8 +123,13 @@ def run(a, f):
     c = a.cmd
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
-                  spec_review="human" if a.needs_human_spec_review else None, blocked_by=split_ids(a.blocked_by))
-        print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
+                  spec_review="human" if a.needs_human_spec_review else None, blocked_by=split_ids(a.blocked_by),
+                  start="triage" if a.triage else "idea")
+        if a.triage:
+            print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
+        else:
+            print(f"🎫 {tid} has a golden ticket! It's a 💡 Idea: tick Start or drag it to 📏 Triage when it's ready: "
+                  f"{f.path(tid)}")
     elif c == "block":
         f.block(a.id, a.blockers)
         print(f.summary(a.id))
@@ -217,8 +222,11 @@ def parser():
     s = sub.add_parser("config", help="show settings, or change one: wonka config wip.baking 3")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")
-    s = sub.add_parser("add", help="drop a new golden ticket in Triage")
+    s = sub.add_parser("add", help="drop a new golden ticket on the board as an 💡 Idea (or straight in Triage with --triage)")
     s.add_argument("idea")
+    s.add_argument("--triage", action="store_true",
+                   help="skip the Idea column: an agent triages it on the next tick (use when you want it built now; "
+                        "analyst splits use it)")
     s.add_argument("--title")
     s.add_argument("--repo", help="git repo the ticket builds in (default: cwd)")
     s.add_argument("--pr-repo", help="GitHub owner/name the PR targets (default: origin)")

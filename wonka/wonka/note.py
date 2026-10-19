@@ -10,6 +10,7 @@ OPTIONAL = ("spec_review", "blocked_by")  # owned fields written only when set: 
 
 HEADINGS = {
     "idea": "💡 Idea",
+    "start": "💡 Start",
     "approval": "🎫 Approval",
     "questions": "❓ Questions",
     "answers": "✅ Answers",
@@ -32,10 +33,12 @@ SPEC_OPTIONS = (
     "Close: drop the ticket (Wont-Do)",
 )
 CHANGES_BOX = "- [ ] 🔁 Request changes"
+START_BOX = "- [ ] Start (send it to triage)"
 
 _Q = re.compile(r"^- \*\*(.+?)\*\*")
 _OPT = re.compile(r"^\s+- \[([ xX])\] (.*)$")
 _APPROVED = re.compile(r"^- \[[xX]\] Approve", re.M)
+_STARTED = re.compile(r"^- \[[xX]\] Start", re.M)
 _RETRY = re.compile(r"^- \[[xX]\] Retry", re.M)
 _CHANGES = re.compile(r"^- \[([ xX])\] (?:🔁 )?Request changes.*$", re.M)
 
@@ -315,6 +318,10 @@ def picked_yes(section, question):
         if question in q["q"]:
             return any(c and text.startswith("Yes") for c, text in q["options"])
     return False
+
+
+def started(section):
+    return bool(section and _STARTED.search(section))
 
 
 def approved(section):

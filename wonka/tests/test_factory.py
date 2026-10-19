@@ -173,7 +173,8 @@ class FactoryTest(unittest.TestCase):
                                     "followups": [{"title": "Add a bye script", "idea": "bye.sh"}]})
         self.assertEqual(job["agents"], ["wonka:squirrel-architect", "wonka:squirrel-security"])
         self.assertEqual(self.state(tid), ("baking", "pending"))
-        self.assertEqual(self.state("WONKA-00002"), ("triage", "pending"))
+        self.assertEqual(self.state("WONKA-00002"), ("idea", "pending"))
+        self.assertIn("## 💡 Start", self.note("WONKA-00002")[1])
         self.assertIn("no shebang", Path(self.f_ticket(tid)["plan"]).read_text())
 
         self.bake(tid, "fix.sh")
@@ -1713,8 +1714,10 @@ class FactoryTest(unittest.TestCase):
         base = store.board(self.cfg) / store.BASE_FILE
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text("groupOrder:\n  - ✉️-Inbox\n# mine\n")
-        self.assertIn(event, self.tick()["events"])
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 📏-Triage\n# mine\n")
+        events = self.tick()["events"]
+        self.assertIn(event, events)
+        self.assertIn("🍫 Factory.base: column 💡-Idea added", events)
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n# mine\n")
         self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
 
     def test_add_with_unknown_parent_leaves_nothing_behind(self):
@@ -4442,6 +4445,120 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.move(tid, KILLED, "human")
         self.assertNotIn("spec_review_pending", self.f_ticket(tid))
+
+    # -- ideas ------------------------------------------------------------
+
+    def idea(self, **kw):
+        return self.add(start="idea", **kw)
+
+    def test_add_creates_an_idea_with_a_start_box(self):
+        tid = self.idea()
+        self.assertEqual(self.state(tid), ("idea", "pending"))
+        meta, body = self.note(tid)
+        self.assertEqual(meta["status"], "💡-Idea")
+        self.assertIn("## 💡 Start", body)
+        self.assertIn(note.START_BOX, body)
+        self.assertIn("Just an idea", body)
+        with self.f() as f:
+            before = f.db["next_id"]
+            with self.assertRaises(WonkaError):
+                f.add("x", repo=str(self.repo), start="nope")
+            self.assertEqual(f.db["next_id"], before)
+
+    def test_tick_never_dispatches_an_idea(self):
+        tid = self.idea()
+        for _ in range(2):
+            res = self.tick()
+            self.assertEqual(res["jobs"], [])
+            self.assertFalse([e for e in res["events"] if tid in e], res["events"])
+        self.assertEqual(self.state(tid), ("idea", "pending"))
+        with self.f() as f:
+            with self.assertRaises(WonkaError):
+                f.start(tid)
+            with self.assertRaises(WonkaError):
+                f.retry(tid)
+
+    def test_ticking_start_promotes_an_idea(self):
+        tid = self.idea()
+        self.tick_box(tid, "Start")
+        res = self.tick()
+        self.assertIn(f"{tid}: started, off to triage", res["events"])
+        self.assertEqual([(j["id"], j["job"]) for j in res["jobs"]], [(tid, "triage")])
+        hist = self.f_ticket(tid)["history"]
+        moves = [h for h in hist if h.get("to")]
+        self.assertEqual(moves[-1]["by"], "human")
+        self.assertEqual(moves[-1]["why"], "Started")
+        self.assertNotIn("## 💡 Start", self.note(tid)[1])
+
+    def test_dragging_an_idea_to_triage_promotes_it(self):
+        tid = self.idea()
+        self.edit_note(tid, lambda t: t.replace("💡-Idea", "📏-Triage", 1))
+        res = self.tick()
+        self.assertFalse([e for e in res["events"] if "reverted" in e], res["events"])
+        self.assertEqual(self.state(tid)[0], "triage")
+        moves = [h for h in self.f_ticket(tid)["history"] if h.get("to")]
+        self.assertEqual((moves[-1]["by"], moves[-1]["why"]), ("human", "Dragged to Triage by a human"))
+        self.assertNotIn("## 💡 Start", self.note(tid)[1])
+
+    def test_illegal_drag_from_idea_is_reverted(self):
+        tid = self.idea()
+        self.edit_note(tid, lambda t: t.replace("💡-Idea", "🍫-Baking", 1))
+        res = self.tick()
+        self.assertTrue([e for e in res["events"] if "reverted illegal" in e], res["events"])
+        self.assertEqual(self.state(tid), ("idea", "pending"))
+        self.assertEqual(self.note(tid)[0]["status"], "💡-Idea")
+
+    def test_dragging_an_idea_to_wont_do_kills_it(self):
+        tid = self.idea()
+        self.edit_note(tid, lambda t: t.replace("💡-Idea", "🗑️-Wont-Do", 1))
+        self.tick()
+        self.assertEqual(self.state(tid), KILLED)
+
+    def test_deleted_start_box_comes_back(self):
+        tid = self.idea()
+        self.edit_note(tid, lambda t: t.split("## 💡 Start")[0].rstrip() + "\n")
+        self.assertNotIn("## 💡 Start", self.note(tid)[1])
+        self.tick()
+        self.assertIn(note.START_BOX, self.note(tid)[1])
+        self.assertEqual(self.state(tid), ("idea", "pending"))
+
+    def test_ideas_use_no_wip_slots(self):
+        self.cfg["wip"] = {**self.cfg["wip"], "triage": 1}  # a copy: the defaults are shared
+        store.save_config(self.cfg)
+        ideas = [self.idea() for _ in range(3)]
+        tid = self.add()
+        res = self.tick()
+        self.assertEqual([(j["id"], j["job"]) for j in res["jobs"]], [(tid, "triage")])
+        with self.f() as f:
+            self.assertEqual(f._triaging(), 1)
+        for i in ideas:
+            self.assertEqual(self.state(i), ("idea", "pending"))
+
+    def test_ideas_are_never_archived(self):
+        tid = self.idea()
+        with self.f() as f:
+            f.ticket(tid)["entered_done_at"] = "2000-01-01T00:00:00+00:00"
+        later = factory.now() + dt.timedelta(days=30)
+        with mock.patch.object(factory, "now", lambda: later):
+            res = self.tick()
+        self.assertFalse([e for e in res["events"] if "archiv" in e], res["events"])
+        self.assertTrue(self.f_path(tid).exists())
+
+    def test_split_children_with_triage_start_in_triage(self):
+        parent = self.add()
+        child = self.add(parent=parent, start="triage")
+        self.assertEqual(self.state(child), ("triage", "pending"))
+        self.assertNotIn("## 💡 Start", self.note(child)[1])
+
+    def test_block_works_on_an_idea(self):
+        a, b = self.idea(), self.idea()
+        with self.f() as f:
+            f.block(a, [b])
+        self.assertEqual(self.f_ticket(a)["blocked_by"], [b])
+
+    def f_path(self, tid):
+        with self.f() as f:
+            return f.path(tid)
 
 
 if __name__ == "__main__":
