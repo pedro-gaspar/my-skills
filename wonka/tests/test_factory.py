@@ -688,6 +688,34 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([j["id"] for j in tick["jobs"]], [tid])
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
 
+    def stuck_ticket(self):
+        tid = self.add()
+        self.tick()
+        for _ in range(3):
+            with self.f() as f:
+                f.retry(tid)
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
+        return tid
+
+    def assert_finished_clean(self, tid):
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        self.assertNotIn("retries", self.f_ticket(tid))
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+        self.assertNotIn("factory is stuck", self.note(tid)[1])
+
+    def test_a_stuck_ticket_killed_by_the_factory_drops_stuck(self):
+        tid = self.stuck_ticket()
+        with self.f() as f:
+            f.move(tid, factory.KILLED, "wonka")
+        self.assert_finished_clean(tid)
+
+    def test_a_stuck_ticket_dragged_to_wont_do_drops_stuck(self):
+        tid = self.stuck_ticket()
+        self.edit_note(tid, lambda t: t.replace("✉️-Inbox", "🫐-Wont-Do"))
+        self.tick()
+        self.assert_finished_clean(tid)
+
     def failing_mdlint(self):
         lint = self.tmp / "mdlint"
         lint.write_text("#!/bin/sh\necho 'stdin:1 error MD041/first-line-heading/first-line-h1 First line' >&2\nexit 1\n")

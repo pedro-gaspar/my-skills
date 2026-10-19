@@ -281,13 +281,14 @@ class Factory:
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
-        if dst in (("shipped", "done"), KILLED):
+        final = dst in (("shipped", "done"), KILLED)
+        if final:
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
-        if by != "wonka" and t.pop("stuck", None):
-            body = note.drop_section(body, "stuck")  # merged, closed or moved by a human: nothing left to retry
+        if (by != "wonka" or final) and t.pop("stuck", None):
+            body = note.drop_section(body, "stuck")  # finished, or moved by a human: nothing left to retry
         self.write(tid, meta, body)
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
-        if by != "wonka":
+        if by != "wonka" or final:
             t.pop("retries", None)
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             t.pop("cleanup", None)  # the flag reflects only this attempt
