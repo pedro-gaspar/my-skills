@@ -253,6 +253,11 @@ def _pr_mark(tid):
     return f"🎫 **Golden ticket:** {tid}"
 
 
+def pr_title(tid, meta):
+    """`[KEY-1] title` when the ticket has a Jira key, else `[WONKA-00001] title`."""
+    return f"[{meta.get('jira') or tid}] {meta.get('title', '')}"
+
+
 def pr_body(tid, meta, spec):
     ids = [_pr_mark(tid)]
     if meta.get("jira"):
@@ -972,7 +977,7 @@ class Factory:
             reused = bool(out)
             if not reused:
                 out = gh("pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
-                         "--title", f"{tid}: {meta.get('title', '')}",
+                         "--title", pr_title(tid, meta),
                          "--body", pr_body(tid, meta, spec))
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())

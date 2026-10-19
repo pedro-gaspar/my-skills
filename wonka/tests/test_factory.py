@@ -217,7 +217,8 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         args = Path(f"{self.pr_state}.args").read_text()
         self.assertIn(f"🎫 **Golden ticket:** {tid}  \n🎟️ **Jira:** CALC-42\n\nAdd hello.sh", args)
-        self.assertIn(f"{tid}: Add a hello script", args)
+        self.assertIn("[CALC-42] Add a hello script\n", args)
+        self.assertNotIn(tid + "] ", args)
 
     def test_pr_opens_as_a_draft(self):
         tid = self.add()
@@ -236,6 +237,7 @@ class FactoryTest(unittest.TestCase):
         args = Path(f"{self.pr_state}.args").read_text()
         self.assertIn(f"🎫 **Golden ticket:** {tid}\n\nAdd hello.sh", args)
         self.assertNotIn("Jira", args)
+        self.assertIn(f"[{tid}] Add a hello script\n", args)
 
     def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
         tid = self.add()
