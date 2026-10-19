@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,8 @@ from .store import WonkaError
 
 ROOT = Path(__file__).resolve().parent.parent
 LINK = Path.home() / ".local" / "bin" / "wonka"
+# handled by hand: argparse would mangle `--` and the options meant for the command
+PASSTHROUGH = {"git": "gitwrap", "test": "testrun"}  # subcommand -> module in this package with main(argv)
 
 
 def ensure_link():
@@ -296,12 +299,9 @@ def parser():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv[:1] in (["git"], ["test"]):  # by hand: argparse would mangle `--` and the options meant for the command
+    if argv[:1] and argv[0] in PASSTHROUGH:
         try:
-            if argv[0] == "git":
-                from .gitwrap import main as run_main
-            else:
-                from .testrun import main as run_main
+            run_main = importlib.import_module(f".{PASSTHROUGH[argv[0]]}", __package__).main
             return run_main(argv[1:])
         except WonkaError as e:
             store.log(f"{argv[0]} {' '.join(argv[1:3])}: {e}")
