@@ -515,13 +515,16 @@ class Factory:
         """Every write re-renders the banner and the factory log from the JSON state."""
         t = self.ticket(tid)
         meta["blocked_by"] = ", ".join(t.get("blocked_by") or [])  # mirror of the state; a hand edit is overwritten
-        body = note.set_banner(body, banner.render(tid, t, meta, self.cfg))
+        waiting, dead = self._blockers(tid)
+        body = note.set_banner(body, banner.render(tid, t, meta, self.cfg, waiting=waiting, dead=dead))
         body = note.set_section(body, "log", banner.log(t))
         note.write(self.path(tid), meta, body)
 
     def summary(self, tid):
         """What a human or agent should read after a command: where the ticket is and what comes next."""
-        return f"{tid}: {fmt(self.state(tid))}: {banner.headline(tid, self.ticket(tid), self.read(tid)[0], self.cfg)}"
+        waiting, dead = self._blockers(tid)
+        head = banner.headline(tid, self.ticket(tid), self.read(tid)[0], self.cfg, waiting=waiting, dead=dead)
+        return f"{tid}: {fmt(self.state(tid))}: {head}"
 
     def log_event(self, tid, why, by="wonka"):
         self.ticket(tid)["history"].append({"at": _iso(now()), "by": by, "why": why})
@@ -535,8 +538,57 @@ class Factory:
         return bool(t) and (t["last_valid"]["status"], t["last_valid"]["phase"]) == ("shipped", "ready")
 
     def waiting_on(self, tid):
-        """Blockers of tid that have not merged yet. Part 2 (tick) holds a ticket while this is non-empty."""
+        """Blockers of tid that have not merged yet. tick holds a ticket while this is non-empty."""
         return [b for b in (self.ticket(tid).get("blocked_by") or []) if not self._finished(b)]
+
+    def _pre_baking(self, tid):
+        s = self.state(tid)
+        return s[0] in ("triage", "drafting") or s == ("planned", "pending")
+
+    def _dead(self, tid):
+        """A blocker that will never merge: Won't do (killed, closed, lost note) or unknown."""
+        return tid not in self.db["tickets"] or self.state(tid) == KILLED
+
+    def _blockers(self, tid):
+        """(unfinished blockers, those of them that are Won't do)."""
+        waiting = self.waiting_on(tid)
+        return waiting, [b for b in waiting if self._dead(b)]
+
+    def _blocked(self, tid):
+        return bool(self.waiting_on(tid))
+
+    def _watch_blockers(self, tid):
+        """Keep a blocked ticket's note fresh, log 'Unblocked' once, report a Won't-do blocker once."""
+        t = self.ticket(tid)
+        if not self._pre_baking(tid):
+            t.pop("waiting_seen", None)
+            t.pop("dead_reported", None)
+            return []
+        prev = t.get("waiting_seen") or []
+        if not (t.get("blocked_by") or prev):
+            return []
+        waiting, dead = self._blockers(tid)
+        reported = [b for b in t.get("dead_reported") or [] if b in dead]
+        fresh = [b for b in dead if b not in reported]
+        events = []
+        for key, val in (("waiting_seen", waiting), ("dead_reported", reported + fresh)):
+            if val:
+                t[key] = val
+            else:
+                t.pop(key, None)
+        merged = [b for b in prev if self._finished(b)]
+        if prev and not waiting and merged:
+            self.log_event(tid, f"Unblocked: {', '.join(merged)} merged")  # rewrites the note
+            events.append(f"{tid}: ⛓️ unblocked, {', '.join(merged)} merged")
+        elif waiting != prev and self.path(tid).exists():
+            meta, body = self.read(tid)
+            self.write(tid, meta, body)  # the banner follows the set of unfinished blockers
+        for b in fresh:
+            why = f"⛓️ blocked by {b}, which is Won't do: needs a human (wonka unblock {tid} {b}, or kill it)"
+            self.log_event(tid, why)
+            notify(tid, f"blocked by {b}, which is Won't do: unblock or kill it")
+            events.append(f"{tid}: {why}")
+        return events
 
     def _check_blockers(self, tid, blockers):
         for b in blockers:
@@ -559,7 +611,7 @@ class Factory:
 
     def _check_editable(self, tid):
         s = self.state(tid)
-        if s[0] in ("idea", "triage", "drafting") or s == ("planned", "pending"):
+        if s[0] == "idea" or self._pre_baking(tid):
             return
         raise WonkaError(f"{tid} is {fmt(s)}: blockers can only change before baking starts (Idea, Triage, Drafting or Planned)")
 
@@ -2029,7 +2081,10 @@ class Factory:
         return f"{tid}: squirrel-{squirrel} done, every squirrel reported"
 
     def _count(self, status):
-        return sum(1 for k in self.live() if self.state(k) in ((status, "pending"), (status, "progress")))
+        """Tickets an Oompa-Loompa works on in this column. A blocked ticket with no running job uses no slot."""
+        return sum(1 for k in self.live()
+                   if self.state(k) in ((status, "pending"), (status, "progress"))
+                   and not (self._blocked(k) and not self.ticket(k).get("job_started_at")))
 
     def live(self):
         return sorted(k for k, t in self.db["tickets"].items() if not t.get("archived"))
@@ -2068,16 +2123,21 @@ class Factory:
             seen = set(self.db.get("foreign_notes", []))
             events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
             self.db["foreign_notes"] = foreign
+            for k in self.live():
+                out = self._safe(k, self._watch_blockers)
+                events += out if isinstance(out, list) else [out]
             for src, dst, limit in ((("triage", "ready"), ("drafting", "pending"), "drafting"),
                                     (("planned", "pending"), ("baking", "pending"), "baking")):
                 for k in self.live():
-                    if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
+                    if self.state(k) == src and not self._blocked(k) and self._count(dst[0]) < self.cfg["wip"][limit]:
                         events.append(self._safe(k, lambda k: self.move(k, dst, "wonka") or f"{k}: → {fmt(dst)}"))
             jobs = []
             for k in self.live():
                 t, s = self.ticket(k), self.state(k)
                 if t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
                     continue
+                if s in (("drafting", "pending"), ("drafting", "progress"), ("baking", "pending")) and self._blocked(k):
+                    continue  # waits for its blockers to merge; an analyst already running is not interrupted
                 if s == ("shipped", "pending"):
                     events.append(self._safe(k, self.ship))
                 elif s == ("triage", "pending") and self._triaging() >= self.cfg["wip"].get("triage", 2):
@@ -2091,6 +2151,7 @@ class Factory:
             stale = [k for k in self.live() if self.ticket(k).get("job_started_at")
                      and _age(self.ticket(k)["job_started_at"]) > stale_after]
             awaiting = [k for k in self.live() if self.state(k)[1] == "awaiting"]
+            awaiting += [k for k in self.live() if k not in awaiting and self._pre_baking(k) and self._blockers(k)[1]]
             return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale}
         finally:
             self._base_cache = None

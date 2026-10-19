@@ -21,6 +21,21 @@ class BannerTest(unittest.TestCase):
         t["blocked_by"] = ["WONKA-00001"]
         self.assertIn("⛓️ blocked by [[WONKA-00001]]", banner.render("WONKA-00002", t, {"size": "s"}, cfg))
 
+    def test_blocked_headline(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "triage", "phase": "ready"}, "project": "app", "history": []}
+        w = ["WONKA-00001"]
+        text = banner.render("WONKA-00002", t, {"size": "s"}, cfg, waiting=w)
+        self.assertIn("> [!info] ⛓️ Blocked by WONKA-00001", text)
+        text = banner.render("WONKA-00002", t, {"size": "s"}, cfg, waiting=w, dead=w)
+        self.assertIn("[!warning]", text)
+        self.assertIn("Won't do", text)
+        t["last_valid"] = {"status": "baking", "phase": "progress"}
+        t["worktree"] = "/w"
+        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg, waiting=w), "A builder Oompa-Loompa is baking")
+        t["last_valid"] = {"status": "triage", "phase": "ready"}
+        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg), "Ready for the Inventing Room")
+
     def test_log_is_newest_first_and_folded(self):
         t = {"history": [
             {"at": "2026-10-18T10:00:00+00:00", "from": "triage/pending", "to": "triage/ready", "by": "triage"},

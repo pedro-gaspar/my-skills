@@ -54,7 +54,7 @@ and Jira key default to the parent's (the PR repo only when the child builds in 
    `wonka retry` yourself for a finished agent.
 4. For each `stale` id with no agent of yours still running, run `wonka retry <id>`.
 5. Reply with a short factory report, Wonka-style: open with one line of film flavour (🎩🍫🎫🐿️), then events,
-   jobs dispatched, and tickets awaiting a human (🙋 they tick checkboxes in the note). Keep the facts plain; the
+   jobs dispatched, and tickets awaiting a human (🙋 they tick checkboxes in the note; this includes tickets blocked by a Won't-do ticket, the `⛓️ … Won't do: needs a human` events: report them with the `wonka unblock` / kill hint). Keep the facts plain; the
    humour is one line, never in the way. Nothing happened? Say so in one line ("🍫 All quiet on the chocolate
    river.").
 
