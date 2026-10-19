@@ -654,6 +654,11 @@ class Factory:
         try:
             if not t["pr_repo"]:
                 raise WonkaError("no pr_repo: set it with `wonka set ID pr_repo owner/name`")
+            if t.get("pr_url"):  # a retry or a fix round: the human may have closed the PR meanwhile
+                state = (gh("pr", "view", t["pr_url"], "--json", "state", "-q", ".state").split() or [""])[0]
+                if state == "CLOSED":
+                    self.move(tid, KILLED, "github", "PR closed without merging")
+                    return f"{tid}: PR closed"
             try:
                 git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
             except WonkaError as e:

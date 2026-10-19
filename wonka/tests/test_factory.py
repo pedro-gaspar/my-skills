@@ -2167,6 +2167,42 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertEqual(self.f_ticket(tid)["retries"], 1)
 
+    def close_pr(self):
+        """The human closes the PR on GitHub: `pr view` says CLOSED and `pr list --state open` finds nothing."""
+        self.pr_state.write_text("CLOSED")
+        Path(f"{self.pr_state}.open").unlink(missing_ok=True)
+
+    def assert_closed_pr_not_reopened(self, tid, branch):
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "no second PR")
+        last = self.history(tid)[-1]
+        self.assertEqual((last["why"], last["by"]), ("PR closed without merging", "github"))
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "a closed PR keeps its branch")
+
+    def test_pr_closed_during_fixer_goes_to_wont_do(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        self.fixer_job(tid)
+        self.close_pr()
+        with self.f() as f:
+            f.finished(tid, "wonka:oompa-loompa-fixer")
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.tick()
+        self.assert_closed_pr_not_reopened(tid, branch)
+
+    def test_pr_closed_during_fix_round_goes_to_wont_do(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "fix.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.close_pr()
+        self.tick()
+        self.assert_closed_pr_not_reopened(tid, branch)
+
     def test_leftover_merge_is_aborted_on_start(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
