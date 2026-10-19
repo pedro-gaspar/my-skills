@@ -493,15 +493,14 @@ class Factory:
 
     def ensure_worktree(self, tid):
         t = self.ticket(tid)
-        if t["worktree"] and Path(t["worktree"]).exists():
+        if t["worktree"] and Path(t["worktree"]).is_dir():
             return
         title = self.read(tid)[0].get("title", "")
         path = store.worktrees_dir() / t["project"] / tid
         branch = t["branch"] or f"wonka/{tid}-{slug(title)}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        if t["worktree"]:  # the folder was deleted from outside
-            self.log_event(tid, f"Worktree folder was gone, recreating it from {branch}: {t['worktree']}")
-        if not path.exists():
+        recreated = bool(t["worktree"])  # the folder was deleted from outside
+        if not path.is_dir():
             git("worktree", "prune", cwd=t["repo"])  # forget a registration whose folder was deleted
         if _ref_exists(t["repo"], f"refs/heads/{branch}"):
             git("worktree", "add", str(path), branch, cwd=t["repo"])
@@ -509,6 +508,8 @@ class Factory:
             start = self._latest_base(t)
             git("worktree", "add", "--no-track", "-b", branch, str(path), start, cwd=t["repo"])
             t["base_ref"] = start
+        if recreated:
+            self.log_event(tid, f"Worktree folder was gone, recreated it from {branch}: {path}")
         t["worktree"], t["branch"] = str(path), branch
 
     def _latest_base(self, t):
@@ -588,13 +589,13 @@ class Factory:
         if not t.get("worktree"):
             return True
         agents = self._held(tid)
-        if agents and Path(t["worktree"]).exists():
+        if agents and Path(t["worktree"]).is_dir():
             t["cleanup"] = True
             if not quiet:
                 self.log_event(tid, f"Worktree kept until the running {', '.join(agents)} ends: {t['worktree']}. "
                                     "Wonka retries each tick")
             return False
-        if Path(t["worktree"]).exists():
+        if Path(t["worktree"]).is_dir():
             try:
                 git("worktree", "remove", t["worktree"], cwd=t["repo"])
             except WonkaError as e:
