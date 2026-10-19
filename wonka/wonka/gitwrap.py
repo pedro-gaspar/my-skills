@@ -25,8 +25,10 @@ SHORT_WITH_VALUE = {"commit": "mFCct"}                # rest of the cluster, or 
 LONG_WITH_VALUE = {"commit": ("--message", "--author", "--date", "--reuse-message", "--reedit-message", "--fixup",
                               "--squash", "--cleanup", "--trailer", "--pathspec-from-file")}
 NO_EXTERNAL = ("diff", "log", "show", "blame")        # these get --no-ext-diff --no-textconv injected
+# only identity and dates pass through: every GIT_CONFIG_* (GLOBAL, SYSTEM, NOSYSTEM, PARAMETERS, COUNT/KEY/VALUE)
+# is dropped, since a config the caller picks can run programs (core.pager, gpg.program, filters, hooksPath)
 KEEP_ENV = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
-            "GIT_COMMITTER_DATE", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")
+            "GIT_COMMITTER_DATE")
 
 
 def _check_merge(args):

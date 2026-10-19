@@ -72,9 +72,12 @@ class CheckTest(unittest.TestCase):
 
     def test_env_is_scrubbed(self):
         out = env({"PATH": "/bin", "GIT_DIR": "/x", "GIT_EXTERNAL_DIFF": "sh",
-                   "GIT_CONFIG_PARAMETERS": "'core.pager'='sh'", "GIT_CONFIG_COUNT": "1", "GIT_AUTHOR_NAME": "t"})
-        self.assertEqual(out, {"PATH": "/bin", "GIT_AUTHOR_NAME": "t", "GIT_EDITOR": "true", "GIT_PAGER": "cat",
-                               "GIT_TERMINAL_PROMPT": "0"})
+                   "GIT_CONFIG_PARAMETERS": "'core.pager'='sh'", "GIT_CONFIG_COUNT": "1", "GIT_AUTHOR_NAME": "t",
+                   "GIT_CONFIG_GLOBAL": "/tmp/evil.gitconfig", "GIT_CONFIG_SYSTEM": "/tmp/evil",
+                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_KEY_0": "core.pager", "GIT_CONFIG_VALUE_0": "sh",
+                   "GIT_COMMITTER_EMAIL": "t@t"})
+        self.assertEqual(out, {"PATH": "/bin", "GIT_AUTHOR_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+                               "GIT_EDITOR": "true", "GIT_PAGER": "cat", "GIT_TERMINAL_PROMPT": "0"})
 
     def test_write_states_follow_the_job_map(self):
         self.assertEqual(gitwrap.WRITE_STATES, {JOB_AGENTS["oompa-loompa-builder"], JOB_AGENTS["oompa-loompa-fixer"]})
@@ -276,6 +279,33 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("-C") + 1], str(wt))
         self.assertIn(f"--git-dir={gitwrap.git_dir(self.repo, wt)}", argv)
         self.assertEqual(sh("git", "--git-dir", str(gitwrap.git_dir(self.repo, wt)), "rev-parse", "HEAD", cwd=wt), head)
+
+    def test_global_config_from_env_is_ignored(self):
+        tid = self.add()
+        cfg = self.tmp / "evil.gitconfig"
+        cfg.write_text("[core]\n\tpager = sh\n")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(cfg), "GIT_CONFIG_NOSYSTEM": "1"}), \
+                mock.patch.object(gitwrap.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            self.assertEqual(self.git(tid, "log", "--oneline")[0], 0)
+        kw = run.call_args[1]
+        self.assertNotIn("GIT_CONFIG_GLOBAL", kw["env"])
+        self.assertNotIn("GIT_CONFIG_NOSYSTEM", kw["env"])
+        self.assertEqual(kw["env"]["GIT_AUTHOR_NAME"], "t")
+
+    def test_global_config_filter_never_runs(self):
+        """A caller points GIT_CONFIG_GLOBAL at a config whose clean filter writes a file: wonka git drops it."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        pwned = self.tmp / "pwned"
+        cfg = self.tmp / "evil.gitconfig"
+        cfg.write_text(f'[filter "x"]\n\tclean = touch {pwned}; cat\n')
+        (wt / ".gitattributes").write_text("* filter=x\n")
+        (wt / "README.md").write_text("changed\n")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(cfg)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.git(tid, "diff", "--stat")[0], 0)
+            self.assertEqual(self.git(tid, "status")[0], 0)
+        self.assertFalse(pwned.exists())
 
     def test_injected_flags_work_with_real_git(self):
         tid = self.add()
