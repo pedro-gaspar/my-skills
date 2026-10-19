@@ -41,14 +41,14 @@ not the absolute `code` path: the builder works in a different worktree.
    ```
 6. **xs, s or m**:
    - Write the detailed plan: goal; a `## Decisions` section: every answered question (from `## ✅ Answers` and ticked
-      `## ❓ Questions`, triage's and yours) as `question → answer`, plus each real choice you made yourself between
-      alternatives, one line each with the reason (name it exactly `## Decisions`, never like a review-round heading, or
-      `wonka plan` takes it for the review log); context you found (repo-relative paths and line refs), step-by-step
-      changes, tests to add, how to verify (name the exact test command, written to run from any directory with paths
-      from the repo root and no `cd`, e.g. `python3 -m unittest discover -s wonka -t wonka`, since squirrels run it
-      against their worktree, and run it in `code` first to confirm it finds and runs tests: a run that reports 0 tests
-      means the command is wrong), risks. A builder Oompa-Loompa with no other context builds from this alone.
-      `wonka plan` writes it to the job's `plan` path (it need not exist yet):
+     `## ❓ Questions`, triage's and yours) as `question → answer`, plus each real choice you made yourself between
+     alternatives, one line each with the reason (name it exactly `## Decisions`, never like a review-round heading, or
+     `wonka plan` takes it for the review log); context you found (repo-relative paths and line refs), step-by-step
+     changes, tests to add, how to verify (name the exact test command, written to run from any directory with paths
+     from the repo root and no `cd`, e.g. `python3 -m unittest discover -s wonka -t wonka`, since squirrels run it
+     against their worktree, and run it in `code` first to confirm it finds and runs tests: a run that reports 0 tests
+     means the command is wrong), risks. A builder Oompa-Loompa with no other context builds from this alone.
+     `wonka plan` writes it to the job's `plan` path (it need not exist yet):
      ```bash
      wonka plan <id> <<'EOF'
      ...plan...
