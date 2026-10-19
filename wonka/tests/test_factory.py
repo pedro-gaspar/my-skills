@@ -2570,6 +2570,13 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("retries", t)
         self.assertNotIn("conflict_error", t)
         self.assertEqual(t["conflict_fixes"], 1)
+        # the next conflict episode starts from a full budget: its first failed start is try 1/3
+        sh("git", "remote", "set-url", "origin", str(self.tmp / "gone.git"), cwd=self.repo)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        self.tick()
+        t = self.f_ticket(tid)
+        self.assertEqual(t["retries"], 1)
+        self.assertTrue(t["conflict_error"].startswith("try 1/3: "), t["conflict_error"])
 
     def test_failed_fetch_keeps_the_ticket_awaiting(self):
         tid = self.add()
