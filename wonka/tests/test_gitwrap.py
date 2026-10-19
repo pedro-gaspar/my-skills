@@ -224,7 +224,7 @@ class WrapperTest(unittest.TestCase):
         with self.f() as f:
             return f.state(tid)
 
-    def to_ready(self, tid):
+    def to_planned(self, tid):
         self.tick()
         with self.f() as f:
             f.triage(tid, "s")
@@ -236,7 +236,7 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("planned", "pending"))
 
     def to_baking(self, tid):
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
         self.dispatch = job["dispatch"]
@@ -272,7 +272,7 @@ class WrapperTest(unittest.TestCase):
 
     def test_write_refused_outside_baking(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         code, err = self.git(tid, "--dispatch", "1", "commit", "-m", "x")
         self.assertEqual(code, 1)
         self.assertIn("only runs while the ticket is baking", err)
