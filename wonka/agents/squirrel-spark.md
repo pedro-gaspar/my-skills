@@ -1,7 +1,7 @@
 ---
 name: squirrel-spark
 description: Wonka Spark reviewer. Checks a baked golden ticket for Spark problems and reports good nut or bad nut. Dispatched by /wonka tick.
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Bash
 ---
 

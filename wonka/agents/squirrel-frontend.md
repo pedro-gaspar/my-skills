@@ -1,7 +1,7 @@
 ---
 name: squirrel-frontend
 description: Wonka frontend reviewer. Checks a baked golden ticket for frontend problems and reports good nut or bad nut. Dispatched by /wonka tick.
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Bash
 ---
 
