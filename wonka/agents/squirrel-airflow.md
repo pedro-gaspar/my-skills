@@ -1,7 +1,7 @@
 ---
 name: squirrel-airflow
 description: Wonka Airflow reviewer. Checks a baked golden ticket for Airflow problems and reports good nut or bad nut. Dispatched by /wonka tick.
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Bash
 ---
 

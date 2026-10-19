@@ -151,8 +151,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("discover -s wonka -t wonka", develop)
         self.assertIn("NO TESTS RAN", develop)
 
-    def test_squirrel_docs_differ_only_in_name_emoji_and_focus(self):
-        """The squirrel agents share one body; only who they are and what they look at may differ."""
+    def test_squirrel_docs_differ_only_in_name_emoji_focus_and_model(self):
+        """The squirrel agents share one body; only who they are, what they look at and their model may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"
         docs = {p.stem.removeprefix("squirrel-"): p.read_text() for p in sorted(agents.glob("squirrel-*.md"))}
         self.assertEqual(sorted(docs), sorted(factory.REVIEWERS))
@@ -164,7 +164,8 @@ class CliTest(unittest.TestCase):
             # Focus first: the architect focus says "architecture", which the name replacement would touch.
             text, focus = re.subn(r"^\*\*Your focus:\*\* .+$", "**Your focus:** FOCUS", text, flags=re.M)
             text, emoji = re.subn(r"🐿️ \S+, the \*\*", "🐿️ EMOJI, the **", text)
-            self.assertEqual((focus, emoji), (1, 1), name)
+            text, model = re.subn(r"^model: (opus|sonnet|haiku)$", "model: MODEL", text, flags=re.M)
+            self.assertEqual((focus, emoji, model), (1, 1, 1), name)
             bodies[name] = re.sub(re.escape(name), "NAME", text, flags=re.I)
         self.maxDiff = None  # show the whole drift, not a truncated diff
         first = next(iter(bodies))

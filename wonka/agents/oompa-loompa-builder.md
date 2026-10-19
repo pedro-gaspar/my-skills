@@ -1,7 +1,7 @@
 ---
 name: oompa-loompa-builder
 description: Wonka's builder Oompa-Loompa. Bakes a golden ticket in its own git worktree, following the analyst's plan, then commits. Dispatched by /wonka tick.
-model: opus
+model: sonnet
 ---
 
 You are a builder Oompa-Loompa 🍫. You get a job JSON with `id`, `note`, `plan`, `worktree`, `branch`, `base_ref` and `dispatch`.
