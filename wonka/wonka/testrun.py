@@ -1,5 +1,6 @@
 """wonka test: run a project's test command in a ticket's worktree, one run per project at a time."""
 
+import contextlib
 import datetime
 import fcntl
 import json
@@ -103,9 +104,15 @@ def main(argv):
                              "started": datetime.datetime.now().isoformat(timespec="seconds")}))
         fh.flush()
         try:
-            rc = subprocess.run(cmd, cwd=path, stdin=subprocess.DEVNULL).returncode
-        except FileNotFoundError:
-            raise WonkaError(f"{cmd[0]}: command not found in {path}")
-        except PermissionError:
-            raise WonkaError(f"{cmd[0]} is not executable")
-        return 128 - rc if rc < 0 else rc
+            try:
+                rc = subprocess.run(cmd, cwd=path, stdin=subprocess.DEVNULL).returncode
+            except FileNotFoundError:
+                raise WonkaError(f"{cmd[0]}: command not found in {path}")
+            except PermissionError:
+                raise WonkaError(f"{cmd[0]} is not executable")
+            return 128 - rc if rc < 0 else rc
+        finally:
+            with contextlib.suppress(OSError):  # clear the holder while we still hold the lock, so no waiter reads it stale
+                fh.seek(0)
+                fh.truncate()
+                fh.flush()
