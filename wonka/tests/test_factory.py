@@ -1583,6 +1583,39 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(any("no notes under it" in h.get("why", "") for h in self.history(tid)))
         self.assertNotIn("change_requests", self.f_ticket(tid))
 
+    def assert_warned(self, tick, tid, text):
+        warns = [e for e in tick["events"] if e.startswith(f"{tid}: ⚠️")]
+        self.assertTrue(warns, tick["events"])
+        self.assertIn(text, warns[0])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("change_requests", self.f_ticket(tid))
+
+    def test_request_changes_with_invalid_gh_json_warns_and_changes_nothing(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        other = self.add()
+        Path(f"{self.pr_state}.comments").write_text("not json")
+        tick = self.request_changes(tid, "fix it")
+        self.assert_warned(tick, tid, "invalid JSON")
+        self.assertTrue(any(j["id"] == other for j in tick["jobs"]), "the other ticket still moves")
+        self.pr_feedback(comments=[{"author": {"login": "alice"}, "authorAssociation": "OWNER", "body": "ok",
+                                    "createdAt": "2026-01-01T00:00:00Z"}])
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_request_changes_with_wrong_shape_gh_json_warns(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        Path(f"{self.pr_state}.inline").write_text('{ "message": "Not Found" }')
+        self.assert_warned(self.request_changes(tid, "fix it"), tid, "expected list")
+
+    def test_request_changes_with_bad_timestamp_warns(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_feedback(comments=[{"author": {"login": "alice"}, "authorAssociation": "OWNER", "body": "hi",
+                                    "createdAt": "yesterday"}, "stray string"])
+        self.assert_warned(self.request_changes(tid, "fix it"), tid, "timestamp")
+
     def test_second_change_request_reads_only_new_comments(self):
         tid = self.add()
         self.to_awaiting_merge(tid)

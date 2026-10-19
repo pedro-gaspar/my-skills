@@ -68,6 +68,26 @@ def gh(*args, cwd=None):
     return _run([os.environ.get("WONKA_GH", "gh"), *args], cwd=cwd)
 
 
+def gh_json(*args, default, cwd=None):
+    """gh output parsed as JSON of the same type as `default` (used when gh prints nothing)."""
+    out = gh(*args, cwd=cwd)
+    what = " ".join(args[:2])
+    try:
+        data = json.loads(out) if out else default
+    except ValueError as e:
+        raise WonkaError(f"gh {what} returned invalid JSON: {e}") from e
+    if not isinstance(data, type(default)):
+        raise WonkaError(f"gh {what} returned {type(data).__name__}, expected {type(default).__name__}")
+    return data
+
+
+def _parse_stamp(stamp, what):
+    try:
+        return dt.datetime.fromisoformat(stamp)
+    except (TypeError, ValueError) as e:
+        raise WonkaError(f"unreadable {what} timestamp {stamp!r}") from e
+
+
 def _json_pages(text):
     """Every item from `gh api --paginate` output, which is one JSON array or several concatenated ones."""
     dec, items, i = json.JSONDecoder(), [], 0
@@ -78,7 +98,9 @@ def _json_pages(text):
         if i >= len(text):
             return items
         page, i = dec.raw_decode(text, i)
-        items.extend(page if isinstance(page, list) else [page])
+        if not isinstance(page, list):
+            raise ValueError(f"page is {type(page).__name__}, expected list")
+        items.extend(page)
 
 
 def slug(text):
@@ -611,25 +633,34 @@ class Factory:
         the newest GitHub timestamp among everything fetched (filtered or not), or None when nothing has one."""
         t = self.ticket(tid)
         num = t["pr_url"].rstrip("/").rsplit("/", 1)[-1]
-        view = json.loads(gh("pr", "view", t["pr_url"], "--json", "comments,reviews") or "{}")
-        inline = _json_pages(gh("api", "--paginate", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100"))
+        view = gh_json("pr", "view", t["pr_url"], "--json", "comments,reviews", default={})
+        try:
+            inline = _json_pages(gh("api", "--paginate", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100"))
+        except ValueError as e:
+            raise WonkaError(f"gh api returned invalid JSON: {e}") from e
         items = []
         for c in view.get("comments") or []:
+            if not isinstance(c, dict):
+                continue
             items.append(((c.get("author") or {}).get("login"), c.get("authorAssociation"), c.get("body"),
                           c.get("createdAt"), ""))
         for r in view.get("reviews") or []:
+            if not isinstance(r, dict):
+                continue
             state = (r.get("state") or "").lower().replace("_", " ")
             items.append(((r.get("author") or {}).get("login"), r.get("authorAssociation"), r.get("body"),
                           r.get("submittedAt"), f" (review, {state})" if state else " (review)"))
-        for c in inline or []:
+        for c in inline:
+            if not isinstance(c, dict):
+                continue
             line = c.get("line") or c.get("original_line")
             where = f"{c.get('path')}:{line}" if line else f"{c.get('path')}"
             items.append(((c.get("user") or {}).get("login"), c.get("author_association"), c.get("body"),
                           c.get("created_at"), f" on `{where}`"))
-        cutoff = dt.datetime.fromisoformat(since) if since else None
+        cutoff = _parse_stamp(since, "changes cutoff") if since else None
         kept, skipped, newest = [], 0, None
         for who, assoc, text, stamp, kind in items:
-            at = dt.datetime.fromisoformat(stamp) if stamp else None
+            at = _parse_stamp(stamp, "PR comment") if stamp else None
             if at and (newest is None or at > newest):
                 newest = at
             if not (text or "").strip():
