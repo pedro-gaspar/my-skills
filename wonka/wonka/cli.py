@@ -45,7 +45,7 @@ def cmd_init(a):
         base.write_text((ROOT / "templates" / "Wonka.base").read_text().replace("{{folder}}", a.folder))
     ensure_link()
     show_config(cfg)
-    print(f"🎩 “Come with me, and you'll be in a world of pure imagination.”\n   Board {base}\n   State {store.home()}")
+    print(f"🎩 “Come with me, and you'll be in a world of pure imagination.”\n   🍫 Factory {base}\n   State {store.home()}")
 
 
 def show_config(cfg):
@@ -235,7 +235,7 @@ def parser():
     s.add_argument("status")
     s.add_argument("phase")
     s.add_argument("--why")
-    sub.add_parser("tick", help="reconcile the board and hand out jobs (JSON)")
+    sub.add_parser("tick", help="reconcile the factory and hand out jobs (JSON)")
     s = sub.add_parser("show", help="a ticket's JSON state")
     s.add_argument("id")
     sub.add_parser("status", help="one line per live ticket")

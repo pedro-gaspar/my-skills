@@ -79,7 +79,7 @@ def permission_checks(allow, dirs, want_dirs):
                        "~/.claude/settings.json (or settings.local.json):\n"
                        + json.dumps({"permissions": perms}, indent=2))
     else:
-        yield "ok", "Claude Code permissions for the CLI (agents run git through wonka git), worktrees and board"
+        yield "ok", "Claude Code permissions for the CLI (agents run git through wonka git), worktrees and factory folder"
     broad = [r for r in allow if r == "Bash(git)" or r.startswith(("Bash(git ", "Bash(git:"))]
     if broad:
         yield "warn", ("git allow rules are no longer needed: background agents run git through 'wonka git', which "
@@ -103,7 +103,7 @@ def checks():
         yield "fail", str(e)
         return
     board = store.board(cfg)
-    yield ("ok" if (board / "Wonka.base").exists() else "fail"), f"board {board / 'Wonka.base'}"
+    yield ("ok" if (board / "Wonka.base").exists() else "fail"), f"🍫 factory {board / 'Wonka.base'}"
     yield from _orphans(cfg)
     path = store.home() / store.STATE_FILE
     try:

@@ -601,7 +601,7 @@ class Factory:
             for f in rep.get("followups", []):
                 title = (f.get("title") or _default_title(f["idea"])).strip()
                 if title.casefold() in seen:
-                    self.log_event(tid, f"Follow-up already on the board, skipped: {title}")
+                    self.log_event(tid, f"Follow-up already in the factory, skipped: {title}")
                     continue
                 self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid)
                 seen.add(title.casefold())

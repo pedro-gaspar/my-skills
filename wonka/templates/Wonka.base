@@ -11,7 +11,7 @@ properties:
     displayName: Phase
 views:
   - type: kanban
-    name: 🏭 Factory floor
+    name: 🍫 Factory floor
     groupBy:
       property: status
       direction: ASC

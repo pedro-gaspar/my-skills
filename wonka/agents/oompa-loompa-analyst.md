@@ -50,7 +50,7 @@ not the absolute `code` path: the builder works in a different worktree.
      ...plan...
      EOF
      ```
-   - Write the spec summary (5–15 lines, for a human skimming the board):
+   - Write the spec summary (5–15 lines, for a human skimming the factory):
      ```bash
      wonka section <id> spec <<'EOF'
      ...summary...

@@ -152,6 +152,15 @@ class OrphansTest(unittest.TestCase):
         self.assertEqual(level, "warn")
         self.assertIn(f"{path}: unreadable (", msg)
 
+    def test_factory_line_names_wonka_base(self):
+        self.board.mkdir(parents=True)
+        (self.board / "Wonka.base").write_text("views: []\n")
+        with mock.patch.dict(doctor.os.environ, {"WONKA_HOME": str(self.tmp / "home")}), \
+                mock.patch.object(doctor.store, "load_config", return_value=self.cfg), \
+                mock.patch.object(doctor, "_ok", return_value=True), \
+                mock.patch.object(doctor, "_permissions", return_value=([], [])):
+            result = [c for c in doctor.checks() if c[1].startswith("🍫 factory ")]
+        self.assertEqual(result, [("ok", f"🍫 factory {self.board / 'Wonka.base'}")])
 
 
 class NpxCheckTest(unittest.TestCase):
