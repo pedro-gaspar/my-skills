@@ -17,6 +17,7 @@ SAMPLES = [
     "Para\n---\nmore",
     "some text\n2024. was a year",
     "text\n```\nx\n- a\n```\nmore",
+    "Para\n1.\n2. b",
 ]
 
 
@@ -52,6 +53,25 @@ class SpaceListsTest(unittest.TestCase):
             with self.subTest(text=t):
                 once = mdlint.space_lists(t)
                 self.assertEqual(mdlint.space_lists(once), once)
+
+    def test_empty_ordered_item_does_not_interrupt_a_paragraph(self):
+        for t in ["Para\n1.\n2. b", "Para\n1.   \n2. b", "Para\n\n1.\n2. b"]:
+            with self.subTest(text=t):
+                self.assertEqual(mdlint.space_lists(t), t)
+        self.assertEqual(mdlint.space_lists("Para\n1. a\n2. b"), "Para\n\n1. a\n2. b")
+
+    def test_indented_fence_marker_outside_a_list_is_not_a_fence(self):
+        for mark in ["```", "~~~"]:
+            with self.subTest(mark=mark):
+                self.assertEqual(mdlint.space_lists(f"Text\n\n    {mark}\n\nIntro:\n- a\n- b"),
+                                 f"Text\n\n    {mark}\n\nIntro:\n\n- a\n- b")
+        self.assertEqual(mdlint.space_lists("Text\n\n\t```\n\nIntro:\n- a"), "Text\n\n\t```\n\nIntro:\n\n- a")
+        t = "Text\n   ```\n- a\n```"
+        self.assertEqual(mdlint.space_lists(t), t)
+
+    def test_indented_fence_inside_a_list_is_still_a_fence(self):
+        t = "- a\n\n      ```\n      x\n      ```\n- b"
+        self.assertEqual(mdlint.space_lists(t), t)
 
 
 class MdlintTest(unittest.TestCase):
