@@ -175,7 +175,7 @@ class CliTest(unittest.TestCase):
         """Without it the factory cannot tell a late agent from the live one, so argparse refuses the call."""
         for argv in (["ask", "WONKA-00001", "--question", "Q? | a | *b"], ["plan", "WONKA-00001"],
                      ["section", "WONKA-00001", "spec"], ["resolved", "WONKA-00001"],
-                     ["drafted", "WONKA-00001", "--size", "s"], ["baked", "WONKA-00001"],
+                     ["drafted", "WONKA-00001", "--size", "s"], ["baked", "WONKA-00001"], ["pr-body", "WONKA-00001"],
                      ["triage", "WONKA-00001", "--size", "s"],
                      ["report", "WONKA-00001", "--squirrel", "architect", "--verdict", "good"],
                      ["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend"]):
@@ -185,7 +185,7 @@ class CliTest(unittest.TestCase):
 
     def test_agent_docs_pass_the_dispatch(self):
         root = Path(cli.__file__).resolve().parent.parent
-        for name, verbs in (("oompa-loompa-analyst", ("ask", "plan", "section", "drafted")),
+        for name, verbs in (("oompa-loompa-builder", ("pr-body", "baked")), ("oompa-loompa-analyst", ("ask", "plan", "section", "drafted")),
                             ("oompa-loompa-fixer", ("resolved",)), ("oompa-loompa-triage", ("triage",))):
             lines = (root / "agents" / f"{name}.md").read_text().splitlines()
             for verb in verbs:

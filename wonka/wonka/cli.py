@@ -145,6 +145,9 @@ def run(a, f):
         msg = f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r], a.dispatch,
                         split=a.split)
         print(msg or f.summary(a.id))
+    elif c == "pr-body":
+        msg = f.write_pr_body(a.id, sys.stdin.read(), a.dispatch)
+        print(msg or f"📝 {f.pr_body_path(a.id)}")
     elif c == "baked":
         print(f.baked(a.id, a.dispatch) or f.summary(a.id))
     elif c == "resolved":
@@ -246,6 +249,9 @@ def parser():
                                                         "per repo already added with wonka add --repo <path> --parent <id>")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     sub.add_parser("repos", help="the repos the factory knows: project, local path, PR repo")
+    s = sub.add_parser("pr-body", help="builder: the PR description (markdown) on stdin, written from the repo's PR template")
+    s.add_argument("id")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)

@@ -118,7 +118,17 @@ class FactoryTest(unittest.TestCase):
             f.drafted(tid, size, list(reviewers))
         self.assertEqual(self.state(tid), ("planned", "pending"))
 
-    def bake(self, tid, filename="hello.sh"):
+    TEMPLATE = "## Summary\n<!-- What changed and why -->\n\n## Jira\n<!-- Link the ticket -->\n\n## Screenshots\n<!-- Optional: UI changes only -->\n"
+    GOOD_BODY = "## Summary\nAdds hello.sh\n\n## Jira\nhttps://jira/CALC-42\n"
+
+    def add_template(self):
+        (self.repo / ".github").mkdir()
+        (self.repo / ".github/pull_request_template.md").write_text(self.TEMPLATE)
+        sh("git", "add", ".", cwd=self.repo)
+        sh("git", "commit", "-qm", "template", cwd=self.repo)
+        sh("git", "push", "-q", "origin", "main", cwd=self.repo)
+
+    def bake(self, tid, filename="hello.sh", body=None):
         jobs = [j for j in self.tick()["jobs"] if j["id"] == tid]
         self.assertEqual(jobs[0]["job"], "bake")
         wt = Path(jobs[0]["worktree"])
@@ -126,6 +136,8 @@ class FactoryTest(unittest.TestCase):
         sh("git", "add", ".", cwd=wt)
         sh("git", "commit", "-qm", "bake", cwd=wt)
         with self.f() as f:
+            if body is not None:
+                f.write_pr_body(tid, body)
             f.baked(tid)
         return wt
 
@@ -243,6 +255,141 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("Baked by", args)
         self.assertNotIn("Wonka factory", args)
         self.assertIn(f"[{tid}] Add a hello script\n", args)
+
+    def test_find_pr_template_order(self):
+        d = self.tmp / "wt"
+        d.mkdir()
+        self.assertIsNone(factory.find_pr_template(d))
+        self.assertIsNone(factory.find_pr_template(None))
+        (d / "pull_request_template.md").mkdir()  # a directory is not a template
+        self.assertIsNone(factory.find_pr_template(d))
+        (d / "docs").mkdir()
+        (d / "docs/pull_request_template.md").write_text("x")
+        self.assertEqual(factory.find_pr_template(d), d / "docs/pull_request_template.md")
+        (d / ".github").mkdir()
+        (d / ".github/pull_request_template.md").write_text("x")
+        self.assertEqual(factory.find_pr_template(d), d / ".github/pull_request_template.md")
+
+    def test_check_pr_body(self):
+        check = lambda body: factory.check_pr_body(self.TEMPLATE, body)
+        self.assertEqual(check(self.GOOD_BODY), [])
+        self.assertTrue(any("<!--" in p for p in check(self.GOOD_BODY + "<!-- x -->")))
+        self.assertIn("heading not in the template: ## Notes", check(self.GOOD_BODY + "\n## Notes\nx\n"))
+        self.assertIn("required heading missing: ## Jira", check("## Summary\nx\n"))
+        self.assertEqual(check(self.GOOD_BODY + "\n## Screenshots\nx\n"), [])
+        self.assertEqual(check("## summary ##\nx\n\n## Jira\ny\n"), [])
+        self.assertEqual(check(self.GOOD_BODY + "\n```\n## X\n```\n"), [])
+        self.assertEqual(check("  \n"), ["the PR body is empty"])
+
+    def planned_with_template(self):
+        self.add_template()
+        tid = self.add(jira="CALC-42")
+        self.to_planned(tid)
+        return tid
+
+    def baking_with_template(self):
+        tid = self.planned_with_template()
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        return tid, job
+
+    def test_pr_body_refuses_and_accepts(self):
+        tid, _ = self.baking_with_template()
+        with self.f() as f:
+            for bad in ("", "## Summary\n<!-- x -->\n\n## Jira\nx\n", self.GOOD_BODY + "\n## Notes\nx\n",
+                        "## Summary\nx\n"):
+                with self.assertRaises(WonkaError, msg=bad):
+                    f.write_pr_body(tid, bad)
+            self.assertFalse(f.pr_body_path(tid).exists())
+            f.write_pr_body(tid, self.GOOD_BODY)
+            self.assertEqual(f.pr_body_path(tid).read_text(), self.GOOD_BODY)
+            self.assertEqual(f.ticket(tid)["pr_body_dispatch"], f.ticket(tid)["dispatch"])
+
+    def test_pr_body_refused_without_template(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.tick()
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "no PR template"):
+                f.write_pr_body(tid, self.GOOD_BODY)
+
+    def test_baked_needs_a_pr_body_from_this_dispatch(self):
+        tid, job = self.baking_with_template()
+        wt = Path(job["worktree"])
+        (wt / "hello.sh").write_text("echo hi\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "bake", cwd=wt)
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "wonka pr-body"):
+                f.baked(tid)
+            f.write_pr_body(tid, self.GOOD_BODY)
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["x"]})
+        job2 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertGreater(job2["dispatch"], job["dispatch"])
+        (wt / "fix.sh").write_text("echo hi\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "fix", cwd=wt)
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "wonka pr-body"):
+                f.baked(tid)
+            f.write_pr_body(tid, self.GOOD_BODY)
+            f.baked(tid)
+
+    def ship_with_template(self, reuse=False):
+        tid = self.planned_with_template()
+        self.bake(tid, body=self.GOOD_BODY)
+        if reuse:
+            listed = f"<!-- wonka:{tid} -->\n\nAdd"
+            Path(f"{self.pr_state}.list").write_text(json.dumps([{"url": "https://github.com/acme/app/pull/7", "body": listed}]))
+            with self.f() as f:
+                f.ticket(tid)["pr_body_sha"] = factory._body_sha(listed)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        return tid
+
+    def test_pr_opens_with_the_builder_body_when_the_repo_has_a_template(self):
+        tid = self.ship_with_template()
+        args = Path(f"{self.pr_state}.args").read_text()
+        self.assertIn(f"<!-- wonka:{tid} -->\n\n## Summary", args)
+        self.assertNotIn("🎟️ **Jira:**", args)
+        self.assertNotIn("Add hello.sh\n", args.replace("Adds hello.sh", ""))
+
+    def test_reused_pr_body_is_updated_with_the_template_body(self):
+        tid = self.ship_with_template(reuse=True)
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists())
+        edit = Path(f"{self.pr_state}.edit").read_text()
+        self.assertIn("--body\n", edit)
+        self.assertIn(f"<!-- wonka:{tid} -->\n\n## Summary\nAdds hello.sh", edit)
+
+    def test_reused_pr_body_is_left_alone_without_a_template(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/7", "body": "<!-- wonka:%s -->\\n\\nAdd" }]\n' % tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertFalse(Path(f"{self.pr_state}.edit").exists())
+
+    def test_bake_job_carries_the_pr_template(self):
+        tid, job = self.baking_with_template()
+        self.assertTrue(job["pr_template"].endswith(".github/pull_request_template.md"))
+
+    def test_bake_job_has_no_pr_template_without_one(self):
+        tid = self.add()
+        self.to_planned(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertIsNone(job["pr_template"])
+
+    def test_pr_body_is_archived_with_the_plan(self):
+        tid = self.ship_with_template()
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        later = factory.now() + dt.timedelta(days=8)
+        with mock.patch.object(factory, "now", lambda: later):
+            self.tick()
+        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive" / f"{tid}-pr.md").exists())
+        self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-pr.md").exists())
 
     def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
         tid = self.add()

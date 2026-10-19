@@ -278,7 +278,60 @@ def pr_title(tid, meta):
     return f"[{meta.get('jira') or tid}] {meta.get('title', '')}"
 
 
-def pr_body(tid, meta, spec):
+PR_TEMPLATES = (".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.md",
+                "pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
+                "docs/pull_request_template.md", "docs/PULL_REQUEST_TEMPLATE.md")
+
+
+def find_pr_template(worktree):
+    """The repo's PR template in `worktree` (a Path), the first of PR_TEMPLATES found, or None."""
+    if not worktree or not Path(worktree).exists():
+        return None
+    for name in PR_TEMPLATES:
+        if (Path(worktree) / name).is_file():
+            return Path(worktree) / name
+    return None
+
+
+def _h2_sections(text):
+    """[(key, display heading, section text)] for each `## ` heading outside fenced code blocks; the key is the
+    heading normalised (whitespace collapsed, trailing #s stripped, casefolded)."""
+    out, fence = [], False
+    for line in text.splitlines():
+        if line.strip().startswith(("```", "~~~")):
+            fence = not fence
+        elif not fence and (m := re.match(r"^## (.+)$", line)):
+            display = " ".join(m.group(1).rstrip("# \t").split())
+            out.append([display.casefold(), display, ""])
+            continue
+        if out:
+            out[-1][2] += line + "\n"
+    return [tuple(x) for x in out]
+
+
+def check_pr_body(template, body):
+    """The problems with a PR body written from `template`, as a list of strings; empty means OK."""
+    if not body.strip():
+        return ["the PR body is empty"]
+    problems = []
+    if "<!--" in body:
+        problems.append("remove the template's <!-- --> comments")
+    wanted = _h2_sections(template)
+    have = {key for key, _, _ in _h2_sections(body)}
+    known = {key for key, _, _ in wanted}
+    for key, display, _ in _h2_sections(body):
+        if key not in known:
+            problems.append(f"heading not in the template: ## {display}")
+    for key, display, section in wanted:
+        optional = any("optional" in c.casefold() for c in re.findall(r"<!--(.*?)-->", section, re.S))
+        if key not in have and not optional:
+            problems.append(f"required heading missing: ## {display}")
+    return problems
+
+
+def pr_body(tid, meta, spec, body=None):
+    if body is not None:  # the builder's filled-in PR template: the template is where Jira goes
+        return "\n\n".join([_pr_mark(tid), body.strip()])
     parts = [_pr_mark(tid)]
     if meta.get("jira"):
         parts.append(f"🎟️ **Jira:** {meta['jira']}")
@@ -576,6 +629,27 @@ class Factory:
     def plan_path(self, tid):
         folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
         return folder(self.cfg) / f"{tid}-plan.md"
+
+    def pr_body_path(self, tid):
+        folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
+        return folder(self.cfg) / f"{tid}-pr.md"
+
+    def write_pr_body(self, tid, text, dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "builder PR body", dispatch)
+        self.expect(tid, ("baking", "progress"))
+        t = self.ticket(tid)
+        template = find_pr_template(Path(t["worktree"]))
+        if template is None:
+            raise WonkaError("this repo has no PR template: the PR body is the spec, do not write one")
+        problems = check_pr_body(template.read_text(), text)
+        if problems:
+            rel = template.relative_to(t["worktree"])
+            raise WonkaError(f"the PR body does not follow {rel}: " + "; ".join(problems))
+        path = self.pr_body_path(tid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text.strip() + "\n")
+        t["pr_body_dispatch"] = t["dispatch"]
 
     def write_plan(self, tid, text, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
@@ -924,6 +998,10 @@ class Factory:
             raise WonkaError(f"no commits on {t['branch']} yet")
         if t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]:
             raise WonkaError(f"no new commits on {t['branch']} since the last review: commit the fixes first")
+        template = find_pr_template(Path(t["worktree"]))
+        if template is not None and t.get("pr_body_dispatch") != t.get("dispatch"):
+            raise WonkaError(f"this repo has a PR template ({template.relative_to(t['worktree'])}): write the PR body "
+                             f"with wonka pr-body {tid} --dispatch {t.get('dispatch')} first")
         self.move(tid, ("baking", "ready"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
 
@@ -1077,7 +1155,10 @@ class Factory:
             head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
             meta, text = self.read(tid)
             spec = (note.get_section(text, "spec") or note.get_section(text, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
-            pr_text = pr_body(tid, meta, spec)
+            template = find_pr_template(Path(t["worktree"]))
+            body_file = self.pr_body_path(tid)
+            written = body_file.read_text() if template and body_file.exists() else None
+            pr_text = pr_body(tid, meta, spec, written)
             mine = ours[0] if ours else None
             out = mine["url"] if mine else ""
             reused = bool(mine)
@@ -1486,8 +1567,11 @@ class Factory:
         if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
             return None
         src, plan = self.path(tid), self.plan_path(tid)
+        pr_body_file = self.pr_body_path(tid)
         folder = store.archive_dir(self.cfg)
         folder.mkdir(parents=True, exist_ok=True)
+        if pr_body_file.exists():
+            shutil.move(pr_body_file, folder / pr_body_file.name)
         if plan.exists():  # the plan first: if the note's move fails, the ticket is still live and retried next tick
             shutil.move(plan, folder / plan.name)
             t["plan"] = str(folder / plan.name)
@@ -1556,7 +1640,8 @@ class Factory:
         agents = [f"wonka:{a}" for a in agents]
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
                 "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
-                "review_round": t["review_round"], "dispatch": t["dispatch"]}
+                "review_round": t["review_round"], "dispatch": t["dispatch"],
+                "pr_template": str(tpl) if job == "bake" and (tpl := find_pr_template(Path(t["worktree"]))) else None}
 
     def _setup_worktree(self, tid):
         """ensure_worktree() before a bake or review job; a failure counts like a retry, stuck after MAX_RETRIES.
