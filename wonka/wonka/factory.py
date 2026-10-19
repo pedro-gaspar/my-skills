@@ -713,6 +713,8 @@ class Factory:
             t.pop("lease", None)
         if dst != ("drafting", "awaiting"):
             t.pop("spec_review_pending", None)  # only a drafting/awaiting ticket can wait on the spec review
+        if dst[0] != "reviewing":
+            t.pop("round_kind", None)  # left Reviewing without a verdict: a stale ci/change kind must not label the next round
         t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
         if dst[0] != "shipped" or dst[1] == "ready":
             # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a

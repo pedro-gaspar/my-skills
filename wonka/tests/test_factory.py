@@ -3913,6 +3913,28 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(len(rounds), n + 1)
         self.assertEqual(rounds[-1]["kind"], "ci")
 
+    def test_leaving_review_without_a_verdict_drops_round_kind(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_fix_baked(tid)
+        self.tick()
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        self.assertEqual(self.f_ticket(tid)["round_kind"], "ci")
+        with self.f() as f:
+            f.move(tid, ("baking", "pending"), "human", "Pulled back by hand")
+        self.assertNotIn("round_kind", self.f_ticket(tid))
+
+    def test_killed_review_drops_round_kind(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_fix_baked(tid)
+        self.tick()
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        self.assertEqual(self.f_ticket(tid)["round_kind"], "ci")
+        with self.f() as f:
+            f.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
+        self.assertNotIn("round_kind", self.f_ticket(tid))
+
     def test_stats_survive_the_retries_and_stuck_resets(self):
         tid = self.stuck_ticket()
         t = self.f_ticket(tid)
