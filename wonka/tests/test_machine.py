@@ -77,6 +77,8 @@ class MachineTest(unittest.TestCase):
         self.assertEqual(machine.parse("Wont-Do", machine.STATUSES), "wontdo")
         self.assertEqual(machine.parse("awaiting-human", machine.PHASES), "awaiting")
         self.assertEqual(machine.parse("In  Progress", machine.PHASES), "progress")
+        for old in ("🌟 Ready", "🌟-Ready"):  # Ready's emoji before 1.18
+            self.assertEqual(machine.parse(old, machine.PHASES), "ready", old)
 
     def test_labels_are_emoji_space_text(self):
         for text in (*machine.STATUSES.values(), *machine.PHASES.values()):

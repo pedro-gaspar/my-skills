@@ -14,7 +14,7 @@ PHASES = {
     "pending": "🕰️ Pending",
     "awaiting": "🙋 Awaiting Human",
     "progress": "🎩 In Progress",
-    "ready": "🌟 Ready",
+    "ready": "🍭 Ready",
 }
 # Names before WONKA-00100 (ready) and WONKA-00140 (inbox) (old key -> new key); used only to read old notes, input and state files.
 OLD_STATUS_KEYS = {"ready": "planned", "inbox": "triage"}
@@ -126,8 +126,9 @@ def _clean(value):
 
 def _match(value, table):
     v = _clean(value)
+    bare = v.split(" ", 1)[-1] if v[:1] and not v[:1].isalnum() else v  # an old emoji (🌟 Ready) still reads
     for key, text in table.items():
-        if v in (key, _clean(text), _clean(text).split(" ", 1)[-1]):
+        if v == _clean(text) or bare in (key, _clean(text).split(" ", 1)[-1]):
             return key
     return None
 

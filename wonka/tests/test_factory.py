@@ -203,7 +203,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "merged branch is deleted")
 
         meta, body = self.note(tid)
-        self.assertEqual((meta["status"], meta["phase"]), ("🚢 Shipped", "🌟 Ready"))
+        self.assertEqual((meta["status"], meta["phase"]), ("🚢 Shipped", "🍭 Ready"))
         self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
         self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
@@ -638,7 +638,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(a, "s")
-        self.check_old_label(a, ("triage", "ready"), "phase", "🌟-Done", "🌟 Ready")
+        self.check_old_label(a, ("triage", "ready"), "phase", "🌟-Done", "🍭 Ready")
 
     def test_old_inbox_status_in_a_note_is_migrated_silently(self):
         a = self.add()
@@ -648,6 +648,13 @@ class FactoryTest(unittest.TestCase):
         b = self.add()
         self.to_planned(b)
         self.check_old_label(b, ("planned", "pending"), "status", "🎫-Ready", "🎫 Planned")
+
+    def test_old_ready_star_in_a_note_is_relabelled_silently(self):
+        a = self.add()
+        with self.f() as f:
+            f.move(a, ("wontdo", "ready"), "human")
+        for old in ("🌟-Ready", "🌟 Ready"):
+            self.check_old_label(a, ("wontdo", "ready"), "phase", old, "🍭 Ready")
 
     def test_hyphenated_labels_in_a_note_are_relabelled_silently(self):
         b = self.add()
@@ -2587,7 +2594,7 @@ class FactoryTest(unittest.TestCase):
         done_at = self.f_ticket(tid)["entered_done_at"]
         self.edit_note(tid, lambda t: t.replace("status: 🚢 Shipped", "status: 🗑️ Wont Do", 1))
         events = self.tick()["events"]
-        self.assertIn(f"{tid}: reverted illegal 🗑️ Wont Do/🌟 Ready", events)
+        self.assertIn(f"{tid}: reverted illegal 🗑️ Wont Do/🍭 Ready", events)
         self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertEqual(self.note(tid)[0]["status"], "🚢 Shipped")
         self.assertEqual(self.f_ticket(tid)["entered_done_at"], done_at)
