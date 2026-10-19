@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import os
@@ -9,6 +10,11 @@ from pathlib import Path
 from unittest import mock
 
 from wonka import doctor
+
+
+def no_gh(real_ok):
+    """_ok with gh answered without running it (no network, no dependence on the developer's gh login)."""
+    return lambda cmd: True if cmd[0] == "gh" else real_ok(cmd)
 
 
 class PermissionsTest(unittest.TestCase):
@@ -345,7 +351,8 @@ class WorktreeFilesTest(unittest.TestCase):
         cfg = {"vault": str(self.tmp), "folder": "wonka", "worktree_files": {"app": ["server/.env"]}}
         with mock.patch.dict(doctor.os.environ, {"WONKA_HOME": str(home)}), \
                 mock.patch.object(doctor.store, "load_config", return_value=cfg), \
-                mock.patch.object(doctor, "_permissions", return_value=([], [])):
+                mock.patch.object(doctor, "_permissions", return_value=([], [])), \
+                mock.patch.object(doctor, "_ok", side_effect=no_gh(doctor._ok)):
             lines = [c for c in doctor.checks() if c[1].startswith("worktree files for app")]
         self.assertEqual([lv for lv, _ in lines], ["ok"])
 
@@ -433,6 +440,45 @@ class NotifierCheckTest(unittest.TestCase):
         (level, msg), = self.lines(set())
         self.assertEqual(level, "warn")
         self.assertIn("no desktop notifier", msg)
+
+
+class DoctorExitCodeTest(unittest.TestCase):
+    """doctor() prints one line per check and exits 1 only when a check fails; warnings alone exit 0."""
+
+    def run_doctor(self, results):
+        out = io.StringIO()
+        with mock.patch.object(doctor, "checks", return_value=iter(results)), contextlib.redirect_stdout(out):
+            code = doctor.doctor()
+        return code, out.getvalue()
+
+    def test_exit_code(self):
+        for levels, code in ((["ok"], 0), (["ok", "ok"], 0), (["warn"], 0), (["ok", "warn", "ok"], 0),
+                             (["fail"], 1), (["ok", "fail"], 1), (["fail", "ok"], 1), (["fail", "warn"], 1),
+                             (["warn", "fail", "ok"], 1), ([], 0)):
+            with self.subTest(levels=levels):
+                self.assertEqual(self.run_doctor([(lv, f"check {i}") for i, lv in enumerate(levels)])[0], code)
+
+    def test_prints_one_line_per_check(self):
+        code, out = self.run_doctor([("ok", "git"), ("warn", "npx"), ("fail", "gh")])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), ["✅ git", "⚠️  npx", "❌ gh"])
+
+    def test_real_checks_with_gh_mocked(self):
+        """The real checks end to end, with no config: gh is answered by the mock, the missing config fails."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out = io.StringIO()
+        with mock.patch.dict(doctor.os.environ, {"WONKA_HOME": tmp, "WONKA_MDLINT": "off"}), \
+                mock.patch.object(doctor, "_ok", return_value=True) as ok, contextlib.redirect_stdout(out):
+            code = doctor.doctor()
+        ok.assert_any_call(["gh", "auth", "status"])
+        self.assertEqual(code, 1)
+        self.assertIn("✅ gh installed and logged in", out.getvalue())
+        self.assertIn("❌ ", out.getvalue())
+        with mock.patch.object(doctor, "_ok", return_value=False), contextlib.redirect_stdout(io.StringIO()) as out2, \
+                mock.patch.dict(doctor.os.environ, {"WONKA_HOME": tmp, "WONKA_MDLINT": "off"}):
+            self.assertEqual(doctor.doctor(), 1)
+        self.assertIn("❌ gh installed and logged in", out2.getvalue())
 
 
 if __name__ == "__main__":
