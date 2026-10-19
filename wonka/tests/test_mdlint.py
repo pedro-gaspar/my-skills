@@ -119,7 +119,14 @@ class MdlintTest(unittest.TestCase):
 
     def test_default_command_is_markdownlint_via_npx(self):
         os.environ.pop("WONKA_MDLINT", None)
-        self.assertEqual(mdlint.command(), ["npx", "--yes", "markdownlint-cli@0.49.1", "--stdin"])
+        self.assertEqual(
+            mdlint.command(),
+            ["npx", "--yes", "markdownlint-cli@0.49.1", "--stdin", "--disable", "MD013", "MD041"],
+        )
+
+    def test_override_command_is_used_as_is(self):
+        os.environ["WONKA_MDLINT"] = "mylint --stdin"
+        self.assertEqual(mdlint.command(), ["mylint", "--stdin"])
 
 
 if __name__ == "__main__":

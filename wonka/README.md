@@ -83,8 +83,8 @@ worktree, then tick Retry. An open PR that GitHub still calls conflicting after 
 is stuck too: check its base branch on GitHub or fix the conflicts by hand, then tick Retry. A stuck open PR clears
 itself when it is merged, closed or made mergeable.
 
-The 💡 Idea and 📜 Spec are free text, so they are checked with markdownlint (all default rules, via `npx`) when
-written. A section it flags is kept as raw text in a code block under a warning that lists the problems, so broken
+The 💡 Idea and 📜 Spec are free text, so they are checked with markdownlint (default rules except MD013 line-length and MD041
+first-line-h1, which don't affect rendering; via `npx`) when written. A section it flags is kept as raw text in a code block under a warning that lists the problems, so broken
 markdown can't spill into the rest of the note. Clean sections are written as is. `WONKA_MDLINT` overrides the
 linter command, `WONKA_MDLINT=off` turns the check off; if the linter is missing, offline or fails, the section is
 written unchecked and the reason goes to `~/.wonka/factory.log`.
