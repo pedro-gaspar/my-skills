@@ -10,7 +10,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-from . import banner, machine, mdlint, note, store
+from . import banner, machine, mdlint, metrics as metrics_mod, note, store
 from .machine import KILLED, review_budget
 from .store import CriticalError, WonkaError
 
@@ -920,6 +920,23 @@ class Factory:
                 found[t["repo"]] = (t.get("project", ""), t["repo"], t.get("pr_repo"))
         return sorted(found.values(), key=lambda r: (r[0], r[1]))
 
+    def metrics(self, since=None):
+        """One metrics dict per ticket (archived and lost ones too), sorted by id."""
+        tickets = self.db["tickets"]
+        out = []
+        for tid in sorted(tickets):
+            t = tickets[tid]
+            if since and (t.get("created_at") or "")[:10] < since:
+                continue
+            size = None
+            try:
+                if self.path(tid).exists():
+                    size = self.read(tid)[0].get("size")
+            except OSError:
+                pass
+            out.append(metrics_mod.ticket_metrics(tid, t, size, tickets, now()))
+        return out
+
     def drafted(self, tid, size, reviewers=(), dispatch=None, split=False):
         if self._stale_dispatch(tid, dispatch):
             return (f"{tid}: analyst result is from an earlier dispatch "
@@ -1398,6 +1415,7 @@ class Factory:
                     seen.add(title.casefold())
                     continue
                 self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid, start="idea")
+                _bump_stat(t, "followups_filed")
                 seen.add(title.casefold())
         issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
         if issues and t["plan"] and Path(t["plan"]).exists():

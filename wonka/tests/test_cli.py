@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import cli, factory, store
+from wonka import cli, factory, metrics, store
 
 
 class CliTest(unittest.TestCase):
@@ -266,6 +266,53 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(str(repo.resolve()), out)
         self.assertTrue(out.rstrip().endswith(" -"))
+
+    def test_metrics_is_read_only_and_never_locks(self):
+        self.assertIn("metrics", cli.READ_ONLY)
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        self.run_cli("add", "--repo", str(self._repo()), "x")
+        with mock.patch.object(store, "state", side_effect=AssertionError("took the lock")):
+            code, out, _ = self.run_cli("metrics")
+        self.assertEqual(code, 0)
+        lines = out.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        m = json.loads(lines[0])
+        self.assertEqual(m["id"], "WONKA-00001")
+        self.assertIsNone(m["outcome"])
+        self.assertEqual(list(m), list(metrics.KEYS))
+
+    def test_metrics_includes_archived_and_filters_by_since(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = str(self._repo())
+        self.run_cli("add", "--repo", repo, "one")
+        self.run_cli("add", "--repo", repo, "two")
+        self.run_cli("set", "WONKA-00001", "size", "s")
+        cfg = store.load_config()
+        with store.state() as db:
+            a, b = db["tickets"]["WONKA-00001"], db["tickets"]["WONKA-00002"]
+            a.update(archived=True, last_valid={"status": "shipped", "phase": "ready"}, created_at="2026-01-01T00:00:00+00:00")
+            b["created_at"] = "2026-03-01T00:00:00+00:00"
+            src = Path(cfg["vault"]) / "wonka" / "golden-tickets" / "WONKA-00001.md"
+            dest = store.archive_dir(cfg) / "WONKA-00001.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+        code, out, _ = self.run_cli("metrics")
+        rows = [json.loads(x) for x in out.strip().splitlines()]
+        self.assertEqual([r["id"] for r in rows], ["WONKA-00001", "WONKA-00002"])
+        self.assertEqual((rows[0]["outcome"], rows[0]["size"]), ("merged", "s"))
+        _, out, _ = self.run_cli("metrics", "--since", "2026-02-01")
+        self.assertEqual([json.loads(x)["id"] for x in out.strip().splitlines()], ["WONKA-00002"])
+        with self.assertRaises(SystemExit):
+            self.run_cli("metrics", "--since", "2026-13-01")
+
+    def _repo(self):
+        repo = self.tmp / "proj"
+        if not repo.exists():
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                            "-m", "i"], cwd=repo, check=True)
+        return repo
 
     def test_analyst_doc_splits_by_repo(self):
         root = Path(cli.__file__).resolve().parent.parent

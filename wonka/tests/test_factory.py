@@ -241,6 +241,7 @@ class FactoryTest(unittest.TestCase):
         skipped = [h["why"] for h in self.f_ticket(tid)["history"] if "skipped" in h.get("why", "")]
         self.assertEqual(len(skipped), 3, "one skip in round 1 (same round), two in round 2")
         self.assertIn("Follow-up already in the factory, skipped: add A BYE script", skipped)
+        self.assertEqual(self.f_ticket(tid)["stats"]["followups_filed"], 2, "skipped ones are not counted")
 
     def test_pr_description_carries_the_wonka_and_jira_ids(self):
         tid = self.add(jira="CALC-42")
