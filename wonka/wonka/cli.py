@@ -249,8 +249,8 @@ def parser():
     s.add_argument("id")
     sub.add_parser("status", help="one line per live ticket")
     sub.add_parser("doctor", help="check the factory's setup")
-    sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> "
-                               "status|diff|log|show|rev-parse|ls-files|blame|add|commit|merge ...")
+    sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> [--dispatch <n>] "
+                               "status|diff|log|show|rev-parse|ls-files|blame|add|commit|rebase ...")
     return p
 
 

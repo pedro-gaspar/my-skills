@@ -13,7 +13,7 @@ from unittest import mock
 
 from wonka import cli, factory, gitwrap, store
 from wonka.factory import JOB_AGENTS, Factory
-from wonka.gitwrap import check, command, env, target
+from wonka.gitwrap import _parse, check, command, env, target
 from wonka.store import WonkaError
 
 
@@ -90,6 +90,19 @@ class CheckTest(unittest.TestCase):
                      ["--abort", "x"], ["--continue", "x"], ["-Xtheirs", "origin/main"], ["--edit-todo"]):
             with self.subTest(args=args), self.assertRaises(WonkaError):
                 check("rebase", args)
+
+    def test_parse_dispatch_forms(self):
+        self.assertEqual(_parse(["T", "status"]), ("T", None, "status", []))
+        self.assertEqual(_parse(["T", "--dispatch", "3", "add", "a.py"]), ("T", 3, "add", ["a.py"]))
+        self.assertEqual(_parse(["T", "--dispatch=3", "commit", "-m", "x"]), ("T", 3, "commit", ["-m", "x"]))
+        # only the slot after the id is parsed: later options belong to git
+        self.assertEqual(_parse(["T", "log", "--dispatch", "3"]), ("T", None, "log", ["--dispatch", "3"]))
+        for argv in ([], ["T"], ["T", "--dispatch"], ["T", "--dispatch", "3"], ["T", "--dispatch=3"]):
+            with self.subTest(argv=argv), self.assertRaisesRegex(WonkaError, "usage"):
+                _parse(argv)
+        for argv in (["T", "--dispatch", "abc", "add"], ["T", "--dispatch=", "add"]):
+            with self.subTest(argv=argv), self.assertRaisesRegex(WonkaError, "takes the dispatch number"):
+                _parse(argv)
 
     def test_command_pins_path_and_global_options(self):
         self.assertEqual(command("/w", "/r/.git/worktrees/w", "diff", ["x"]),
@@ -225,6 +238,7 @@ class WrapperTest(unittest.TestCase):
         self.to_ready(tid)
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
+        self.dispatch = job["dispatch"]
         return Path(job["worktree"])
 
     def git(self, *argv):
@@ -239,8 +253,8 @@ class WrapperTest(unittest.TestCase):
         wt = self.to_baking(tid)
         head, status = sh("git", "rev-parse", "HEAD", cwd=self.repo), sh("git", "status", "--porcelain", cwd=self.repo)
         (wt / "hello.sh").write_text("echo hi\n")
-        self.assertEqual(self.git(tid, "add", "hello.sh")[0], 0)
-        self.assertEqual(self.git(tid, "commit", "-q", "-m", "bake")[0], 0)
+        self.assertEqual(self.git(tid, "--dispatch", str(self.dispatch), "add", "hello.sh")[0], 0)
+        self.assertEqual(self.git(tid, "--dispatch", str(self.dispatch), "commit", "-q", "-m", "bake")[0], 0)
         self.assertEqual(sh("git", "rev-list", "--count", "origin/main..HEAD", cwd=wt), "1")
         self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=self.repo), head)
         self.assertEqual(sh("git", "status", "--porcelain", cwd=self.repo), status)
@@ -248,7 +262,7 @@ class WrapperTest(unittest.TestCase):
     def test_write_refused_outside_baking(self):
         tid = self.add()
         self.to_ready(tid)
-        code, err = self.git(tid, "commit", "-m", "x")
+        code, err = self.git(tid, "--dispatch", "1", "commit", "-m", "x")
         self.assertEqual(code, 1)
         self.assertIn("only runs while the ticket is baking", err)
 
@@ -267,7 +281,7 @@ class WrapperTest(unittest.TestCase):
         with self.f() as f:
             f.ticket(tid)["branch"] = "main"
         with mock.patch.object(gitwrap.subprocess, "run") as run:
-            code, err = self.git(tid, "commit", "-m", "x")
+            code, err = self.git(tid, "--dispatch", str(self.dispatch), "commit", "-m", "x")
         self.assertEqual(code, 1)
         self.assertIn("refusing to write to branch main", err)
         run.assert_not_called()
@@ -277,11 +291,12 @@ class WrapperTest(unittest.TestCase):
         wt = self.to_baking(tid)
         sh("git", "checkout", "-q", "--detach", cwd=wt)
         (wt / "hello.sh").write_text("echo hi\n")
-        code, err = self.git(tid, "add", "hello.sh")
+        d = str(self.dispatch)
+        code, err = self.git(tid, "--dispatch", d, "add", "hello.sh")
         self.assertEqual(code, 1)
         self.assertIn("but the worktree is on a detached HEAD", err)
         sh("git", "checkout", "-q", "-b", "other", cwd=wt)
-        code, err = self.git(tid, "commit", "-m", "x")
+        code, err = self.git(tid, "--dispatch", d, "commit", "-m", "x")
         self.assertEqual(code, 1)
         self.assertIn("but the worktree is on other", err)
         self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "?? hello.sh")
@@ -450,6 +465,7 @@ class WrapperTest(unittest.TestCase):
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "conflicts")
         self.assertEqual(self.state(tid), ("shipped", "progress"))
+        self.dispatch = job["dispatch"]
         return tid, wt, job["base_ref"]
 
     def hostile_git(self, *argv):
@@ -466,7 +482,7 @@ class WrapperTest(unittest.TestCase):
         """to_fixing() plus a conflicting rebase through the wrapper: (tid, wt, base_ref, head before the rebase)."""
         tid, wt, ref = self.to_fixing()
         head = sh("git", "rev-parse", "HEAD", cwd=wt)
-        self.assertEqual(self.hostile_git(tid, "rebase", ref), 1)
+        self.assertEqual(self.hostile_git(tid, "--dispatch", str(self.dispatch), "rebase", ref), 1)
         self.assertTrue(factory._rebasing(wt))
         return tid, wt, ref, head
 
@@ -475,8 +491,8 @@ class WrapperTest(unittest.TestCase):
         main_head = sh("git", "rev-parse", "HEAD", cwd=self.repo)
         status = sh("git", "status", "--porcelain", cwd=self.repo)
         (wt / "hello.sh").write_text("echo hi\necho upstream\n")
-        self.assertEqual(self.hostile_git(tid, "add", "hello.sh"), 0, "add works mid-rebase, on a detached HEAD")
-        self.assertEqual(self.hostile_git(tid, "rebase", "--continue"), 0)
+        self.assertEqual(self.hostile_git(tid, "--dispatch", str(self.dispatch), "add", "hello.sh"), 0, "add works mid-rebase, on a detached HEAD")
+        self.assertEqual(self.hostile_git(tid, "--dispatch", str(self.dispatch), "rebase", "--continue"), 0)
         self.assertFalse(factory._rebasing(wt))
         self.assertEqual(sh("git", "rev-parse", "HEAD^", cwd=wt), sh("git", "rev-parse", ref, cwd=wt))
         self.assertEqual(sh("git", "rev-list", "--merges", f"{ref}..HEAD", cwd=wt), "")
@@ -489,7 +505,7 @@ class WrapperTest(unittest.TestCase):
 
     def test_fixer_rebase_abort_through_wonka_git(self):
         tid, wt, _, head = self.conflicted()
-        self.assertEqual(self.hostile_git(tid, "rebase", "--abort"), 0)
+        self.assertEqual(self.hostile_git(tid, "--dispatch", str(self.dispatch), "rebase", "--abort"), 0)
         self.assertFalse(factory._rebasing(wt))
         self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
         self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), head)
@@ -498,7 +514,7 @@ class WrapperTest(unittest.TestCase):
 
     def test_clean_fixer_rebase_through_wonka_git(self):
         tid, wt, ref = self.to_fixing(conflict=False)
-        self.assertEqual(self.hostile_git(tid, "rebase", ref), 0)
+        self.assertEqual(self.hostile_git(tid, "--dispatch", str(self.dispatch), "rebase", ref), 0)
         self.assertEqual(sh("git", "rev-parse", "HEAD^", cwd=wt), sh("git", "rev-parse", ref, cwd=wt))
         self.assertFalse(factory._rebasing(wt))
 
@@ -507,8 +523,56 @@ class WrapperTest(unittest.TestCase):
         with self.f() as f:
             f.ticket(tid)["branch"] = "wonka/someone-else"
         (wt / "hello.sh").write_text("echo hi\n")
-        code = self.hostile_git(tid, "add", "hello.sh")
+        code = self.hostile_git(tid, "--dispatch", str(self.dispatch), "add", "hello.sh")
         self.assertEqual(code, 1)
+    def test_write_needs_dispatch(self):
+        tid = self.add()
+        wt = self.to_baking(tid)
+        (wt / "hello.sh").write_text("echo hi\n")
+        with mock.patch.object(gitwrap.subprocess, "run") as run:
+            code, err = self.git(tid, "add", "hello.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("needs --dispatch", err)
+        run.assert_not_called()
+
+    def test_write_refused_from_an_earlier_dispatch(self):
+        tid = self.add()
+        wt = self.to_baking(tid)
+        old = self.dispatch
+        with self.f() as f:
+            f.ticket(tid)["dispatch"] += 1  # a stale retry handed the job to another agent
+        (wt / "hello.sh").write_text("echo hi\n")
+        with mock.patch.object(gitwrap.subprocess, "run") as run:
+            code, err = self.git(tid, "--dispatch", str(old), "add", "hello.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("earlier dispatch", err)
+        run.assert_not_called()
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "?? hello.sh")
+        self.assertEqual(self.git(tid, "--dispatch", str(old + 1), "add", "hello.sh")[0], 0)
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "A  hello.sh")
+
+    def test_fixer_rebase_refused_from_an_earlier_dispatch(self):
+        tid, wt, ref = self.to_fixing()
+        code, err = self.git(tid, "--dispatch", str(self.dispatch - 1), "rebase", ref)
+        self.assertEqual(code, 1)
+        self.assertIn("earlier dispatch", err)
+        self.assertFalse(factory._rebasing(wt))
+
+    def test_dispatch_flag_forms(self):
+        tid = self.add()
+        wt = self.to_baking(tid)
+        (wt / "hello.sh").write_text("echo hi\n")
+        self.assertEqual(self.git(tid, f"--dispatch={self.dispatch}", "add", "hello.sh")[0], 0)
+        code, err = self.git(tid, "--dispatch", "abc", "add", "hello.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("takes the dispatch number", err)
+        code, err = self.git(tid, "--dispatch", "3")
+        self.assertEqual(code, 1)
+        self.assertIn("usage", err)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.git(tid, "status")[0], 0)
+            self.assertEqual(self.git(tid, "--dispatch", "999", "status")[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

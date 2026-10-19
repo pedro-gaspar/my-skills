@@ -202,17 +202,54 @@ def _on_branch(path, gd):
     return ""
 
 
-def main(argv):
-    """argv is everything after `wonka git`; returns git's exit code."""
+def _parse(argv):
+    """argv is everything after `wonka git`: <id> [--dispatch <n> | --dispatch=<n>] <subcommand> [args...].
+    Returns (tid, dispatch or None, sub, args). Only the position right after the id is parsed: later options belong
+    to git."""
+    usage = "usage: wonka git <id> [--dispatch <n>] <subcommand> [args...]"
     if len(argv) < 2:
-        raise WonkaError("usage: wonka git <id> <subcommand> [args...]")
-    tid, sub, args = argv[0], argv[1], list(argv[2:])
+        raise WonkaError(usage)
+    tid, rest, dispatch = argv[0], list(argv[1:]), None
+    raw = None
+    if rest[0] == "--dispatch":
+        if len(rest) < 2:
+            raise WonkaError(usage)
+        raw, rest = rest[1], rest[2:]
+    elif rest[0].startswith("--dispatch="):
+        raw, rest = rest[0].partition("=")[2], rest[1:]
+    if raw is not None:
+        try:
+            dispatch = int(raw)
+        except ValueError:
+            raise WonkaError(f"--dispatch takes the dispatch number from your job JSON, got '{raw}'")
+    if not rest:
+        raise WonkaError(usage)
+    return tid, dispatch, rest[0], rest[1:]
+
+
+def check_dispatch(t, sub, dispatch):
+    """Writes carry the agent's dispatch and only the ticket's current one may write: an agent left over from an
+    earlier dispatch must not commit next to its replacement. Reads are not checked."""
+    if sub not in WRITES:
+        return
+    if dispatch is None:
+        raise WonkaError(f"git {sub} needs --dispatch <n> (the dispatch number from your job JSON): "
+                         f"wonka git <id> --dispatch <n> {sub} ...")
+    if dispatch != t.get("dispatch"):
+        raise WonkaError(f"git {sub} is from an earlier dispatch ({dispatch}, now {t.get('dispatch')}): "
+                         "this job was handed to another agent, stop writing")
+
+
+def main(argv):
+    """argv is everything after `wonka git`; returns git's exit code. Writes need `--dispatch <n>` after the id."""
+    tid, dispatch, sub, args = _parse(argv)
     check(sub, args)
     cfg = store.load_config()
     with store.state() as db:
         f = Factory(cfg, db)
         t = f.ticket(tid)
         path = target(t, f.state(tid), sub)
+        check_dispatch(t, sub, dispatch)
         repo, branch = t["repo"], t["branch"]
         if sub in WRITES:
             check_branch(t)
