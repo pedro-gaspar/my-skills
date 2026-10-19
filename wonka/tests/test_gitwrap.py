@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import pwd
 import shutil
 import subprocess
 import tempfile
@@ -98,13 +99,27 @@ class CheckTest(unittest.TestCase):
                           "-c", "core.fsmonitor=false", "status"])
 
     def test_env_is_scrubbed(self):
-        out = env({"PATH": "/bin", "GIT_DIR": "/x", "GIT_EXTERNAL_DIFF": "sh",
-                   "GIT_CONFIG_PARAMETERS": "'core.pager'='sh'", "GIT_CONFIG_COUNT": "1", "GIT_AUTHOR_NAME": "t",
-                   "GIT_CONFIG_GLOBAL": "/tmp/evil.gitconfig", "GIT_CONFIG_SYSTEM": "/tmp/evil",
-                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_KEY_0": "core.pager", "GIT_CONFIG_VALUE_0": "sh",
-                   "GIT_COMMITTER_EMAIL": "t@t"})
-        self.assertEqual(out, {"PATH": "/bin", "GIT_AUTHOR_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-                               "GIT_EDITOR": "true", "GIT_PAGER": "cat", "GIT_TERMINAL_PROMPT": "0"})
+        with mock.patch.object(gitwrap, "_passwd_home", return_value="/home/real"):
+            out = env({"PATH": "/bin", "HOME": "/tmp/evil", "XDG_CONFIG_HOME": "/tmp/evil",
+                       "GIT_DIR": "/x", "GIT_EXTERNAL_DIFF": "sh",
+                       "GIT_CONFIG_PARAMETERS": "'core.pager'='sh'", "GIT_CONFIG_COUNT": "1",
+                       "GIT_AUTHOR_NAME": "t", "GIT_CONFIG_GLOBAL": "/tmp/evil.gitconfig",
+                       "GIT_CONFIG_SYSTEM": "/tmp/evil", "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_KEY_0": "core.pager", "GIT_CONFIG_VALUE_0": "sh", "GIT_COMMITTER_EMAIL": "t@t"})
+        self.assertEqual(out, {"PATH": "/bin", "HOME": "/home/real", "GIT_AUTHOR_NAME": "t",
+                               "GIT_COMMITTER_EMAIL": "t@t", "GIT_EDITOR": "true", "GIT_PAGER": "cat",
+                               "GIT_TERMINAL_PROMPT": "0"})
+
+    def test_env_without_passwd_entry_ignores_global_config(self):
+        with mock.patch.object(gitwrap, "_passwd_home", return_value=None):
+            out = env({"PATH": "/bin", "HOME": "/tmp/evil", "XDG_CONFIG_HOME": "/tmp/evil"})
+        self.assertNotIn("HOME", out)
+        self.assertNotIn("XDG_CONFIG_HOME", out)
+        self.assertEqual(out["GIT_CONFIG_GLOBAL"], os.devnull)
+
+    def test_passwd_home_ignores_HOME(self):
+        with mock.patch.dict(os.environ, {"HOME": "/tmp/evil"}):
+            self.assertEqual(gitwrap._passwd_home(), pwd.getpwuid(os.getuid()).pw_dir)
 
     def test_write_states_follow_the_job_map(self):
         self.assertEqual(gitwrap.WRITE_STATES, {JOB_AGENTS["oompa-loompa-builder"], JOB_AGENTS["oompa-loompa-fixer"]})
@@ -331,6 +346,40 @@ class WrapperTest(unittest.TestCase):
         (wt / ".gitattributes").write_text("* filter=x\n")
         (wt / "README.md").write_text("changed\n")
         with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(cfg)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.git(tid, "diff", "--stat")[0], 0)
+            self.assertEqual(self.git(tid, "status")[0], 0)
+        self.assertFalse(pwned.exists())
+
+    def test_home_and_xdg_config_from_env_are_ignored(self):
+        tid = self.add()
+        real = self.tmp / "realhome"
+        real.mkdir()
+        with mock.patch.dict(os.environ, {"HOME": "/tmp/evil", "XDG_CONFIG_HOME": "/tmp/evil"}), \
+                mock.patch.object(gitwrap, "_passwd_home", return_value=str(real)), \
+                mock.patch.object(gitwrap.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            self.assertEqual(self.git(tid, "log", "--oneline")[0], 0)
+        kw = run.call_args[1]
+        self.assertEqual(kw["env"]["HOME"], str(real))
+        self.assertNotIn("XDG_CONFIG_HOME", kw["env"])
+
+    def test_home_and_xdg_config_filters_never_run(self):
+        """A caller points HOME and XDG_CONFIG_HOME at configs whose clean filter writes a file: wonka git ignores them."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        pwned = self.tmp / "pwned"
+        evil, xdg = self.tmp / "evil", self.tmp / "xdg"
+        (xdg / "git").mkdir(parents=True)
+        evil.mkdir()
+        real = self.tmp / "realhome"
+        real.mkdir()
+        body = f'[filter "x"]\n\tclean = touch {pwned}; cat\n'
+        (evil / ".gitconfig").write_text(body)
+        (xdg / "git" / "config").write_text(body)
+        (wt / ".gitattributes").write_text("* filter=x\n")
+        (wt / "README.md").write_text("changed\n")
+        with mock.patch.dict(os.environ, {"HOME": str(evil), "XDG_CONFIG_HOME": str(xdg)}), \
+                mock.patch.object(gitwrap, "_passwd_home", return_value=str(real)), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.git(tid, "diff", "--stat")[0], 0)
             self.assertEqual(self.git(tid, "status")[0], 0)
