@@ -152,15 +152,19 @@ def plans_dir(cfg):
 
 
 def migrate_base(cfg):
-    """Rename the old 🎫-Ready column to 🎫-Planned in an existing Factory.base; True when it rewrote the file."""
+    """Rename the old columns (🎫-Ready, ✉️-Inbox) in an existing Factory.base; returns the (old, new) pairs renamed."""
     path = board(cfg) / BASE_FILE
     if not path.exists():
-        return False
+        return []
     text = path.read_text()
-    if "🎫-Ready" not in text:
-        return False
-    write_atomic(path, text.replace("🎫-Ready", "🎫-Planned"))
-    return True
+    done = []
+    for old, new in (("🎫-Ready", "🎫-Planned"), ("✉️-Inbox", "📏-Triage")):
+        if old in text:
+            text = text.replace(old, new)
+            done.append((old, new))
+    if done:
+        write_atomic(path, text)
+    return done
 
 
 def archive_dir(cfg):
@@ -186,7 +190,7 @@ def _load(text):
         return {"next_id": 1, "tickets": {}}
     try:
         db = json.loads(text)
-        machine.migrate(db)  # state files written before WONKA-00100 hold the old keys
+        machine.migrate(db)  # state files written before WONKA-00100 and WONKA-00140 hold the old keys
         return db
     except ValueError as e:
         path = home() / STATE_FILE

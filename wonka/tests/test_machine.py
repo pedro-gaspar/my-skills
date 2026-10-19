@@ -14,9 +14,9 @@ class MachineTest(unittest.TestCase):
         self.assertFalse(machine.allowed(machine.KILLED, machine.KILLED))
 
     def test_skipping_columns_is_illegal(self):
-        self.assertFalse(machine.allowed(("inbox", "pending"), ("baking", "pending")))
-        self.assertFalse(machine.allowed(("inbox", "awaiting"), ("drafting", "pending")))
-        self.assertFalse(machine.allowed(("shipped", "ready"), ("inbox", "pending")))
+        self.assertFalse(machine.allowed(("triage", "pending"), ("baking", "pending")))
+        self.assertFalse(machine.allowed(("triage", "awaiting"), ("drafting", "pending")))
+        self.assertFalse(machine.allowed(("shipped", "ready"), ("triage", "pending")))
 
     def test_open_pr_can_go_back_in_progress_to_fix_conflicts(self):
         self.assertTrue(machine.allowed(("shipped", "awaiting"), ("shipped", "progress")))
@@ -36,6 +36,17 @@ class MachineTest(unittest.TestCase):
         self.assertEqual(machine.parse("done", machine.PHASES), "ready")
         self.assertEqual(machine.parse("Ready", machine.PHASES), "ready")
         self.assertEqual(machine.parse("🎫-Planned", machine.STATUSES), "planned")
+        for old in ("✉️-Inbox", "✉-Inbox", "Inbox", "inbox", "📏-Triage", "triage", "Triage"):
+            self.assertEqual(machine.parse(old, machine.STATUSES), "triage", old)
+
+    def test_migrate_renames_inbox_to_triage(self):
+        db = {"tickets": {"a": {"last_valid": {"status": "inbox", "phase": "awaiting"},
+                                "history": [{"from": "inbox/pending", "to": "inbox/awaiting"}]}}}
+        self.assertTrue(machine.migrate(db))
+        t = db["tickets"]["a"]
+        self.assertEqual(t["last_valid"], {"status": "triage", "phase": "awaiting"})
+        self.assertEqual(t["history"], [{"from": "triage/pending", "to": "triage/awaiting"}])
+        self.assertFalse(machine.migrate(db))
 
     def test_migrate_rewrites_old_keys_once(self):
         db = {"tickets": {"a": {
@@ -45,8 +56,8 @@ class MachineTest(unittest.TestCase):
         self.assertTrue(machine.migrate(db))
         t = db["tickets"]["a"]
         self.assertEqual(t["last_valid"], {"status": "planned", "phase": "pending"})
-        self.assertEqual(t["history"], [{"from": "inbox/ready", "to": "planned/pending"},
-                                        {"from": "wontdo/ready", "to": "inbox/ready"}, {"why": "just a note"}])
+        self.assertEqual(t["history"], [{"from": "triage/ready", "to": "planned/pending"},
+                                        {"from": "wontdo/ready", "to": "triage/ready"}, {"why": "just a note"}])
         before = repr(db)
         self.assertFalse(machine.migrate(db))
         self.assertEqual(repr(db), before)
@@ -58,7 +69,7 @@ class MachineTest(unittest.TestCase):
 
     def test_spec_approval_edge(self):
         self.assertTrue(machine.allowed(("drafting", "awaiting"), ("planned", "pending")))
-        self.assertFalse(machine.allowed(("inbox", "awaiting"), ("planned", "pending")))
+        self.assertFalse(machine.allowed(("triage", "awaiting"), ("planned", "pending")))
 
 
 if __name__ == "__main__":

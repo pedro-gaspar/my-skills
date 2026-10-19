@@ -148,7 +148,7 @@ class CheckTest(unittest.TestCase):
         scout.mkdir()
         baking = ("baking", "progress")
         self.assertEqual(target({"worktree": str(wt), "repo": str(repo)}, ("reviewing", "progress"), "diff"), wt)
-        self.assertEqual(target({"worktree": None, "repo": str(repo)}, ("inbox", "pending"), "log"), repo)
+        self.assertEqual(target({"worktree": None, "repo": str(repo)}, ("triage", "pending"), "log"), repo)
         self.assertEqual(target({"worktree": str(tmp / "gone"), "repo": str(repo)}, baking, "log"), repo)
         self.assertEqual(target({"worktree": None, "scout": str(scout), "repo": str(repo)},
                                 ("drafting", "progress"), "log"), scout)

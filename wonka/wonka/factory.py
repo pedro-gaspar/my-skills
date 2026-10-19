@@ -20,7 +20,7 @@ LINTED = ("idea", "spec")
 MAX_RETRIES = 3
 MAX_CONFLICT_FIXES = 3  # fixes in a row that GitHub still calls CONFLICTING
 # the state a ticket is left in while each agent's job is unfinished
-JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
+JOB_AGENTS = {"oompa-loompa-triage": ("triage", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
 # the in-progress states whose job runs inside the ticket's worktree, and the agent that runs it
 # (reviewing/progress is handled apart: it has several squirrels)
@@ -505,7 +505,7 @@ class Factory:
             self.drop_worktree(tid)
             if dst == ("shipped", "ready"):
                 self.drop_branch(tid)
-        if t.get("scout") and dst not in (("inbox", "pending"), ("drafting", "pending"), ("drafting", "progress")):
+        if t.get("scout") and dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
             self.drop_scout(tid)  # no triage or draft job left to read it
         if dst[1] == "awaiting":
             notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
@@ -536,13 +536,13 @@ class Factory:
         title = title or _default_title(idea)
         meta = {"id": tid, "title": title, "size": size or "", "jira": jira or "",
                 "spec_review": spec_review or "agent"}
-        meta["status"], meta["phase"] = machine.label(("inbox", "pending"))
+        meta["status"], meta["phase"] = machine.label(("triage", "pending"))
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
             "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
             "review_round": 0, "parent": parent, "children": [],
-            "last_valid": {"status": "inbox", "phase": "pending"},
+            "last_valid": {"status": "triage", "phase": "pending"},
             "created_at": _iso(now()), "history": [],
         }
         if parent_t:
@@ -567,7 +567,7 @@ class Factory:
     def triage(self, tid, size, title=None, questions=None, duplicate_of=None, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
             return self._stale_msg(tid, "triage result", dispatch)
-        self.expect(tid, ("inbox", "pending"))
+        self.expect(tid, ("triage", "pending"))
         if size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
         if duplicate_of:
@@ -600,9 +600,9 @@ class Factory:
             body = note.new_questions(body, note.render_questions(questions))
         self.write(tid, meta, body)
         if size in machine.AUTO_READY and not questions:
-            self.move(tid, ("inbox", "ready"), "triage")
+            self.move(tid, ("triage", "ready"), "triage")
         else:
-            self.move(tid, ("inbox", "awaiting"), "triage", "The triage Oompa-Loompa needs a human: see Approval / Questions")
+            self.move(tid, ("triage", "awaiting"), "triage", "The triage Oompa-Loompa needs a human: see Approval / Questions")
 
     # -- drafting ---------------------------------------------------------
 
@@ -1471,17 +1471,17 @@ class Factory:
             self.write(tid, meta, body)
             return f"{tid}: reverted illegal {shown}"
         if (meta.get("status"), meta.get("phase")) != machine.label(last):
-            # silent migration of old labels (🌟-Done, 🎫-Ready) and hand-typed names
+            # silent migration of old labels (🌟-Done, 🎫-Ready, ✉️-Inbox) and hand-typed names
             meta["status"], meta["phase"] = machine.label(last)
             self.write(tid, meta, body)
         if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
             t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
             self.write(tid, meta, note.drop_section(body, "stuck"))
             return f"{tid}: unstuck by a human"
-        if last == ("inbox", "awaiting"):
+        if last == ("triage", "awaiting"):
             appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
             if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
-                self.move(tid, ("inbox", "ready"), "human", "Approved")
+                self.move(tid, ("triage", "ready"), "human", "Approved")
                 return f"{tid}: approved"
         elif last == ("drafting", "awaiting") and t.get("spec_review_pending"):
             return self._spec_reviewed(tid, note.get_section(body, "questions"))
@@ -1582,7 +1582,7 @@ class Factory:
     def start(self, tid):
         """Claim a job for an agent and return what it needs to know."""
         t, s = self.ticket(tid), self.state(tid)
-        job = {"inbox": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
+        job = {"triage": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
                "shipped": "conflicts"}[s[0]]
         base_ref = None
         if s == ("drafting", "pending"):
@@ -1764,15 +1764,15 @@ class Factory:
 
     def _triaging(self):
         return sum(1 for k in self.live()
-                   if self.state(k) == ("inbox", "pending") and self.ticket(k).get("job_started_at"))
+                   if self.state(k) == ("triage", "pending") and self.ticket(k).get("job_started_at"))
 
     def tick(self, drop_missing=False):
         self._base_cache = {}  # one base fetch per (repo, base) per tick
         try:
             events = self._find_renamed(self._foreign())
             self._check_notes(drop_missing)
-            if store.migrate_base(self.cfg):
-                events.append("🍫 Factory.base: column 🎫-Ready renamed to 🎫-Planned")
+            for old, new in store.migrate_base(self.cfg):
+                events.append(f"🍫 Factory.base: column {old} renamed to {new}")
             events += [m for k in self.live()
                        for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
@@ -1783,7 +1783,7 @@ class Factory:
             seen = set(self.db.get("foreign_notes", []))
             events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
             self.db["foreign_notes"] = foreign
-            for src, dst, limit in ((("inbox", "ready"), ("drafting", "pending"), "drafting"),
+            for src, dst, limit in ((("triage", "ready"), ("drafting", "pending"), "drafting"),
                                     (("planned", "pending"), ("baking", "pending"), "baking")):
                 for k in self.live():
                     if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
@@ -1795,9 +1795,9 @@ class Factory:
                     continue
                 if s == ("shipped", "pending"):
                     events.append(self._safe(k, self.ship))
-                elif s == ("inbox", "pending") and self._triaging() >= self.cfg["wip"].get("triage", 2):
+                elif s == ("triage", "pending") and self._triaging() >= self.cfg["wip"].get("triage", 2):
                     continue  # triage has a limit too, or a burst of follow-ups dispatches a triage agent each
-                elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
+                elif s in (("triage", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
                         or (s == ("drafting", "progress") and t.get("resume")) \
                         or (s == ("shipped", "awaiting") and t.get("conflicts")):
                     job = self._safe(k, self.start)
