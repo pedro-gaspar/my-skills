@@ -193,6 +193,14 @@ class CliTest(unittest.TestCase):
         self.assertIn("discover -s wonka -t wonka", develop)
         self.assertIn("NO TESTS RAN", develop)
 
+    def test_readme_documents_the_sandbox_boundary(self):
+        readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
+        self.assertLess(readme.index("## Sandbox boundary"), readme.index("\n## Use"))
+        section = readme.split("## Sandbox boundary", 1)[1].split("\n## ", 1)[0]
+        for text in ["not a sandbox", "--repo", "/sandbox", '"wonka *"', "allowUnsandboxedCommands", "allowWrite",
+                     "denyRead"]:
+            self.assertIn(text, section)
+
     def test_squirrel_docs_differ_only_in_name_emoji_focus_and_model(self):
         """The squirrel agents share one body; only who they are, what they look at and their model may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"
