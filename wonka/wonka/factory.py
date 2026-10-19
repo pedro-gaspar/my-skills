@@ -119,14 +119,29 @@ def parse_remote(url):
 def repo_info(path):
     top = git("rev-parse", "--show-toplevel", cwd=path)
     try:
-        base = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=top).split("/", 1)[1]
+        origin_url = git("remote", "get-url", "origin", cwd=top)
     except WonkaError:
-        base = git("branch", "--show-current", cwd=top) or "main"
-    try:
-        origin = parse_remote(git("remote", "get-url", "origin", cwd=top))
-    except WonkaError:
-        origin = None
-    return top, base, origin
+        origin_url = None
+    return top, _base_branch(top, has_origin=origin_url is not None), parse_remote(origin_url)
+
+
+def _base_branch(top, has_origin):
+    """The branch tickets in this repo branch from and open PRs against. Never the checked-out branch."""
+    if has_origin:
+        try:
+            return git("symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=top).split("/", 1)[1]
+        except WonkaError:
+            pass
+        for name in ("main", "master"):
+            if _ref_exists(top, f"refs/remotes/origin/{name}"):
+                return name
+        raise WonkaError(f"can't tell the base branch of {top}: origin/HEAD is not set and there is no "
+                         "origin/main or origin/master. Run `git fetch origin && git remote set-head origin --auto` "
+                         "(or `git remote set-head origin <branch>`) and try again")
+    for name in ("main", "master"):
+        if _ref_exists(top, f"refs/heads/{name}"):
+            return name
+    raise WonkaError(f"can't tell the base branch of {top}: it has no origin remote and no main or master branch")
 
 
 def _ref_exists(repo, ref):

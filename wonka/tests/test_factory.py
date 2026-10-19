@@ -1281,6 +1281,57 @@ class FactoryTest(unittest.TestCase):
             self.assertNotEqual(f.ticket(child)["pr_repo"], "acme/app")
         self.assertEqual(self.note(child)[0]["jira"], "CALC-42")
 
+    def _new_repo(self, name, branch, origin=True):
+        repo = self.tmp / name
+        repo.mkdir()
+        sh("git", "init", "-q", "-b", branch, cwd=repo)
+        (repo / "README.md").write_text(name + "\n")
+        sh("git", "add", ".", cwd=repo)
+        sh("git", "commit", "-qm", "init", cwd=repo)
+        if origin:
+            bare = self.tmp / (name + ".git")
+            sh("git", "init", "-q", "--bare", str(bare), cwd=self.tmp)
+            sh("git", "remote", "add", "origin", str(bare), cwd=repo)
+            sh("git", "push", "-qu", "origin", branch, cwd=repo)
+        return repo
+
+    def test_base_is_origin_main_not_the_checked_out_branch(self):
+        sh("git", "checkout", "-qb", "feature", cwd=self.repo)
+        tid = self.add()
+        self.assertEqual(self.f_ticket(tid)["base_branch"], "main")
+
+    def test_base_follows_origin_head_when_set(self):
+        sh("git", "push", "-q", "origin", "main:develop", cwd=self.repo)
+        sh("git", "fetch", "-q", "origin", cwd=self.repo)
+        sh("git", "remote", "set-head", "origin", "develop", cwd=self.repo)
+        sh("git", "checkout", "-qb", "feature", cwd=self.repo)
+        tid = self.add()
+        self.assertEqual(self.f_ticket(tid)["base_branch"], "develop")
+
+    def test_base_falls_back_to_origin_master(self):
+        repo = self._new_repo("m", "master")
+        sh("git", "checkout", "-qb", "feature", cwd=repo)
+        self.assertEqual(factory.repo_info(str(repo))[1], "master")
+
+    def test_base_unknown_raises_and_adds_nothing(self):
+        repo = self._new_repo("t", "trunk")
+        with self.f() as f:
+            next_id = f.db["next_id"]
+            tickets = dict(f.db["tickets"])
+            with self.assertRaises(WonkaError) as cm:
+                f.add("x", repo=str(repo), pr_repo="acme/x")
+            self.assertIn("set-head", str(cm.exception))
+            self.assertEqual(f.db["next_id"], next_id)
+            self.assertEqual(dict(f.db["tickets"]), tickets)
+
+    def test_base_without_origin_uses_local_main_or_raises(self):
+        repo = self._new_repo("lo", "main", origin=False)
+        sh("git", "checkout", "-qb", "feature", cwd=repo)
+        self.assertEqual(factory.repo_info(str(repo))[1], "main")
+        trunk = self._new_repo("lt", "trunk", origin=False)
+        with self.assertRaises(WonkaError):
+            factory.repo_info(str(trunk))
+
     def test_child_of_parent_with_deleted_note_gets_no_jira(self):
         tid = self.add(jira="CALC-42")
         with self.f() as f:
