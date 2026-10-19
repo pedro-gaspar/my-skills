@@ -102,8 +102,31 @@ class RunTest(unittest.TestCase):
         self.assertEqual(code, 0)
         holder = json.loads((wt / "holder.json").read_text())
         self.assertEqual((holder["id"], holder["dispatch"]), (tid, 4))
+        self.assertEqual(lp.read_text(), "")
         with open(lp) as fh:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_holder_is_cleared_when_the_command_is_missing(self):
+        tid = self.add()
+        self.to_baking(tid)
+        with mock.patch.object(testrun.subprocess, "run", side_effect=FileNotFoundError):
+            code, _ = self.wtest(tid, "--", "./t.sh")
+        self.assertEqual(code, 1)
+        self.assertEqual(testrun.lock_path("app").read_text(), "")
+
+    def test_waiter_sees_no_stale_holder_after_a_run(self):
+        tid = self.add()
+        self.to_baking(tid)
+        lp = testrun.lock_path("app")
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        lp.write_text(json.dumps({"id": "WONKA-00012", "dispatch": 1, "started": "2026-10-19T14:03:00"}))
+        self.assertEqual(self.wtest(tid, "--", "python3", "-c", "pass")[0], 0)
+        with open(lp, "a+") as held:  # a new holder that has not written its info yet
+            fcntl.flock(held, fcntl.LOCK_EX)
+            code, err = self.wtest(tid, "--", "python3", "-c", "pass")
+        self.assertEqual(code, 75)
+        self.assertIn("tests busy: another run holds the lock, run it again", err)
+        self.assertNotIn("WONKA-00012", err)
 
     def test_drafting_ticket_runs_in_the_scout(self):
         wt, scout = self.tmp / "wt", self.tmp / "scout"
