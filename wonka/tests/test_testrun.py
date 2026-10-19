@@ -11,7 +11,7 @@ from unittest import mock
 from wonka import cli, store, testrun
 from wonka.store import WonkaError
 
-from . import test_gitwrap
+from .fixtures import RepoFixture
 
 
 class OpenPrefixTest(unittest.TestCase):
@@ -58,16 +58,9 @@ class ParseTest(unittest.TestCase):
             testrun.check(["x"], [], "p")
 
 
-class RunTest(unittest.TestCase):
-    f = test_gitwrap.WrapperTest.f
-    add = test_gitwrap.WrapperTest.add
-    tick = test_gitwrap.WrapperTest.tick
-    state = test_gitwrap.WrapperTest.state
-    to_planned = test_gitwrap.WrapperTest.to_planned
-    to_baking = test_gitwrap.WrapperTest.to_baking
-
+class RunTest(RepoFixture, unittest.TestCase):
     def setUp(self):
-        test_gitwrap.WrapperTest.setUp(self)
+        super().setUp()
         self.cfg = {**self.cfg, "test_commands": {"app": ["./t.sh", "python3 -c"]}, "test_lock_wait_minutes": 0.01}
         store.save_config(self.cfg)
 
