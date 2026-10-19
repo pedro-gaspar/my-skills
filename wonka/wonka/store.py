@@ -223,7 +223,7 @@ def _lock(fh, timeout):
 
 
 def snapshot():
-    """The status JSON as it is now, read without the lock: for commands that only read (wonka git, status, show).
+    """The status JSON as it is now, read without the lock: for commands that only read (wonka git, status, show, repos, metrics).
     Every write replaces the file atomically, so this is always one whole version."""
     path = home() / STATE_FILE
     return _load(path.read_text() if path.exists() else None)
