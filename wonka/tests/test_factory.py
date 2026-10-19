@@ -1416,6 +1416,64 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((Path(job["code"]) / "new.txt").exists())
         self.assertEqual(self.worktrees().count("-scout"), 1)
 
+    # -- one base fetch per (repo, base) per tick -------------------------------
+
+    def count_fetches(self):
+        real, calls = factory.git, []
+
+        def fake(*args, cwd):
+            if args and args[0] == "fetch":
+                calls.append((args, str(cwd)))
+            return real(*args, cwd=cwd)
+        return calls, mock.patch.object(factory, "git", fake)
+
+    def test_one_tick_fetches_each_base_once(self):
+        a, b = self.add(), self.add("Add a bye script")
+        self.push_upstream()
+        calls, patch = self.count_fetches()
+        with patch:
+            jobs = self.tick()["jobs"]
+        self.assertEqual(sorted(j["id"] for j in jobs), sorted([a, b]))
+        self.assertTrue(all(j["job"] == "triage" for j in jobs))
+        self.assertEqual([c[0] for c in calls], [("fetch", "--quiet", "origin", "main")])
+        for j in jobs:
+            self.assertEqual(j["base_ref"], "origin/main")
+            self.assertTrue((Path(j["code"]) / "new.txt").exists())
+
+    def test_each_tick_fetches_again(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.push_upstream("other.txt")
+        calls, patch = self.count_fetches()
+        with patch:
+            job = self.job_for(tid)
+        self.assertEqual(job["job"], "draft")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((Path(job["code"]) / "other.txt").exists(), "the cache does not carry over between ticks")
+
+    def test_offline_tick_tries_the_fetch_once(self):
+        sh("git", "remote", "remove", "origin", cwd=self.repo)
+        self.add(), self.add("Add a bye script")
+        calls, patch = self.count_fetches()
+        with patch:
+            jobs = self.tick()["jobs"]
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(all(j["base_ref"] == "main" for j in jobs))
+
+    def test_latest_base_outside_a_tick_always_fetches(self):
+        tid = self.add()
+        calls, patch = self.count_fetches()
+        with self.f() as f:
+            with patch:
+                self.assertEqual(f._latest_base(f.ticket(tid)), "origin/main")
+                self.assertEqual(f._latest_base(f.ticket(tid)), "origin/main")
+            self.assertEqual(len(calls), 2, "no caching outside tick()")
+            f.tick()
+            self.assertIsNone(f._base_cache)
+
     def test_scout_falls_back_to_the_repo_without_origin(self):
         sh("git", "remote", "remove", "origin", cwd=self.repo)
         tid = self.add()

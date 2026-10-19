@@ -185,6 +185,7 @@ def _default_title(idea):
 class Factory:
     def __init__(self, cfg, db):
         self.cfg, self.db = cfg, db
+        self._base_cache = None  # {(repo, base): ref} during tick(); None outside a tick: always fetch
 
     # -- tickets and notes ------------------------------------------------
 
@@ -407,14 +408,23 @@ class Factory:
         t["worktree"], t["branch"] = str(path), branch
 
     def _latest_base(self, t):
-        """Fetch origin's base branch and return the freshest ref to start from: origin/<base>, else the local base."""
+        """Fetch origin's base branch and return the freshest ref to start from: origin/<base>, else the local base.
+
+        Fetched at most once per (repo, base) within a tick."""
+        key = (t["repo"], t["base_branch"])
+        cache = self._base_cache
+        if cache is not None and key in cache:
+            return cache[key]
+        ref = t["base_branch"]
         try:
             git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
             if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
-                return f"origin/{t['base_branch']}"
+                ref = f"origin/{t['base_branch']}"
         except WonkaError:
             pass  # offline or no origin: use the local base branch
-        return t["base_branch"]
+        if cache is not None:
+            cache[key] = ref
+        return ref
 
     # -- scout: a read-only checkout of the latest base for triage and drafting --
 
@@ -1013,35 +1023,39 @@ class Factory:
             return f"{tid}: ⚠️ {e}"
 
     def tick(self):
-        events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
-        # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
-        events += [m for k, t in sorted(self.db["tickets"].items())
-                   if (t.get("cleanup") or t.get("worktree")) and self.state(k) in (("shipped", "done"), KILLED)
-                   for m in [self._safe(k, self.cleanup)] if m]
-        folder = store.tickets_dir(self.cfg)
-        foreign = sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"]) if folder.exists() else []
-        seen = set(self.db.get("foreign_notes", []))
-        events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
-        self.db["foreign_notes"] = foreign
-        for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
-                                (("ready", "pending"), ("baking", "pending"), "baking")):
+        self._base_cache = {}  # one base fetch per (repo, base) per tick
+        try:
+            events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
+            # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
+            events += [m for k, t in sorted(self.db["tickets"].items())
+                       if (t.get("cleanup") or t.get("worktree")) and self.state(k) in (("shipped", "done"), KILLED)
+                       for m in [self._safe(k, self.cleanup)] if m]
+            folder = store.tickets_dir(self.cfg)
+            foreign = sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"]) if folder.exists() else []
+            seen = set(self.db.get("foreign_notes", []))
+            events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
+            self.db["foreign_notes"] = foreign
+            for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
+                                    (("ready", "pending"), ("baking", "pending"), "baking")):
+                for k in self.live():
+                    if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
+                        events.append(self._safe(k, lambda k: self.move(k, dst, "wonka") or f"{k}: → {fmt(dst)}"))
+            jobs = []
             for k in self.live():
-                if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
-                    events.append(self._safe(k, lambda k: self.move(k, dst, "wonka") or f"{k}: → {fmt(dst)}"))
-        jobs = []
-        for k in self.live():
-            t, s = self.ticket(k), self.state(k)
-            if t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
-                continue
-            if s == ("shipped", "pending"):
-                events.append(self._safe(k, self.ship))
-            elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
-                    or (s == ("drafting", "progress") and t.get("resume")) \
-                    or (s == ("shipped", "awaiting") and t.get("conflicts")):
-                job = self._safe(k, self.start)
-                (events if isinstance(job, str) else jobs).append(job)
-        stale_after = dt.timedelta(hours=self.cfg["stale_hours"])
-        stale = [k for k in self.live() if self.ticket(k).get("job_started_at")
-                 and _age(self.ticket(k)["job_started_at"]) > stale_after]
-        awaiting = [k for k in self.live() if self.state(k)[1] == "awaiting"]
-        return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale}
+                t, s = self.ticket(k), self.state(k)
+                if t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
+                    continue
+                if s == ("shipped", "pending"):
+                    events.append(self._safe(k, self.ship))
+                elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
+                        or (s == ("drafting", "progress") and t.get("resume")) \
+                        or (s == ("shipped", "awaiting") and t.get("conflicts")):
+                    job = self._safe(k, self.start)
+                    (events if isinstance(job, str) else jobs).append(job)
+            stale_after = dt.timedelta(hours=self.cfg["stale_hours"])
+            stale = [k for k in self.live() if self.ticket(k).get("job_started_at")
+                     and _age(self.ticket(k)["job_started_at"]) > stale_after]
+            awaiting = [k for k in self.live() if self.state(k)[1] == "awaiting"]
+            return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale}
+        finally:
+            self._base_cache = None
