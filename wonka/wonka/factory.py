@@ -283,6 +283,21 @@ def _push_rejected_reason(branch):
     return f"{head}git pull --rebase origin $(git branch --show-current), then tick Retry"
 
 
+def _ci_stuck_reason(n, red):
+    """Why a ticket went stuck on red CI. The list of checks is shortened to fit _REASON_MAX, never the ending."""
+    tail = "fix by hand then tick Retry"
+    names = [" ".join(c["name"].split()) for c in red]
+
+    def build(shown):
+        return f"CI still red after {n} fix rounds: {shown}, {tail}"
+
+    for k in range(len(names), 0, -1):
+        shown = ", ".join(names[:k]) + (f" and {len(names) - k} more" if k < len(names) else "")
+        if len(build(shown)) <= _REASON_MAX:
+            return build(shown)
+    return build(f"{len(names)} checks")
+
+
 class _PushRejected(WonkaError):
     """git push was rejected as not a fast-forward: retrying cannot help, a human must rebase."""
 
@@ -626,6 +641,10 @@ class Factory:
             # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
             # merge starts clean (kept through pending/progress so a failed fixer's retry does not reset it)
             t.pop("conflict_fixes", None)
+        if by != "wonka" or final:
+            t.pop("ci_stuck", None)  # goes with the stuck flag below
+        if final:
+            t.pop("ci_fixes", None)  # merged or killed: the CI fix count dies with the PR
         if dst[1] == "ready":
             t.pop("pr_base", None)
         if final:
@@ -1449,15 +1468,23 @@ class Factory:
             return None
         if not red:
             t.pop("ci_fixes", None)  # a green head: the next red episode gets the full budget
+            if t.pop("ci_stuck", None):  # the human fixed it by hand
+                t.pop("stuck", None)
+                meta, body = self.read(tid)
+                self.write(tid, meta, note.drop_section(body, "stuck"))
+                self.log_event(tid, "CI is green again: unstuck")
             return None
         if head == t.get("ci_handled_sha"):
             return None
         n = t.get("ci_fixes", 0)
         if n >= MAX_CI_FIXES:
             t["ci_handled_sha"] = head
-            self.log_event(tid, f"CI is still red on {head[:7]} after {n} CI fix rounds in a row: not starting another, "
-                                "fix it by hand or tick Request changes")
-            notify(tid, "CI still red after CI fix rounds")
+            if t.get("ci_stuck"):  # a new red head while already stuck: no repeat log or notify
+                return None
+            t["stuck"] = t["ci_stuck"] = True
+            self.set_section(tid, "stuck", f"- [ ] Retry ({_ci_stuck_reason(n, red)}. See ~/.wonka/factory.log)")
+            self.log_event(tid, f"CI is still red on {head[:7]} after {n} CI fix rounds in a row: stuck, needs a human")
+            notify(tid, "stuck: tick Retry when it's fixed")
             return None
         return head, red
 
@@ -1721,6 +1748,9 @@ class Factory:
             self.write(tid, meta, body)
         if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
             t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
+            if t.pop("ci_stuck", None):  # a fresh budget of CI fix rounds
+                t.pop("ci_fixes", None)
+                t.pop("ci_handled_sha", None)
             self.write(tid, meta, note.drop_section(body, "stuck"))
             return f"{tid}: unstuck by a human"
         if last == ("idea", "pending"):
@@ -1799,11 +1829,13 @@ class Factory:
                 t.pop("conflict_error", None)
                 # fixed by hand before a fixer ran (or while it could not start): drop the banner's warning
                 dirty = bool(t.pop("conflicts", None))
-                if t.pop("stuck", None):  # a fixer that could not start, or a PR that stayed conflicting
+                # a CI stuck is cleared by green CI, Retry, merge or kill, never by the PR being mergeable
+                if not t.get("ci_stuck") and t.pop("stuck", None):  # a fixer that could not start, or a PR that stayed conflicting
                     body, dirty = note.drop_section(body, "stuck"), True
                     self.log_event(tid, "The PR is mergeable again: unstuck")
                 if dirty:
                     self.write(tid, meta, body)
+            was_stuck = bool(t.get("stuck"))
             ci = self._red_ci(tid, head, rollup) if pr == "OPEN" and mergeable == "MERGEABLE" else None
             changes = note.get_section(body, "changes")
             if changes is None:  # a PR opened before change requests existed gets the box too
@@ -1815,6 +1847,8 @@ class Factory:
                 return self._request_changes(tid, notes, ci)
             if ci:
                 return self._ci_failed(tid, *ci)
+            if t.get("ci_stuck") and not was_stuck:
+                return f"{tid}: stuck, CI still red after {MAX_CI_FIXES} CI fix rounds"
         return None
 
     def _start_idea(self, tid, why):
