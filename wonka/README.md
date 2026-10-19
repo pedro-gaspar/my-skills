@@ -70,6 +70,8 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
    - `allowWrite` is needed because a call that pipes text in with a heredoc (the analyst's `wonka plan` and
      `wonka section`) stays sandboxed, and every wonka call takes the lock in `~/.wonka`. Sandboxed test code
      can then edit Wonka's state, but not your checkouts.
+   - Commands run through `wonka test` run outside the sandbox too (`wonka *` is excluded), and a builder can edit
+     the script they run: only list a project's `test_commands` if you accept that.
    - `allowUnsandboxedCommands: false` stops an agent from retrying a blocked command outside the sandbox.
 
    Tests that need the network fail until you add their hosts to `sandbox.network.allowedDomains`.
@@ -89,8 +91,9 @@ push.
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
 | `wonka repos` | the repos the factory knows (project, local path, PR repo); the analyst uses it to file a ticket in another repo |
-| `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>` |
+| `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `test_lock_wait_minutes` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
+| `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
 | `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
 
 ## The floor
@@ -115,6 +118,13 @@ removes it): the CLI copies them from your checkout into each worktree and scout
 ignores there are copied (never one a builder could commit), an existing file is never overwritten, and a missing one is
 noted in the ticket's factory log without blocking the job. They are copied, never symlinked, so a builder cannot change
 your checkout's file.
+
+Agents run a project's tests with `wonka test <id> -- <command>`. List the allowed command prefixes with
+`wonka config test_commands.<project> ./test.sh,make test` (a comma list; an empty value removes it). `wonka test`
+runs only a command that starts with one of them, with no shell, in the ticket's scout or worktree (never your
+checkout). One run per project holds `~/.wonka/locks/<project>-tests.lock`; the others wait up to
+`test_lock_wait_minutes` (default 3, so wait plus run fit the agents' 10-minute Bash timeout), then exit 75 naming
+the holder. The exit code is the command's.
 
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Ready. Finished tickets (Shipped or Wont-Do) and their plans move to
 `wonka/archive/` after 7 days. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) are
@@ -166,7 +176,7 @@ and the next tick puts it back, with a note on the ticket. Notes keep only `id, 
 jira`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
 `~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It and the notes
 are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
-giving up after 10 minutes. `wonka git`, `wonka status` and `wonka show` only read, so they never wait for it: an agent
+giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status` and `wonka show` only read, so they never wait for it: an agent
 is never stalled by a tick that is busy talking to GitHub.
 
 ## Develop

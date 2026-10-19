@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import json
 import os
+import shlex
 import shutil
 import time
 from pathlib import Path
@@ -24,10 +25,13 @@ DEFAULT_CONFIG = {
     "max_review_rounds": 3,  # review rounds with issues before a bad nut is rolled away
     "max_followup_depth": 2,  # a squirrel's follow-up is not filed for a ticket this many follow-ups deep
     "worktree_files": {},  # project -> repo-relative gitignored files copied into its worktrees
+    "test_commands": {},  # project -> argv prefixes `wonka test` may run, under a per-project lock
+    "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
 }
 SETTINGS = {  # wonka config <key> <value>
     "wip.triage": int, "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
     "max_review_rounds": int, "max_followup_depth": int,
+    "test_lock_wait_minutes": float,
 }
 LOCK_TIMEOUT = 600  # seconds a command waits for the state lock before giving up
 
@@ -56,8 +60,31 @@ def set_setting(cfg, key, raw):
             files.pop(project, None)
         cfg["worktree_files"] = files
         return
+    if key.startswith("test_commands."):
+        project = key.split(".", 1)[1]
+        if not project:
+            raise WonkaError("usage: wonka config test_commands.<project> <command>[,<command>...]")
+        prefixes = []
+        for p in (x.strip() for x in raw.split(",")):
+            if not p:
+                continue
+            try:
+                tokens = shlex.split(p)
+            except ValueError as e:
+                raise WonkaError(f"{p}: not a valid command prefix ({e})")
+            if not tokens:
+                continue
+            prefixes.append(p)
+        cmds = dict(cfg.get("test_commands") or {})
+        if prefixes:
+            cmds[project] = prefixes
+        else:
+            cmds.pop(project, None)
+        cfg["test_commands"] = cmds
+        return
     if key not in SETTINGS:
-        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, worktree_files.<project>")
+        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, worktree_files.<project>, "
+                         "test_commands.<project>")
     try:
         value = SETTINGS[key](raw)
     except ValueError:
