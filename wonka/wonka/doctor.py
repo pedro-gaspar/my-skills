@@ -115,6 +115,7 @@ def checks():
     allow, dirs = _permissions()
     yield from permission_checks(allow, dirs, [str(store.worktrees_dir()), str(board)])
 
+
 def doctor():
     icons = {"ok": "✅", "warn": "⚠️ ", "fail": "❌"}
     worst = "ok"

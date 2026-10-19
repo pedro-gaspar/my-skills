@@ -5,14 +5,14 @@ import subprocess
 from pathlib import Path
 
 from . import store
-from .factory import Factory, fmt
+from .factory import JOB_AGENTS, Factory, fmt
 from .store import WonkaError
 
 READS = ("status", "diff", "log", "show", "rev-parse", "ls-files", "blame")
 WRITES = ("add", "commit", "merge")
 SUBCOMMANDS = READS + WRITES
 # the states whose job writes to the worktree: the builder bakes, the fixer merges the base into an open PR
-WRITE_STATES = {("baking", "progress"): "baking", ("shipped", "progress"): "fixing merge conflicts"}
+WRITE_STATES = frozenset(JOB_AGENTS[a] for a in ("oompa-loompa-builder", "oompa-loompa-fixer"))
 # long options refused (and any abbreviation of them: parse-options accepts unambiguous prefixes)
 BANNED = {
     "*": ("--output", "--ext-diff", "--textconv", "--no-index", "--contents", "--exec", "--upload-pack",
