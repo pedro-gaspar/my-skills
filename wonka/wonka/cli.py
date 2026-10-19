@@ -122,11 +122,10 @@ def run(a, f):
         f.write_plan(a.id, sys.stdin.read())
         print(f"📋 {f.plan_path(a.id)}")
     elif c == "drafted":
-        f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r])
-        print(f.summary(a.id))
+        msg = f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r], a.dispatch)
+        print(msg or f.summary(a.id))
     elif c == "baked":
-        f.baked(a.id)
-        print(f.summary(a.id))
+        print(f.baked(a.id, a.dispatch) or f.summary(a.id))
     elif c == "resolved":
         f.resolved(a.id)
         print(f.summary(a.id))
@@ -208,8 +207,10 @@ def parser():
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
     s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security,spark,airflow")
+    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
+    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("resolved", help="fixer: the merge conflicts are committed")
     s.add_argument("id")
     s = sub.add_parser("report", help="squirrel: file a review verdict")

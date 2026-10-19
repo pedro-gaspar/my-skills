@@ -843,6 +843,58 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("left no result", self.finished(tid, "wonka:oompa-loompa-triage", None),
                       "no dispatch behaves as before")
 
+    def test_late_drafted_from_an_earlier_dispatch_is_ignored(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        d1 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
+        with self.f() as f:
+            f.retry(tid)
+        d2 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
+        self.assertGreater(d2, d1)
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+            msg = f.drafted(tid, "m", ["backend"], d1)
+        self.assertEqual(msg, f"{tid}: analyst result is from an earlier dispatch ({d1}, now {d2}), ignored")
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        self.assertFalse(self.f_ticket(tid).get("plan"))
+        self.assertNotEqual(self.f_ticket(tid).get("reviewers"), ["backend"])
+        self.assertEqual(self.note(tid)[0]["size"], "s", "a stale drafted has no side effect")
+        with self.f() as f:
+            f.retry(tid)
+        self.assertEqual(self.state(tid), ("drafting", "pending"))
+        with self.f() as f:
+            msg = f.drafted(tid, "s", ["architect"], d1)
+        self.assertIn("earlier dispatch", msg, "a stale drafted while pending is ignored, not an error")
+        self.assertEqual(self.state(tid), ("drafting", "pending"))
+        d3 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
+        with self.f() as f:
+            self.assertIsNone(f.drafted(tid, "s", ["architect"], d3))
+        self.assertEqual(self.state(tid), ("ready", "pending"))
+
+    def test_late_baked_from_an_earlier_dispatch_is_ignored(self):
+        tid = self.add()
+        self.to_ready(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        d1, wt = job["dispatch"], Path(job["worktree"])
+        (wt / "hello.sh").write_text("echo hi\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "bake", cwd=wt)
+        with self.f() as f:
+            f.retry(tid)
+        d2 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
+        self.assertGreater(d2, d1)
+        with self.f() as f:
+            msg = f.baked(tid, d1)
+        self.assertEqual(msg, f"{tid}: builder result is from an earlier dispatch ({d1}, now {d2}), ignored")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        with self.f() as f:
+            self.assertIsNone(f.baked(tid, d2))
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+
     def test_failed_pr_is_retried_each_tick_then_stuck_until_a_human_ticks_retry(self):
         tid = self.add()
         self.to_ready(tid)
