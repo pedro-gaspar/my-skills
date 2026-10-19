@@ -68,6 +68,19 @@ def gh(*args, cwd=None):
     return _run([os.environ.get("WONKA_GH", "gh"), *args], cwd=cwd)
 
 
+def _json_pages(text):
+    """Every item from `gh api --paginate` output, which is one JSON array or several concatenated ones."""
+    dec, items, i = json.JSONDecoder(), [], 0
+    text = text or ""
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return items
+        page, i = dec.raw_decode(text, i)
+        items.extend(page if isinstance(page, list) else [page])
+
+
 def slug(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].rstrip("-") or "ticket"
 
@@ -562,8 +575,7 @@ class Factory:
         t = self.ticket(tid)
         num = t["pr_url"].rstrip("/").rsplit("/", 1)[-1]
         view = json.loads(gh("pr", "view", t["pr_url"], "--json", "comments,reviews") or "{}")
-        # one page of 100 inline comments is plenty for a change request
-        inline = json.loads(gh("api", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100") or "[]")
+        inline = _json_pages(gh("api", "--paginate", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100"))
         items = []
         for c in view.get("comments") or []:
             items.append(((c.get("author") or {}).get("login"), c.get("authorAssociation"), c.get("body"),
