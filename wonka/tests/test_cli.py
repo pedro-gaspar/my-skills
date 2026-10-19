@@ -576,6 +576,21 @@ class CliTest(unittest.TestCase):
         alert.assert_called_once()
         self.assertIn("not valid JSON", alert.call_args[0][0])
 
+    def test_state_of_the_wrong_shape_is_a_clean_error(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        (self.tmp / "home" / store.STATE_FILE).write_text('{"next_id": 1, "tickets": []}')
+        with mock.patch.object(cli, "alert"):
+            code, _, err = self.run_cli("status")
+        self.assertEqual(code, 1)
+        self.assertIn("is not a Wonka state file (tickets must be an object", err)
+
+    def test_config_non_finite_numbers_are_refused(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        for key, raw in (("stale_hours", "inf"), ("test_lock_wait_minutes", "nan")):
+            code, _, err = self.run_cli("config", key, raw)
+            self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: {key} must be a finite number"))
+        self.assertEqual(store.load_config()["test_lock_wait_minutes"], 3)
+
     def test_missing_vault_pings_the_desktop(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         shutil.rmtree(self.tmp / "vault")
