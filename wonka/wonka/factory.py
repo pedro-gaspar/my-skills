@@ -259,6 +259,7 @@ class Factory:
         t, src = self.ticket(tid), self.state(tid)
         if not machine.allowed(src, dst):
             raise WonkaError(f"{tid}: {fmt(src)} → {fmt(dst)} is not a legal move")
+        final = dst in (("shipped", "done"), KILLED)  # merged or killed: the ticket is finished
         t["last_valid"] = {"status": dst[0], "phase": dst[1]}
         t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
                              **({"why": why} if why else {})})
@@ -277,11 +278,10 @@ class Factory:
             t.pop("conflict_fixes", None)
         if dst[1] == "done":
             t.pop("pr_base", None)
-        if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
+        if final:
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
-        final = dst in (("shipped", "done"), KILLED)
         if final:
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
         if (by != "wonka" or final) and t.pop("stuck", None):
@@ -290,7 +290,7 @@ class Factory:
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
         if by != "wonka" or final:
             t.pop("retries", None)
-        if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
+        if final:
             t.pop("cleanup", None)  # the flag reflects only this attempt
             self.drop_worktree(tid)
             if dst == ("shipped", "done"):
