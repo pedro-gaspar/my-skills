@@ -10,7 +10,9 @@ from . import note, store
 DEFAULT = "npx --yes markdownlint-cli@0.49.1 --stdin"
 TIMEOUT = 60
 MARK = "> [!warning] markdownlint flagged this section"
+HEADER = f"{MARK}, so it is kept as raw text below"
 MAX_SHOWN = 10
+_ISOLATED = re.compile(r"\A" + re.escape(HEADER) + r"\n(?:> - [^\n]*\n)*\n(`{3,})text\n(.*)\n\1\Z", re.S)
 
 
 def command():
@@ -53,17 +55,23 @@ def problems(text):
 def isolate(text, found):
     """A warning callout listing the problems, then the text in a fence no backtick run inside it can close."""
     shown = [re.sub(r"[\r\n]+", " ", p) for p in found[:MAX_SHOWN]]
-    lines = [f"{MARK}, so it is kept as raw text below", *(f"> - {p}" for p in shown)]
+    lines = [HEADER, *(f"> - {p}" for p in shown)]
     if len(found) > MAX_SHOWN:
         lines.append(f"> - ... and {len(found) - MAX_SHOWN} more")
     fence = "`" * max(3, max((len(r) for r in re.findall(r"`+", text)), default=0) + 1)
     return "\n".join(lines) + f"\n\n{fence}text\n{text}\n{fence}"
 
 
+def isolated(text):
+    """True only for the exact shape isolate() writes: the callout, then one fence closed on the last line."""
+    m = _ISOLATED.match(text)
+    return bool(m) and all(len(r) < len(m.group(1)) for r in re.findall(r"`+", m.group(2)))
+
+
 def guard(text):
-    """The section content to write: as is when clean or unchecked, isolated when markdownlint flags it."""
+    """The section content to write: as is when clean, unchecked or already isolated, isolated when flagged."""
     body = note.demote(text.strip())
-    if not body or body.startswith(MARK):
+    if not body or isolated(body):
         return body
     found = problems(body)
     if not found:

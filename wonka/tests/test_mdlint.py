@@ -50,6 +50,33 @@ class MdlintTest(unittest.TestCase):
         self.calls.unlink()
         self.assertEqual(mdlint.guard(once), once)
         self.assertFalse(self.calls.exists(), "the linter is not called again")
+        self.assertTrue(mdlint.isolated(once))
+
+    def test_isolate_output_is_recognised(self):
+        many = [f"p{i}" for i in range(mdlint.MAX_SHOWN + 2)]
+        for text in ["x", "```python\nopen", "````\nx", "a\n\nb\n```"]:
+            for found in [["p"], [], many]:
+                with self.subTest(text=text, found=len(found)):
+                    self.assertTrue(mdlint.isolated(mdlint.isolate(text, found)))
+
+    def test_text_that_only_starts_with_the_mark_is_linted(self):
+        self.failing()
+        cases = [
+            mdlint.MARK,
+            mdlint.MARK + "\nsome text",
+            mdlint.isolate("x", ["p"]) + "\nmore text",
+            f"{mdlint.HEADER}\n> - p\n\n```text\nopen",
+            f"{mdlint.HEADER}\n> - p\n\n```text\n```\nx\n```",
+        ]
+        for t in cases:
+            with self.subTest(text=t):
+                self.assertFalse(mdlint.isolated(t))
+                if self.calls.exists():
+                    self.calls.unlink()
+                out = mdlint.guard(t)
+                self.assertTrue(self.calls.exists(), "the linter is called")
+                self.assertTrue(mdlint.isolated(out))
+                self.assertNotEqual(out, t)
 
     def test_unchecked_when_the_linter_cannot_run(self):
         text = "Some text"
