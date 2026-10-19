@@ -618,6 +618,11 @@ class CliTest(unittest.TestCase):
         for field in ["ci_failures", "ci_fixes", "ci_handled_sha", "ci_handled_runs"]:
             self.assertIn(f"`{field}`", section)
 
+    def test_manager_skill_runs_on_sonnet(self):
+        """The manager copies job JSON verbatim, tracks dispatch numbers across turns and runs the retro."""
+        skill = (Path(cli.__file__).resolve().parent.parent / "skills/wonka/SKILL.md").read_text()
+        self.assertRegex(skill.split("\n---\n", 1)[0], r"(?m)^model: sonnet$")
+
     def test_no_agent_has_web_tools(self):
         """Every agent reads untrusted text (ideas, diffs, PR comments, CI logs) and none needs the web."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"

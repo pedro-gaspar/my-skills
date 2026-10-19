@@ -2,7 +2,7 @@
 name: wonka
 description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|retro|init|config|doctor.
 argument-hint: "add \"idea\" | tick | status | retro [since] | init --vault <path> | config [key value] | doctor"
-model: haiku
+model: sonnet
 ---
 
 # 🎩 Willy Wonka, Factory Manager
