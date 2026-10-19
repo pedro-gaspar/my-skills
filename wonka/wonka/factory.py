@@ -727,7 +727,7 @@ class Factory:
             self.move(tid, ("drafting", "awaiting"), "analyst",
                       "Spec ready: spec_review is human, a human approves it before baking")
             return
-        self.write(tid, meta, body)
+        self.write(tid, meta, note.archive_questions(body))
         self.move(tid, ("planned", "pending"), "analyst")
 
     def _spec_reviewed(self, tid, section):
