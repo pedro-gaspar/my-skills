@@ -1,6 +1,7 @@
 """wonka git: the only way background agents run git, pinned to a ticket's worktree or repo."""
 
 import os
+import pwd
 import subprocess
 from pathlib import Path
 
@@ -36,7 +37,8 @@ LONG_WITH_VALUE = {"commit": ("--message", "--author", "--date", "--reuse-messag
 EXACT_OK = {"ls-files": ("--exclude",), "blame": ("--ignore-rev",)}
 NO_EXTERNAL = ("diff", "log", "show", "blame")        # these get --no-ext-diff --no-textconv injected
 # only identity and dates pass through: every GIT_CONFIG_* (GLOBAL, SYSTEM, NOSYSTEM, PARAMETERS, COUNT/KEY/VALUE)
-# is dropped, since a config the caller picks can run programs (core.pager, gpg.program, filters, hooksPath)
+# is dropped, since a config the caller picks can run programs (core.pager, gpg.program, filters, hooksPath);
+# HOME and XDG_CONFIG_HOME are pinned or dropped in env() for the same reason
 # paths must stay inside the tree: diff turns into --no-index for an outside path; rev-parse reports whether one exists
 PATHS_INSIDE = ("diff", "rev-parse")
 KEEP_ENV = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
@@ -107,9 +109,28 @@ def command(path, git_dir, sub, args):
             "-c", "core.fsmonitor=false", sub, *injected, *args]
 
 
+def _passwd_home():
+    """The user's home from the passwd database, never from $HOME (the caller controls that)."""
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir or None
+    except KeyError:
+        return None
+
+
 def env(base=None):
+    """The caller's env minus every GIT_* except identity and dates. HOME is pinned to the passwd home and
+    XDG_CONFIG_HOME is dropped, so the global git config is the user's real one, never one the caller picks; commit
+    hooks run with this env, so they see the real home. With no passwd entry, HOME is dropped and the global config
+    is /dev/null (fail closed)."""
     out = {k: v for k, v in (os.environ if base is None else base).items()
            if not k.startswith("GIT_") or k in KEEP_ENV}
+    out.pop("XDG_CONFIG_HOME", None)
+    home = _passwd_home()
+    if home:
+        out["HOME"] = home
+    else:
+        out.pop("HOME", None)
+        out["GIT_CONFIG_GLOBAL"] = os.devnull
     out.update(GIT_EDITOR="true", GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0")
     return out
 
