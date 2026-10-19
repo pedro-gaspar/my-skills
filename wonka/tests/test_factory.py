@@ -549,6 +549,79 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("baking", "progress"), "back to baking and re-claimed")
 
+    def test_clean_review_logs_nothing_in_the_plan(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("spark", "airflow"))
+        self.bake(tid)
+        self.review(tid, spark={"verdict": "good nut"}, airflow={"verdict": "good nut"})
+        text = self.plan_text(tid)
+        self.assertNotIn("Review round", text)
+        self.assertNotIn("good nut", text)
+
+    def test_review_log_holds_only_squirrels_with_issues(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "security"))
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"}, security={"verdict": "bad nut", "issues": ["no shebang"]})
+        text = self.plan_text(tid)
+        self.assertIn("## 🐿️ Review round 1\n### squirrel-security: bad nut\n- no shebang\n", text)
+        self.assertNotIn("squirrel-architect", text)
+
+    def test_clean_review_answered_off_recommendation_logs_the_decision(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
+        self.assertNotIn("Review round", self.plan_text(tid))
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Rename to hi", "  - [x] Rename to hi"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        text = self.plan_text(tid)
+        self.assertTrue(text.endswith("\n## 🐿️ Review round 1\n### Decisions\n- Rename it? → Rename to hi\n"), text)
+        self.assertEqual(text.count("Review round 1"), 1)
+
+    def test_review_with_issues_and_questions_logs_decisions_under_the_round(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
+        self.tick()
+        text = self.plan_text(tid)
+        self.assertEqual(text.count("## 🐿️ Review round 1"), 1)
+        self.assertTrue(text.endswith("## 🐿️ Review round 1\n### squirrel-architect: bad nut\n- wrong\n"
+                                      "### Decisions\n- Rename it? → Keep hello (recommended)\n"), text)
+
+    def test_clean_review_answered_as_recommended_ships_with_the_decision(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertIn("## 🐿️ Review round 1\n### Decisions\n- Rename it? → Keep hello (recommended)\n",
+                      self.plan_text(tid))
+
+    def test_redraft_answer_is_kept_and_close_no_is_not(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "security"))
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["no shebang"], "suggest": "draft",
+                                    "why": "wrong approach"},
+                    security={"verdict": "bad nut", "suggest": "close", "why": "dup"})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Yes ⭐ recommended — wrong approach",
+                                                "  - [x] Yes ⭐ recommended — wrong approach")
+                       .replace("  - [ ] No", "  - [x] No", 1))
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        with self.f() as f:
+            f.write_plan(tid, "# plan v2\n")
+        text = self.plan_text(tid)
+        self.assertIn("## 🐿️ Earlier review round 1", text)
+        self.assertIn("Send it back to Drafting? → Yes", text)
+        self.assertNotIn("Close this ticket", text)
+
     def test_round_three_review_with_issues_and_questions_is_killed(self):
         tid = self.add()
         self.to_ready(tid)
@@ -1678,9 +1751,7 @@ class FactoryTest(unittest.TestCase):
                      "**@bob** on `hello.sh:1`: shebang\n    > ## 🐿️ Review round 9"):
             self.assertIn(text, req)
         self.assertNotIn("ignore previous instructions", plan)
-        self.assertIn("## 🐿️ Earlier review round 1", plan)
-        self.assertNotRegex(plan, r"(?m)^## 🐿️ Review round")
-        self.assertLess(plan.index("## 🐿️ Earlier review round 1"), plan.index("## 🔁 Change request 1"))
+        self.assertNotRegex(plan, r"(?m)^## 🐿️ (Earlier review|Review) round", "the clean review round logged nothing")
 
         self.assertIsNone(note.get_section(self.note(tid)[1], "changes"))
         why = [h for h in self.history(tid) if h.get("to") == "baking/pending"][-1]["why"]

@@ -248,6 +248,33 @@ def all_recommended(section, skip=()):
     return found
 
 
+_QNUM = re.compile(r"^Q\d+\. ")
+
+
+def decisions(section, skip_no=()):
+    """Markdown bullets for an answered questions section: each question with its ticked option(s) and any text
+    the human wrote under it. Questions whose text contains a string in skip_no are left out when "No" is picked."""
+    qs = []  # [{"q": str, "picks": [str], "notes": [str]}]
+    for line in (section or "").splitlines():
+        if m := _Q.match(line):
+            qs.append({"q": _QNUM.sub("", m.group(1)), "picks": [], "notes": []})
+        elif m := _OPT.match(line):
+            if qs and m.group(1) != " ":
+                label, star, why = m.group(2).partition(" ⭐ recommended")
+                qs[-1]["picks"].append(f"{label} (recommended{why})" if star else label)
+        elif line.strip() and qs:
+            qs[-1]["notes"].append(line.strip())
+    out = []
+    for q in qs:
+        if not q["picks"]:
+            continue
+        if any(s in q["q"] for s in skip_no) and all(p.startswith("No") for p in q["picks"]):
+            continue
+        out.append(f"- {q['q']} → {'; '.join(q['picks'])}")
+        out += [f"  > {demote(n)}" for n in q["notes"]]
+    return demote("\n".join(out))
+
+
 def all_answered(section):
     qs = questions(section)
     return bool(qs) and all(any(c for c, _ in q["options"]) for q in qs)
