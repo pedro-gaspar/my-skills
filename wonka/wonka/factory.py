@@ -1,6 +1,7 @@
 """What the factory does to golden tickets. Every status change goes through Factory.move()."""
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -283,6 +284,17 @@ def pr_body(tid, meta, spec):
         parts.append(f"🎟️ **Jira:** {meta['jira']}")
     parts.append(spec.strip())
     return "\n\n".join(parts)
+
+
+def _norm_body(body):
+    """A PR description with line endings and trailing whitespace normalised, so GitHub's reformatting does not
+    look like a human edit."""
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in text.split("\n")).strip()
+
+
+def _body_sha(body):
+    return hashlib.sha256(_norm_body(body).encode()).hexdigest()
 
 
 def fmt(state):
@@ -1022,14 +1034,17 @@ class Factory:
                 raise
             origin = parse_remote(git("remote", "get-url", "origin", cwd=t["worktree"]))
             head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
-            meta, body = self.read(tid)
-            spec = (note.get_section(body, "spec") or note.get_section(body, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
-            out = ours[0] if ours else ""
-            reused = bool(out)
+            meta, text = self.read(tid)
+            spec = (note.get_section(text, "spec") or note.get_section(text, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
+            pr_text = pr_body(tid, meta, spec)
+            mine = ours[0] if ours else None
+            out = mine["url"] if mine else ""
+            reused = bool(mine)
             if not reused:
                 out = gh("pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
                          "--title", pr_title(tid, meta),
-                         "--body", pr_body(tid, meta, spec))
+                         "--body", pr_text)
+                t["pr_body_sha"] = _body_sha(pr_text)
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
             if isinstance(e, _NotOurs):  # someone else's PR is on the branch: never touch it, a human decides
@@ -1054,14 +1069,33 @@ class Factory:
         t["pr_url"] = out.splitlines()[-1]
         self.set_section(tid, "changes", note.CHANGES_BOX)
         if reused:
+            self._refresh_pr_body(tid, mine["body"], pr_text)
             what = "PR updated with the requested changes" if t.get("change_requests") else "PR updated"
             self.move(tid, ("shipped", "awaiting"), "wonka", f"{what}, review and merge it: {t['pr_url']}")
             return f"{tid}: PR updated {t['pr_url']}"
         self.move(tid, ("shipped", "awaiting"), "wonka", f"Draft PR opened, mark it ready, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
 
+    def _refresh_pr_body(self, tid, current, new):
+        """Update a reused PR's description to `new`, only when it still is what Wonka last wrote."""
+        t = self.ticket(tid)
+        sha = t.get("pr_body_sha")
+        if not sha:  # opened before Wonka recorded a hash: leave it alone
+            return
+        if _body_sha(current) != sha:
+            self.log_event(tid, "PR description left alone: a human edited it since Wonka wrote it")
+            return
+        if _body_sha(new) == sha:
+            return
+        try:
+            gh("pr", "edit", t["pr_url"], "--body", new)
+        except (WonkaError, OSError) as e:
+            self.log_event(tid, f"Could not update the PR description: {' '.join(str(e).split())}")
+            return
+        t["pr_body_sha"] = _body_sha(new)
+
     def _own_prs(self, tid):
-        """The URLs of the open PRs on the ticket's branch, which must all be Wonka's own for this ticket: the PR it
+        """The open PRs on the ticket's branch as url/body dicts, which must all be Wonka's own for this ticket: the PR it
         recorded, or one whose description starts with its hidden `<!-- wonka:<id> -->` marker (or, for PRs opened
         before it, the old golden ticket line), i.e. opened by Wonka, e.g. before a crash lost the URL. Raises _NotOurs for any other PR: Wonka never pushes to a PR it did not open."""
         t = self.ticket(tid)
@@ -1071,7 +1105,10 @@ class Factory:
         for pr in prs:
             pr = pr if isinstance(pr, dict) else {}
             mine = pr.get("url") and (pr["url"] == t.get("pr_url") or _is_our_pr_body(tid, pr.get("body")))
-            (ours if mine else others).append(pr.get("url") or "?")
+            if mine:
+                ours.append({"url": pr["url"], "body": pr.get("body") or ""})
+            else:
+                others.append(pr.get("url") or "?")
         if others:
             raise _NotOurs(f"open PR {', '.join(others)} on {t['branch']} was not opened by Wonka for {tid}: "
                            "Wonka never pushes to it")

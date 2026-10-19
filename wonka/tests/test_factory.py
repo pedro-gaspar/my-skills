@@ -28,6 +28,7 @@ case "$1 $2" in
                *comments*) if [ -f "$S.comments" ]; then cat "$S.comments"; else echo '{ "comments": [], "reviews": [] }'; fi ;;
                *) cat "$S" ;;
              esac ;;
+  "pr edit") printf '%s\\n' "$@" > "$S.edit" ;;
   api*) echo "$*" >> "$S.api"; if [ -f "$S.inline" ]; then cat "$S.inline"; else echo '[]'; fi ;;
 esac
 exit 0
@@ -315,6 +316,80 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.history(tid)[-1]["why"],
                          "PR updated, review and merge it: https://github.com/acme/app/pull/7")
         self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
+
+    def test_body_sha_normalises_line_endings_and_trailing_space(self):
+        self.assertEqual(factory._body_sha("a\r\n\r\nb  \r\n"), factory._body_sha("a\n\nb"))
+        self.assertNotEqual(factory._body_sha("a\n\nb"), factory._body_sha("a\n\nc"))
+        self.assertEqual(factory._body_sha(None), factory._body_sha(""))
+
+    def _sent_body(self, name):
+        return Path(f"{self.pr_state}.{name}").read_text().split("--body\n", 1)[1].removesuffix("\n")
+
+    def test_new_pr_records_the_hash_of_its_body(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.f_ticket(tid)["pr_body_sha"], factory._body_sha(self._sent_body("args")))
+
+    def _reuse(self, listed, sha=None, gh=None):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        if gh:
+            self.set_gh(gh)
+        Path(f"{self.pr_state}.list").write_text(
+            json.dumps([{"url": "https://github.com/acme/app/pull/7", "body": listed}]))
+        if sha is not None:
+            with self.f() as f:
+                f.ticket(tid)["pr_body_sha"] = sha
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        return tid
+
+    def _left_alone(self, tid):
+        return [e for e in self.history(tid) if e.get("why", "").startswith("PR description left alone")]
+
+    def test_reused_pr_with_wonkas_body_is_updated(self):
+        old = "<!-- wonka:WONKA-00001 -->\n\nOld spec"
+        tid = self._reuse(old, factory._body_sha(old))
+        edit = Path(f"{self.pr_state}.edit").read_text()
+        self.assertIn("https://github.com/acme/app/pull/7", edit)
+        self.assertIn("--body\n", edit)
+        body = self._sent_body("edit")
+        self.assertIn("Add hello.sh", body)
+        self.assertEqual(self.f_ticket(tid)["pr_body_sha"], factory._body_sha(body))
+        self.assertNotEqual(self.f_ticket(tid)["pr_body_sha"], factory._body_sha(old))
+        self.assertFalse(self._left_alone(tid))
+
+    def test_reused_pr_edited_by_a_human_is_left_alone(self):
+        old = "<!-- wonka:WONKA-00001 -->\n\nOld spec"
+        sha = factory._body_sha(old)
+        tid = self._reuse(old + "\n\nEdited by hand", sha)
+        self.assertFalse(Path(f"{self.pr_state}.edit").exists())
+        self.assertEqual(self.f_ticket(tid)["pr_body_sha"], sha)
+        self.assertTrue(self._left_alone(tid))
+
+    def test_reused_pr_with_a_crlf_copy_of_wonkas_body_is_updated(self):
+        old = "<!-- wonka:WONKA-00001 -->\n\nOld spec"
+        self._reuse("<!-- wonka:WONKA-00001 --> \r\n\r\nOld spec\r\n", factory._body_sha(old))
+        self.assertTrue(Path(f"{self.pr_state}.edit").exists())
+
+    def test_reused_pr_without_a_recorded_hash_is_left_alone(self):
+        tid = self._reuse("<!-- wonka:WONKA-00001 -->\n\nOld spec")
+        self.assertFalse(Path(f"{self.pr_state}.edit").exists())
+        self.assertFalse(self._left_alone(tid))
+        self.assertNotIn("pr_body_sha", self.f_ticket(tid))
+
+    def test_failed_pr_edit_still_ships(self):
+        old = "<!-- wonka:WONKA-00001 -->\n\nOld spec"
+        sha = factory._body_sha(old)
+        gh = FAKE_GH.replace('"pr edit")', '"pr edit") echo boom >&2; exit 1 ;;\n  "pr nope")')
+        tid = self._reuse(old, sha, gh)
+        self.assertEqual(self.f_ticket(tid)["pr_body_sha"], sha)
+        self.assertTrue([e for e in self.history(tid) if e.get("why", "").startswith("Could not update the PR description")])
 
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
