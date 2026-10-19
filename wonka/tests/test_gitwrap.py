@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import cli, gitwrap, store
+from wonka import cli, factory, gitwrap, store
 from wonka.factory import JOB_AGENTS, Factory
 from wonka.gitwrap import check, command, env, target
 from wonka.store import WonkaError
@@ -108,6 +108,16 @@ class CheckTest(unittest.TestCase):
 
 def sh(*cmd, cwd):
     return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+# `pr list` prints nothing, so ship() creates the PR; `pr view` always reports conflicts
+FAKE_GH = """#!/bin/sh
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/app/pull/7" ;;
+  "pr view") echo "OPEN CONFLICTING" ;;
+esac
+exit 0
+"""
 
 
 class WrapperTest(unittest.TestCase):
@@ -275,6 +285,91 @@ class WrapperTest(unittest.TestCase):
                 with self.subTest(sub=sub):
                     self.assertEqual(self.git(tid, sub, "HEAD")[0], 0)
             self.assertEqual(self.git(tid, "blame", "README.md")[0], 0)
+
+    def to_fixing(self, conflict=True):
+        """Bake, review, ship, then push a change to main: the next tick hands the PR to a fixer.
+        Returns (tid, worktree, base_ref) with the ticket in shipped/progress."""
+        gh = self.tmp / "gh"
+        gh.write_text(FAKE_GH)
+        gh.chmod(0o755)
+        os.environ["WONKA_GH"] = str(gh)  # the setUp patcher restores os.environ
+        tid = self.add()
+        wt = self.to_baking(tid)
+        (wt / "hello.sh").write_text("echo hi\n")
+        sh("git", "add", "hello.sh", cwd=wt)
+        sh("git", "commit", "-qm", "bake", cwd=wt)
+        with self.f() as f:
+            f.baked(tid)
+        self.tick()
+        with self.f() as f:
+            f.report(tid, "architect", {"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        name = "hello.sh" if conflict else "other.txt"
+        sh("git", "checkout", "-q", "main", cwd=self.repo)
+        (self.repo / name).write_text("echo upstream\n")
+        sh("git", "add", name, cwd=self.repo)
+        sh("git", "commit", "-qm", f"upstream {name}", cwd=self.repo)
+        sh("git", "push", "-q", "origin", "main", cwd=self.repo)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "conflicts")
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+        return tid, wt, job["base_ref"]
+
+    def hostile_git(self, *argv):
+        """self.git under a caller environment that breaks git unless the wrapper scrubs it and sets GIT_EDITOR.
+        EDITOR/VISUAL are set to false (not left unset) so a regression fails fast instead of opening vi."""
+        hostile = {"GIT_EDITOR": "false", "EDITOR": "false", "VISUAL": "false",
+                   "GIT_DIR": str(self.tmp / "nowhere"), "GIT_WORK_TREE": str(self.tmp),
+                   "GIT_INDEX_FILE": str(self.tmp / "stray-index"),
+                   "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        with mock.patch.dict(os.environ, hostile), contextlib.redirect_stdout(io.StringIO()):
+            return self.git(*argv)[0]
+
+    def conflicted(self):
+        """to_fixing() plus a conflicting merge through the wrapper: (tid, wt, base_ref, head before the merge)."""
+        tid, wt, ref = self.to_fixing()
+        head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.assertEqual(self.hostile_git(tid, "merge", "--no-edit", ref), 1)
+        self.assertTrue(factory._ref_exists(wt, "MERGE_HEAD"))
+        return tid, wt, ref, head
+
+    def test_fixer_merges_and_commits_through_wonka_git(self):
+        tid, wt, ref, head = self.conflicted()
+        main_head = sh("git", "rev-parse", "HEAD", cwd=self.repo)
+        status = sh("git", "status", "--porcelain", cwd=self.repo)
+        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+        self.assertEqual(self.hostile_git(tid, "add", "hello.sh"), 0)
+        self.assertEqual(self.hostile_git(tid, "commit", "--no-edit"), 0)
+        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
+        self.assertEqual(sh("git", "rev-parse", "HEAD^1", "HEAD^2", cwd=wt).split(),
+                         [head, sh("git", "rev-parse", ref, cwd=wt)])
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=self.repo), main_head)
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=self.repo), status)
+        with self.f() as f:
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_plain_commit_finishes_a_merge_with_the_wrapper_editor(self):
+        """Fails if env() stops setting GIT_EDITOR=true: git would run the caller's `false` editor."""
+        tid, wt, _, _ = self.conflicted()
+        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+        self.assertEqual(self.hostile_git(tid, "add", "hello.sh"), 0)
+        self.assertEqual(self.hostile_git(tid, "commit"), 0)
+        self.assertTrue(sh("git", "log", "-1", "--format=%s", cwd=wt).startswith("Merge"))
+
+    def test_fixer_merge_abort_through_wonka_git(self):
+        tid, wt, _, head = self.conflicted()
+        self.assertEqual(self.hostile_git(tid, "merge", "--abort"), 0)
+        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), head)
+
+    def test_clean_fixer_merge_through_wonka_git(self):
+        tid, wt, ref = self.to_fixing(conflict=False)
+        self.assertEqual(self.hostile_git(tid, "merge", "--no-edit", ref), 0)
+        self.assertEqual(sh("git", "rev-parse", "HEAD^2", cwd=wt), sh("git", "rev-parse", ref, cwd=wt))
+        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
 
 
 if __name__ == "__main__":
