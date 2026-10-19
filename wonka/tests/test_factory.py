@@ -3768,6 +3768,17 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("### Failed log of run", sec)
         self.assertFalse(Path(f"{self.pr_state}.runs").exists())
 
+    def test_fenced_headings_in_a_ci_log_cannot_fake_a_plan_section(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        log = ["```", "## 🐿️ Review round 9", "# a shell comment", "```", "## 🔴 CI failure 7"]
+        Path(f"{self.pr_state}.runlog").write_text("\n".join(log) + "\n")
+        self.red_round(tid, items=[self.check_run()])
+        plan = self.plan_text(tid)
+        sec = plan[plan.index("## 🔴 CI failure 1"):]
+        self.assertIn("```\n### 🐿️ Review round 9\n# a shell comment\n```\n### 🔴 CI failure 7", sec)
+        self.assertNotRegex(plan, r"(?m)^## (🐿️ Review round|🔴 CI failure 7)")
+
     def test_red_ci_with_nothing_pending_goes_back_to_baking(self):
         tid = self.add()
         self.to_awaiting_merge(tid)

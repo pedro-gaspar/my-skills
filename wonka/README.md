@@ -230,7 +230,10 @@ written unchecked and the reason goes to `~/.wonka/factory.log`. Only output lin
 (`MD032/...`) count as problems: an npx or npm error (no network, a 404 from the registry, a cache it cannot write)
 exits 1 as well and counts as the linter failing. A line that continues a list item without indent (a lazy
 continuation) is left in its list. Headings in any section's text (`#`, `##`) become `###`, so they cannot end the
-section early; inside a code fence only `##` lines do, so `# install deps` in a bash block stays as written.
+section early. Lines inside a closed code fence stay as written (`## install` or `# install deps` in a bash block):
+Wonka skips fences when it looks for sections. A fence that never closes is not one: the headings after it are
+demoted and its opening line gets a `\` in front, so it shows as text and cannot pair with a fence further down.
+In the plan, a CI log's `##` lines are demoted even inside fences.
 
 Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian, or moved into a subfolder
 of the tickets folder, is put back on the next tick (found by the `id` in its frontmatter); a deleted note drops its

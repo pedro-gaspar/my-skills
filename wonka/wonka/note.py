@@ -189,14 +189,6 @@ def one_line(text):
     return " ".join(part.strip() for part in str(text or "").splitlines() if part.strip())
 
 
-def _bounds(body, heading):
-    m = re.search(rf"^## {re.escape(heading)}[ \t]*$", body, re.M)
-    if not m:
-        return None
-    nxt = re.search(r"^## ", body[m.end():], re.M)
-    return m.start(), m.end() + nxt.start() if nxt else len(body)
-
-
 _OPENER = re.compile(r"(`{3,}|~{3,})(.*)")
 
 
@@ -216,27 +208,68 @@ def closes_fence(fence, s):
     return re.fullmatch(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*" % len(fence), s) is not None
 
 
-_HEADING = re.compile(r"^#{1,2}(?= )")
-_H2_LINE = re.compile(r"^##(?= )")
-
-
-def demote(content):
-    """Section content can't hold # or ## headings: they would end the section early (see _bounds). Inside a
-    closed code fence only a ## line is changed (it would still end the section); `# install deps` in a bash
-    block stays as written. A fence that never closes is not one."""
-    lines = content.split("\n")
-    out, i = [], 0
+def _fences(lines):
+    """{index of each line inside a closed code fence, its opening and closing lines included}. A fence that never
+    closes is not one: its opener is plain text and the lines after it are read as usual."""
+    inside, i = set(), 0
     while i < len(lines):
         fence = fence_opener(lines[i].strip())
         end = next((j for j in range(i + 1, len(lines)) if closes_fence(fence, lines[j].strip())), None) \
             if fence else None
         if end is None:
-            out.append(_HEADING.sub("###", lines[i]))
             i += 1
             continue
-        out.append(lines[i])
-        out += [_H2_LINE.sub("###", line) for line in lines[i + 1:end + 1]]
+        inside.update(range(i, end + 1))
         i = end + 1
+    return inside
+
+
+def _h2s(body):
+    """[(offset, line)] for each `## ` line of body outside closed code fences: the section headings. A `## ` line
+    in a fenced example (a spec's markdown, a CI log) is code, not a heading."""
+    lines = body.split("\n")
+    fenced, out, at = _fences(lines), [], 0
+    for i, line in enumerate(lines):
+        if i not in fenced and line.startswith("## "):
+            out.append((at, line))
+        at += len(line) + 1
+    return out
+
+
+def _bounds(body, heading):
+    heads = _h2s(body)
+    for k, (at, line) in enumerate(heads):
+        if line[3:].rstrip(" \t") == heading:
+            return at, heads[k + 1][0] if k + 1 < len(heads) else len(body)
+    return None
+
+
+_HEADING = re.compile(r"^#{1,2}(?= )")
+
+
+def _escape_fence(line):
+    """An unclosed fence opener with a backslash before it: Markdown shows it as text, and it can no longer pair
+    with a fence further down the note and hide the sections in between."""
+    indent = len(line) - len(line.lstrip())
+    return line[:indent] + "\\" + line[indent:]
+
+
+def demote(content, fenced=False):
+    """Section content can't hold # or ## headings: they would end the section early (see _bounds). Lines inside a
+    closed code fence stay as written (`# install deps` or `## install` in a bash block), since _bounds skips
+    fences. A fence that never closes is not one: the headings after its opener are demoted and the opener is
+    escaped (see _escape_fence). With `fenced`, for text that goes into a code block of a file scanned without
+    regard to fences (a CI log in the plan), ## lines inside fences are demoted too and nothing is escaped."""
+    lines = content.split("\n")
+    inside = _fences(lines)
+    out = []
+    for i, line in enumerate(lines):
+        if i in inside:
+            out.append(re.sub(r"^##(?= )", "###", line) if fenced else line)
+        elif fence_opener(line.strip()) and not fenced:
+            out.append(_escape_fence(line))
+        else:
+            out.append(_HEADING.sub("###", line))
     return "\n".join(out)
 
 
@@ -269,11 +302,11 @@ _H2 = re.compile(r"^## (.*?)[ \t]*$", re.M)
 
 
 def unknown_sections(body):
-    """[(heading, heading above it or None)] for every ## heading that isn't one of Wonka's.
+    """[(heading, heading above it or None)] for every ## heading (outside code fences) that isn't one of Wonka's.
     Notes written before _demote() existed may hold a section split in two by a ## line in its content."""
     known, out, prev = set(HEADINGS.values()), [], None
-    for m in _H2.finditer(body):
-        heading = m.group(1)
+    for _, line in _h2s(body):
+        heading = _H2.match(line).group(1)
         if heading not in known:
             out.append((heading, prev))
         prev = heading
@@ -282,8 +315,9 @@ def unknown_sections(body):
 
 def set_banner(body, callout):
     """The banner (title heading + callout) sits above the first section; only the old one is replaced."""
-    first = re.search(r"^## ", body, re.M)
-    head = body[:first.start()] if first else body
+    heads = _h2s(body)
+    first = heads[0][0] if heads else None
+    head = body[:first] if heads else body
     lines = head.splitlines()
     i = 0
     while i < len(lines) and not lines[i].strip():
@@ -297,7 +331,7 @@ def set_banner(body, callout):
         while i < len(lines) and lines[i].startswith(">"):
             i += 1
     kept = "\n".join(lines[i:]).strip()
-    return callout + "\n\n" + (kept + "\n\n" if kept else "") + (body[first.start():] if first else "")
+    return callout + "\n\n" + (kept + "\n\n" if kept else "") + (body[first:] if heads else "")
 
 
 def render_questions(items):
