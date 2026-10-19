@@ -183,7 +183,7 @@ also send an urgent desktop notification, so a `/loop` running in the background
 **The state machine** (`wonka/machine.py`) is the only way a ticket moves. Drag a card anywhere other than Wont-Do
 and the next tick puts it back, with a note on the ticket. Notes keep only `id, title, status, phase, size,
 jira, spec_review, blocked_by`. `blocked_by` is a read-only mirror of the state (comma-separated, absent when none): edit it with `wonka block`/`unblock`, since a hand edit is overwritten on the next write. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
-`~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It and the notes
+`~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It also keeps a never-reset record of what went wrong: `rounds` (one entry per review verdict: round, kind review/change/ci, time, and per squirrel the verdict, suggest and counts of issues, questions and follow-ups) and `stats` (`ci_rounds`, `conflict_fixes`, `retries`, `stuck` counters that survive the resets of the working counters). It and the notes
 are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
 giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status` and `wonka show` only read, so they never wait for it: an agent
 is never stalled by a tick that is busy talking to GitHub.
