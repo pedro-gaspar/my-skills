@@ -21,7 +21,8 @@ S="$WONKA_FAKE_PR_STATE"
 case "$1 $2" in
   "pr create") printf '%s\\n' "$@" > "$S.args"; echo x >> "$S.creates"; touch "$S.open"
                echo "https://github.com/acme/app/pull/7" ;;
-  "pr list") if [ -f "$S.open" ]; then echo "https://github.com/acme/app/pull/7"; fi ;;
+  "pr list") if [ -f "$S.list" ]; then cat "$S.list"
+             elif [ -f "$S.open" ]; then echo '[{ "url": "https://github.com/acme/app/pull/7", "body": "" }]'; fi ;;
   "pr view") case "$*" in
                *comments*) if [ -f "$S.comments" ]; then cat "$S.comments"; else echo '{ "comments": [], "reviews": [] }'; fi ;;
                *) cat "$S" ;;
@@ -227,11 +228,33 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"🎫 **Golden ticket:** {tid}\n\nAdd hello.sh", args)
         self.assertNotIn("Jira", args)
 
-    def test_first_ship_reuses_an_open_pr_without_claiming_requested_changes(self):
+    def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
+        tid = self.add()
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        Path(f"{self.pr_state}.open").touch()  # a PR already opened by hand on the branch
+        self.review(tid, architect={"verdict": "good nut"})
+        events = self.tick()["events"]
+        self.assertTrue(any(e.startswith(f"{tid}: PR failed: an open PR on") and "stuck, needs a human" in e
+                            for e in events), events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
+        self.assertIsNone(self.f_ticket(tid)["pr_url"])
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists(), "no PR is created")
+        branch = self.f_ticket(tid)["branch"]
+        pushed = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch], cwd=self.tmp / "origin.git",
+                                capture_output=True)
+        self.assertNotEqual(pushed.returncode, 0, "the branch was never pushed")
+        self.assertIn("was not opened by Wonka", note.get_section(self.note(tid)[1], "stuck"))
+        self.assertTrue(wt.exists())
+
+    def test_first_ship_reuses_an_open_pr_wonka_opened_without_claiming_requested_changes(self):
         tid = self.add()
         self.to_ready(tid)
         self.bake(tid)
-        Path(f"{self.pr_state}.open").touch()  # a PR already opened by hand
+        # Wonka opened it, but the URL was lost (a crashed tick): its description starts with the ticket's line
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/7", "body": "🎫 **Golden ticket:** %s\\n\\nAdd" }]\n' % tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
@@ -1176,6 +1199,22 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(any("stuck after 3 tries" in e for e in events), events)
         self.assertTrue(self.f_ticket(tid).get("stuck"))
 
+    def test_ship_never_pushes_a_protected_branch(self):
+        tid, wt = self._shipping_ticket()
+        origin = self.tmp / "origin.git"
+        main = sh("git", "rev-parse", "main", cwd=origin)
+        for branch in ("main", "master", "feature"):
+            with self.subTest(branch=branch), self.f() as f:
+                f.ticket(tid)["branch"] = branch
+                with self.assertRaisesRegex(WonkaError, f"refusing to write to branch {branch}"):
+                    factory.check_branch(f.ticket(tid))
+        with self.f() as f:
+            f.ticket(tid)["branch"] = "main"
+        events = self.tick()["events"]
+        self.assertTrue(any("refusing to write to branch main" in e for e in events), events)
+        self._assert_retried_once(tid)
+        self.assertEqual(sh("git", "rev-parse", "main", cwd=origin), main)
+
     def test_run_names_a_missing_working_directory(self):
         missing = self.tmp / "nope"
         with self.assertRaisesRegex(WonkaError, "working directory .* is missing"):
@@ -2078,11 +2117,11 @@ class FactoryTest(unittest.TestCase):
         stuck = note.get_section(body, "stuck")
         self.assertIn("push rejected", stuck)
         self.assertIn("tick Retry", stuck)
-        self.assertIn(f"git pull --no-rebase origin {branch}", stuck)
+        self.assertIn(f"git pull --rebase origin {branch}", stuck)
         self.assertNotIn("3 tries", stuck)
         self.assertIn("Push rejected", body)
 
-        sh("git", "pull", "-q", "--no-rebase", "--no-edit", "origin", branch, cwd=wt)
+        sh("git", "pull", "-q", "--rebase", "origin", branch, cwd=wt)
         self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
         self.tick()
         self.tick()
@@ -2103,13 +2142,13 @@ class FactoryTest(unittest.TestCase):
     def test_push_rejected_reason_fits_and_keeps_the_advice(self):
         short = "wonka/WONKA-00001-" + "x" * 40  # the longest generated branch
         why = factory._push_rejected_reason(short)
-        self.assertIn(f"git pull --no-rebase origin {short}", why)
+        self.assertIn(f"git pull --rebase origin {short}", why)
         self.assertLessEqual(len(why), 200)
         long = "feature/" + "a-very-long-custom-branch-name-" * 5
         why = factory._push_rejected_reason(long)
         self.assertLessEqual(len(why), 200)
         self.assertNotIn(long, why)
-        self.assertIn("git pull --no-rebase origin $(git branch --show-current)", why)
+        self.assertIn("git pull --rebase origin $(git branch --show-current)", why)
         self.assertTrue(why.endswith("then tick Retry"))
 
     def test_diverged_branch_does_not_block_baking(self):
@@ -2334,6 +2373,13 @@ class FactoryTest(unittest.TestCase):
         sh("git", "commit", "-qm", f"upstream {filename}", cwd=self.repo)
         sh("git", "push", "-q", "origin", "main", cwd=self.repo)
 
+    def rebase_onto(self, wt, ref):
+        """What the fixer does: rebase the branch onto the base, resolving hello.sh when it conflicts."""
+        if subprocess.run(["git", "rebase", ref], cwd=wt, capture_output=True).returncode:
+            (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+            sh("git", "add", "hello.sh", cwd=wt)
+            sh("git", "-c", "core.editor=true", "rebase", "--continue", cwd=wt)
+
     def fixer_job(self, tid, pr_state="OPEN CONFLICTING"):
         self.pr_state.write_text(pr_state)
         tick = self.tick()
@@ -2354,26 +2400,58 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("fixing merge conflicts", self.note(tid)[1])
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [], "one fixer at a time")
 
-    def test_fixer_merges_and_resolved_pushes(self):
+    def test_fixer_rebases_and_resolved_force_pushes_with_lease(self):
         tid = self.add()
         wt, branch = self.to_awaiting_merge(tid)
         self.upstream_change()
         job = self.fixer_job(tid)
-        merge = subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True, text=True)
-        self.assertNotEqual(merge.returncode, 0, "the merge should conflict")
+        rebase = subprocess.run(["git", "rebase", job["base_ref"]], cwd=wt, capture_output=True, text=True)
+        self.assertNotEqual(rebase.returncode, 0, "the rebase should conflict")
         (wt / "hello.sh").write_text("echo hi\necho upstream\n")
         sh("git", "add", "hello.sh", cwd=wt)
-        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        sh("git", "-c", "core.editor=true", "rebase", "--continue", cwd=wt)
+        self.assertEqual(sh("git", "rev-list", "--merges", f"{job['base_ref']}..HEAD", cwd=wt), "", "no merge commit")
         with self.f() as f:
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         t = self.f_ticket(tid)
         self.assertNotIn("conflicts", t)
         self.assertNotIn("merge_ref", t)
+        self.assertNotIn("lease", t)
         self.assertEqual(t["conflict_fixes"], 1)
         self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
+
+    def test_resolved_never_pushes_to_a_pr_someone_else_opened_on_the_branch(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(wt, job["base_ref"])
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/7", "body": "" },'
+            ' { "url": "https://github.com/acme/app/pull/9", "body": "my own PR" }]\n')
+        origin = self.tmp / "origin.git"
+        before = sh("git", "rev-parse", branch, cwd=origin)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "open PR https://github.com/acme/app/pull/9 on"):
+            f.resolved(tid)
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=origin), before)
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+
+    def test_resolved_never_pushes_the_base_branch(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(wt, job["base_ref"])
+        origin = self.tmp / "origin.git"
+        main = sh("git", "rev-parse", "main", cwd=origin)
+        with self.f() as f:
+            f.ticket(tid)["branch"] = "main"
+            with self.assertRaisesRegex(WonkaError, "refusing to write to branch main"):
+                f.resolved(tid)
+        self.assertEqual(sh("git", "rev-parse", "main", cwd=origin), main)
 
     def test_late_resolved_from_an_earlier_dispatch_is_ignored(self):
         tid = self.add()
@@ -2383,10 +2461,7 @@ class FactoryTest(unittest.TestCase):
         d = job["dispatch"]
         origin = self.tmp / "origin.git"
         before = sh("git", "rev-parse", branch, cwd=origin)
-        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True, text=True)
-        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
-        sh("git", "add", "hello.sh", cwd=wt)
-        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        self.rebase_onto(wt, job["base_ref"])
         with self.f() as f:
             msg = f.resolved(tid, d - 1)
         self.assertEqual(msg, f"{tid}: fixer result is from an earlier dispatch ({d - 1}, now {d}), ignored")
@@ -2409,10 +2484,7 @@ class FactoryTest(unittest.TestCase):
         self.upstream_change()
         job = self.fixer_job(tid)
         self.assertTrue((wt / "suggestion.txt").exists(), "the worktree is fast-forwarded to origin's branch")
-        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True)
-        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
-        sh("git", "add", "hello.sh", cwd=wt)
-        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        self.rebase_onto(wt, job["base_ref"])
         with self.f() as f:
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
@@ -2437,16 +2509,19 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertTrue(self.f_ticket(tid).get("conflicts"))
 
-    def test_resolved_refuses_unfinished_merge(self):
+    def test_resolved_refuses_unfinished_rebase(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
         self.upstream_change()
         job = self.fixer_job(tid)
-        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True)
-        with self.f() as f, self.assertRaisesRegex(WonkaError, "uncommitted"):
+        subprocess.run(["git", "rebase", job["base_ref"]], cwd=wt, capture_output=True)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "unfinished rebase"):
             f.resolved(tid)
-        sh("git", "merge", "--abort", cwd=wt)
-        with self.f() as f, self.assertRaisesRegex(WonkaError, "not merged"):
+        sh("git", "add", "hello.sh", cwd=wt)  # conflict markers staged: still mid-rebase, nothing uncommitted
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "unfinished rebase"):
+            f.resolved(tid)
+        sh("git", "rebase", "--abort", cwd=wt)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "not rebased onto"):
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "progress"))
 
@@ -2562,7 +2637,23 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assert_closed_pr_not_reopened(tid, branch)
 
-    def test_leftover_merge_is_aborted_on_start(self):
+    def test_leftover_rebase_is_aborted_on_start(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        subprocess.run(["git", "rebase", job["base_ref"]], cwd=wt, capture_output=True)
+        self.assertTrue(factory._rebasing(wt))
+        with self.f() as f:
+            f.finished(tid, "wonka:oompa-loompa-fixer")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.fixer_job(tid)
+        self.assertFalse(factory._rebasing(wt))
+        self.assertEqual(sh("git", "symbolic-ref", "--short", "HEAD", cwd=wt), branch)
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
+
+    def test_leftover_merge_from_an_older_fixer_is_aborted_on_start(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
         self.upstream_change()
@@ -2571,17 +2662,28 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.finished(tid, "wonka:oompa-loompa-fixer")
         self.tick()
-        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.fixer_job(tid)
         self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
         self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
+
+    def test_lease_refuses_to_overwrite_a_push_made_while_the_fixer_ran(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        theirs = self.push_from_github(branch, "suggestion.txt")
+        self.rebase_onto(wt, job["base_ref"])
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "stale info|rejected"):
+            f.resolved(tid)
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), theirs)
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
 
     def test_finished_after_resolved_says_moved_on(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
         self.upstream_change("other.txt", "upstream\n")  # no real conflict: the merge is clean
         job = self.fixer_job(tid)
-        sh("git", "merge", "-q", "--no-edit", job["base_ref"], cwd=wt)
+        self.rebase_onto(wt, job["base_ref"])
         with self.f() as f:
             f.resolved(tid)
             self.assertIn("moved on", f.finished(tid, "wonka:oompa-loompa-fixer"))
@@ -2601,7 +2703,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(self.state(tid), ("shipped", "progress"))
         self.assertEqual(self.f_ticket(tid)["retries"], 1)
-        sh("git", "merge", "-q", "--no-edit", jobs[0]["base_ref"], cwd=wt)
+        self.rebase_onto(wt, jobs[0]["base_ref"])
         with self.f() as f:
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
@@ -2690,7 +2792,7 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(t["conflicts"])
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         stuck = note.get_section(self.note(tid)[1], "stuck")
-        self.assertIn(f"git pull --no-rebase origin {branch}", stuck)
+        self.assertIn(f"git pull --rebase origin {branch}", stuck)
         self.assertNotIn("3 tries", stuck)
 
     def test_stuck_fixer_clears_when_the_pr_is_merged(self):
@@ -2754,7 +2856,7 @@ class FactoryTest(unittest.TestCase):
         """One full conflict fix: a fixer is dispatched, merges a clean upstream change and pushes."""
         self.upstream_change(f"upstream{n}.txt", f"upstream {n}\n")
         job = self.fixer_job(tid)
-        sh("git", "merge", "-q", "--no-edit", job["base_ref"], cwd=wt)
+        self.rebase_onto(wt, job["base_ref"])
         with self.f() as f:
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))

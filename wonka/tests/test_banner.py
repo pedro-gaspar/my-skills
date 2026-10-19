@@ -60,7 +60,7 @@ class BannerTest(unittest.TestCase):
              "review_round": 1, "conflicts": True, "merge_ref": "origin/main", "branch": "wonka/x", "worktree": "/wt"}
         text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
         self.assertIn("fixing merge conflicts", text)
-        self.assertIn("Merging origin/main into `wonka/x`", text)
+        self.assertIn("Rebasing `wonka/x` onto origin/main", text)
         self.assertIn(banner.QUIPS[("shipped", "progress")], text)
         t["last_valid"]["phase"] = "awaiting"
         text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)

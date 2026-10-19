@@ -133,6 +133,12 @@ def _ref_exists(repo, ref):
     return subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo, capture_output=True).returncode == 0
 
 
+def _rebasing(wt):
+    """True while a rebase is unfinished in the worktree (it stopped on a conflict)."""
+    return any(Path(git("rev-parse", "--path-format=absolute", "--git-path", d, cwd=wt)).exists()
+               for d in ("rebase-merge", "rebase-apply"))
+
+
 # git says "(fetch first)" when the remote has objects we never fetched and "(non-fast-forward)" when we have them:
 # both mean the remote branch has commits the local one lacks. This matches git's English output; under another
 # locale it misses and the push failure takes the normal retry path.
@@ -151,22 +157,39 @@ def _push_rejected_reason(branch):
     """What to do after a rejected push. Names the branch when it fits in _REASON_MAX, else uses the
     current-branch form of the same command (the worktree is on that branch)."""
     head = "push rejected: the PR branch has commits on GitHub that the worktree lacks. In the worktree run "
-    why = f"{head}git pull --no-rebase origin {branch}, then tick Retry"
+    why = f"{head}git pull --rebase origin {branch}, then tick Retry"
     if len(why) <= _REASON_MAX:
         return why
-    return f"{head}git pull --no-rebase origin $(git branch --show-current), then tick Retry"
+    return f"{head}git pull --rebase origin $(git branch --show-current), then tick Retry"
 
 
 class _PushRejected(WonkaError):
-    """git push was rejected as not a fast-forward: retrying cannot help, a human must merge."""
+    """git push was rejected as not a fast-forward: retrying cannot help, a human must rebase."""
 
 
 class _Diverged(WonkaError):
-    """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must merge."""
+    """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must rebase."""
+
+
+class _NotOurs(WonkaError):
+    """An open PR on the ticket's branch was not opened by Wonka for it: retrying cannot help, a human must look."""
+
+
+def check_branch(t):
+    """Wonka only commits and pushes the ticket's own wonka/ branch: never main, master or the PR's base branch."""
+    branch = t.get("branch") or ""
+    if not branch.startswith("wonka/") or branch in (t.get("base_branch"), t.get("pr_base")):
+        raise WonkaError(f"refusing to write to branch {branch or '(none)'}: Wonka only commits and pushes its own "
+                         "wonka/ branches, never main, master or the base branch")
+
+
+def _pr_mark(tid):
+    """The line every PR Wonka opens starts its description with."""
+    return f"🎫 **Golden ticket:** {tid}"
 
 
 def pr_body(tid, meta, spec):
-    ids = [f"🎫 **Golden ticket:** {tid}"]
+    ids = [_pr_mark(tid)]
     if meta.get("jira"):
         ids.append(f"🎟️ **Jira:** {meta['jira']}")
     return "  \n".join(ids) + f"\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory"
@@ -271,6 +294,7 @@ class Factory:
             # ship(), killed, merged) starts clean and the next tick re-detects conflicts
             t.pop("conflicts", None)
             t.pop("merge_ref", None)
+            t.pop("lease", None)
         t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
         if dst[0] != "shipped" or dst[1] == "done":
             # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
@@ -769,6 +793,8 @@ class Factory:
                 if state == "CLOSED":
                     self.move(tid, KILLED, "github", "PR closed without merging")
                     return f"{tid}: PR closed"
+            check_branch(t)
+            ours = self._own_prs(tid)  # before the push: pushing the branch changes every PR opened from it
             try:
                 git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
             except WonkaError as e:
@@ -779,8 +805,7 @@ class Factory:
             head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
             meta, body = self.read(tid)
             spec = (note.get_section(body, "spec") or note.get_section(body, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
-            out = gh("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
-                     "--json", "url", "-q", ".[0].url")
+            out = ours[0] if ours else ""
             reused = bool(out)
             if not reused:
                 out = gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
@@ -788,6 +813,12 @@ class Factory:
                          "--body", pr_body(tid, meta, spec))
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
+            if isinstance(e, _NotOurs):  # someone else's PR is on the branch: never touch it, a human decides
+                why = (f"an open PR on {t['branch']} was not opened by Wonka, so Wonka will not push to it: close it "
+                       "or move it off the branch, then tick Retry")
+                outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
+                self.log_event(tid, err)
+                return f"{tid}: PR failed: {why}; {outcome}"
             if isinstance(e, _PushRejected):  # the human pushed to the PR: retrying cannot help, say what to do
                 why = _push_rejected_reason(t["branch"])
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
@@ -803,6 +834,23 @@ class Factory:
             return f"{tid}: PR updated {t['pr_url']}"
         self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
+
+    def _own_prs(self, tid):
+        """The URLs of the open PRs on the ticket's branch, which must all be Wonka's own for this ticket: the PR it
+        recorded, or one whose description starts with its golden ticket line (opened by Wonka, e.g. before a crash
+        lost the URL). Raises _NotOurs for any other PR: Wonka never pushes to a PR it did not open."""
+        t = self.ticket(tid)
+        prs = gh_json("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
+                      "--json", "url,body", default=[])
+        ours, others = [], []
+        for pr in prs:
+            pr = pr if isinstance(pr, dict) else {}
+            mine = pr.get("url") and (pr["url"] == t.get("pr_url") or (pr.get("body") or "").startswith(_pr_mark(tid)))
+            (ours if mine else others).append(pr.get("url") or "?")
+        if others:
+            raise _NotOurs(f"open PR {', '.join(others)} on {t['branch']} was not opened by Wonka for {tid}: "
+                           "Wonka never pushes to it")
+        return ours
 
     def _pr_feedback(self, tid, since=None):
         """The PR's comments, reviews and inline comments by trusted authors newer than `since`, as markdown
@@ -905,7 +953,7 @@ class Factory:
 
     def _sync_pr_branch(self, tid):
         """Fast-forward the worktree to the PR branch on origin (review suggestions, 'Update branch', a human fix),
-        so the fixer merges into what GitHub has and the plain push in resolved() is a fast-forward."""
+        so the fixer rebases what GitHub has and the push in resolved() replaces exactly that."""
         t = self.ticket(tid)
         wt, branch = t["worktree"], t["branch"]
         git("fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=wt)
@@ -916,7 +964,7 @@ class Factory:
 
     def _stash_leftovers(self, tid):
         """Put uncommitted changes and untracked files in the worktree aside (git stash, never lost), so the
-        ff-only sync and the fixer's merge start from a clean tree. Ignored files are left alone."""
+        ff-only sync and the fixer's rebase start from a clean tree. Ignored files are left alone."""
         wt = self.ticket(tid)["worktree"]
         if not git("status", "--porcelain", cwd=wt):
             return
@@ -932,7 +980,7 @@ class Factory:
         err = err if len(err) <= 200 else err[:199] + "…"
         final = isinstance(exc, _Diverged)
         why = (f"{t['branch']} has diverged from the PR branch on GitHub. In the worktree {t['worktree']} run "
-               f"git pull --no-rebase origin {t['branch']} and git push origin {t['branch']}, then tick Retry"
+               f"git pull --rebase origin {t['branch']} and git push origin {t['branch']}, then tick Retry"
                if final else f"the fixer could not start: {err}")
         retries, stuck = self._count_failure(tid, why, final=final)
         tries = f"try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}"
@@ -943,8 +991,9 @@ class Factory:
         return f"{tid}: ⚠️ fixer could not start ({tries}), retried next tick: {err}"
 
     def resolved(self, tid, dispatch=None):
-        """The fixer committed the merge: check it, push the branch (never force) and wait for the human again.
-        A call from an earlier dispatch is ignored."""
+        """The fixer rebased the branch onto the base: check it, push it with --force-with-lease (it only replaces
+        the PR branch GitHub had when the fixer started) and wait for the human again. A call from an earlier
+        dispatch is ignored."""
         if self._stale_dispatch(tid, dispatch):
             return self._stale_msg(tid, "fixer result", dispatch)
         self.expect(tid, ("shipped", "progress"))
@@ -952,13 +1001,17 @@ class Factory:
         if not t.get("conflicts"):
             raise WonkaError(f"{tid} is not fixing merge conflicts")
         wt = t["worktree"]
-        if git("status", "--porcelain", cwd=wt) or _ref_exists(wt, "MERGE_HEAD"):
-            raise WonkaError("the worktree has uncommitted changes or an unfinished merge: commit the merge first")
-        merged = subprocess.run(["git", "merge-base", "--is-ancestor", t["merge_ref"], "HEAD"],
-                                cwd=wt, capture_output=True).returncode == 0
-        if not merged:
-            raise WonkaError(f"{t['merge_ref']} is not merged into {t['branch']} yet")
-        git("push", "origin", t["branch"], cwd=wt)
+        if git("status", "--porcelain", cwd=wt) or _ref_exists(wt, "MERGE_HEAD") or _rebasing(wt):
+            raise WonkaError("the worktree has uncommitted changes or an unfinished rebase: finish the rebase first")
+        rebased = subprocess.run(["git", "merge-base", "--is-ancestor", t["merge_ref"], "HEAD"],
+                                 cwd=wt, capture_output=True).returncode == 0
+        if not rebased:
+            raise WonkaError(f"{t['branch']} is not rebased onto {t['merge_ref']} yet")
+        check_branch(t)
+        self._own_prs(tid)
+        # a fixer started before rebasing existed has no lease; its merge is a fast-forward, pushed without force
+        lease = [f"--force-with-lease={t['branch']}:{t['lease']}"] if t.get("lease") else []
+        git("push", *lease, "origin", t["branch"], cwd=wt)
         # the fix landed: the next conflict episode gets the full start budget and no stale warning
         t.pop("retries", None)
         t.pop("conflict_error", None)
@@ -1121,13 +1174,17 @@ class Factory:
         elif s == ("shipped", "awaiting"):
             try:  # all before moving: a failure is counted like a retry and the ticket stays awaiting
                 self.ensure_worktree(tid)
-                if _ref_exists(t["worktree"], "MERGE_HEAD"):
-                    try:
-                        git("merge", "--abort", cwd=t["worktree"])  # a half-done earlier attempt
-                    except WonkaError:
-                        pass
+                for unfinished, abort in ((_ref_exists(t["worktree"], "MERGE_HEAD"), "merge"),
+                                          (_rebasing(t["worktree"]), "rebase")):
+                    if unfinished:
+                        try:
+                            git(abort, "--abort", cwd=t["worktree"])  # a half-done earlier attempt
+                        except WonkaError:
+                            pass
                 self._stash_leftovers(tid)
                 self._sync_pr_branch(tid)
+                # what GitHub has now: the rebased branch may only replace this (--force-with-lease in resolved())
+                t["lease"] = git("rev-parse", f"refs/remotes/origin/{t['branch']}", cwd=t["worktree"])
                 base_ref = t["merge_ref"] = self._fetch_pr_base(tid)
             except (WonkaError, OSError) as e:
                 return self._fixer_failed_to_start(tid, e)
