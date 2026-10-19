@@ -1634,7 +1634,9 @@ class Factory:
         return [b for _, b in kept], skipped, newest
 
     def _red_ci(self, tid, head, rollup_text):
-        """(head, red checks) when a CI fix round should start on the open PR's head, else None."""
+        """(head, red checks) when a CI fix round should start on the open PR's head, else None.
+        A head counts as handled by its sha plus the signature of its red runs, so a red re-run
+        on the same head (new run ids, so a new signature) counts as a new failure and starts a round."""
         t = self.ticket(tid)
         red, pending, total = _ci_checks(_parse_rollup(rollup_text))
         if not head or not total or pending:  # no CI, or wait so one round sees every failure

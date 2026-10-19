@@ -3669,9 +3669,9 @@ class FactoryTest(unittest.TestCase):
         with self.assertRaisesRegex(WonkaError, "CI fix round"):
             self.baked_flaky(tid2)
 
-    def test_flaky_is_refused_with_requested_changes_or_no_reason(self):
+    def test_flaky_is_refused_with_requested_changes(self):
         tid = self.add()
-        wt, head = self.to_awaiting_merge(tid)[0], None
+        wt, _ = self.to_awaiting_merge(tid)
         head = sh("git", "rev-parse", "HEAD", cwd=wt)
         self.ci_state([self.check_run()], head)
         self.request_changes(tid, "rename it")
