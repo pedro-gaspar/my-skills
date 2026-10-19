@@ -1,6 +1,6 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, change settings, check the setup, or init the Obsidian board. Use for /wonka add|tick|status|init|config|doctor.
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|init|config|doctor.
 argument-hint: "add \"idea\" | tick | status | init --vault <path> | config [key value] | doctor"
 model: haiku
 ---

@@ -204,7 +204,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([self.note(k)[0]["title"] for k in kids], ["Add a bye script", "Add a ciao script"])
         skipped = [h["why"] for h in self.f_ticket(tid)["history"] if "skipped" in h.get("why", "")]
         self.assertEqual(len(skipped), 3, "one skip in round 1 (same round), two in round 2")
-        self.assertIn("Follow-up already on the board, skipped: add A BYE script", skipped)
+        self.assertIn("Follow-up already in the factory, skipped: add A BYE script", skipped)
 
     def test_pr_description_carries_the_wonka_and_jira_ids(self):
         tid = self.add(jira="CALC-42")

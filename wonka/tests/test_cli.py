@@ -36,6 +36,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("🐿️ review rounds    : 4", out)
         base = (self.tmp / "vault/wonka/Wonka.base").read_text()
         self.assertIn('file.inFolder("wonka/golden-tickets")', base)
+        self.assertIn("name: 🍫 Factory floor", base)
+        self.assertIn("🍫 Factory ", out)
         self.assertTrue((self.tmp / "vault/wonka/golden-tickets").is_dir())
         self.assertTrue(cli.LINK.is_symlink())
         self.assertIn("🍫 baking at once   : 3", out)

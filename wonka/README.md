@@ -17,8 +17,9 @@ claude plugin install wonka@my-skills
 
 Then run `/wonka init`. It asks for your vault and how many tickets to draft and bake at once. It writes
 `~/.wonka/config.json`, creates `<vault>/wonka/{golden-tickets,plans,archive}` and `Wonka.base`, links `wonka` into
-`~/.local/bin`, and runs `wonka doctor`. The doctor prints the permission snippet that lets background agents run
-unattended (`Bash(wonka *)`, plus the worktree and board folders as `additionalDirectories`). Agents run git only
+`~/.local/bin`, and runs `wonka doctor`. Init never overwrites an existing `Wonka.base`, so an older vault keeps its
+old kanban view name until you rename it in Obsidian or delete `Wonka.base` and rerun `wonka init`. The doctor prints the permission snippet that lets background agents run
+unattended (`Bash(wonka *)`, plus the worktree and factory folders as `additionalDirectories`). Agents run git only
 through `wonka git <id> <subcommand>`, which pins it to the ticket's worktree and that worktree's registered git dir
 (a rewritten `.git` file is ignored) and allows only status, diff, log, show, rev-parse, ls-files, blame, add and
 commit (plus the fixer's `merge --no-edit <ref>` and `merge --abort`; no `-c`, config, push or options that run
@@ -29,12 +30,12 @@ programs), so no git permission rule is needed; the doctor warns if an old `Bash
 | | |
 |---|---|
 | `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo; `--pr-repo owner/name`, `--jira`) |
-| `/wonka tick` | one turn of the factory: fix the board, act on your ticks, merge checks, dispatch agents |
+| `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
 | `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds` |
 | `wonka git <id> <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
-| `wonka doctor` | check git, gh, npx (markdownlint), board, state, Claude Code permissions and notes with stray ## sections |
+| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
 
 ## The floor
 
@@ -72,7 +73,7 @@ waiting for a human should never block the line.
 ## Reading a ticket
 
 Every note opens with a banner that says where the ticket is, what happens next and, when it's 🙋 your turn, exactly
-what to tick. It also lists size, project, plan, PR and review round. The board's **🙋 Your turn** view lists only
+what to tick. It also lists size, project, plan, PR and review round. The factory's **🙋 Your turn** view lists only
 tickets that wait for you. At the bottom, a folded **🎩 Factory log** holds the history. A job (or opening the PR)
 that fails 3 times shows **🎩 Stuck** with a Retry checkbox; details are in `~/.wonka/factory.log`. A push
 rejected because the PR branch has new commits on GitHub is stuck at once, not after 3 tries: merge them in the
