@@ -84,8 +84,8 @@ def isolated(text):
 
 _ITEM = re.compile(r"^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$")
 _BREAK = re.compile(r"^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")  # outside a list: at most 3 spaces, else indented code or text
-_LIST_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")  # inside a list item: indented relative to the item
+_FENCE = re.compile(r" {0,3}")  # outside a list: at most 3 spaces, else indented code or text
+_LIST_FENCE = re.compile(r"\s*")  # inside a list item: indented relative to the item
 
 
 def _item(line):
@@ -96,12 +96,29 @@ def _item(line):
     return len(m.group(1)), m.group(2), m.group(3) or ""
 
 
-def _fence_end(lines, start, opener):
+_OPENER = re.compile(r"(`{3,}|~{3,})(.*)")
+
+
+def fence_opener(s):
+    """The fence marker (3+ backticks or tildes) when `s`, a line with its indent removed, opens a fenced code
+    block, else None. A backtick fence's info string may not contain backticks (CommonMark), so ```x``` is inline
+    code, not a fence."""
+    m = _OPENER.match(s)
+    if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
+        return None
+    return m.group(1)
+
+
+def closes_fence(fence, s):
+    """True when line `s` closes the block `fence` opened: the same character, at least as many, nothing else
+    but surrounding whitespace."""
+    return re.fullmatch(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*" % len(fence), s) is not None
+
+
+def _fence_end(lines, start, fence):
     """Index of the line closing the fence opened at `start` (the last line when it never closes)."""
-    mark = opener.group(1)
-    close = re.compile(r"^\s*" + re.escape(mark[0]) + "{%d,}\\s*$" % len(mark))
     for i in range(start + 1, len(lines)):
-        if close.match(lines[i]):
+        if closes_fence(fence, lines[i]):
             return i
     return len(lines) - 1
 
@@ -138,9 +155,10 @@ def space_lists(text):
         else:
             prev = "text"
         out.append(line)
-        opener = (_LIST_FENCE if in_list else _FENCE).match(line)
-        if opener:
-            end = _fence_end(lines, i, opener)
+        indent = (_LIST_FENCE if in_list else _FENCE).match(line)
+        fence = fence_opener(line[indent.end():])
+        if fence:
+            end = _fence_end(lines, i, fence)
             out.extend(lines[i + 1:end + 1])
             i = end
         i += 1

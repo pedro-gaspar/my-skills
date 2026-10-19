@@ -306,6 +306,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("heading not in the template: ## Notes",
                       check(self.GOOD_BODY + "\n```python\nx\n```\n## Notes\nx\n"))
         self.assertEqual(check(self.GOOD_BODY + "\n```\nx\n``` not a close\n## X\n```\n"), [])
+        self.assertIn("heading not in the template: ## Notes", check(self.GOOD_BODY + "\n```x```\n## Notes\nx\n"))
         self.assertEqual(check("  \n"), ["the PR body is empty"])
         for footer in ("\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
                        "\nCo-authored-by: Claude Opus <noreply@anthropic.com>\n"):
