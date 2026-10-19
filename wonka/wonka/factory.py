@@ -866,6 +866,14 @@ class Factory:
         meta, body = self.read(tid)
         self.write(tid, meta, note.set_section(body, key, content))
 
+    def write_spec(self, tid, content, dispatch):
+        """The analyst's `wonka section <id> spec`: the only section an agent writes. Approval, questions and the
+        other gates are the human's, so an agent can never tick them for itself."""
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "analyst spec section", dispatch)
+        self.expect(tid, ("drafting", "progress"))
+        return self.set_section(tid, "spec", content)
+
     def ask(self, tid, questions, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
             return self._stale_msg(tid, "analyst questions", dispatch)
@@ -2140,7 +2148,13 @@ class Factory:
                   "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]],
                   "conflicts": ["oompa-loompa-fixer"]}[job]
         agents = [f"wonka:{a}" for a in agents]
+        drafts = store.drafts_dir()
+        try:
+            drafts.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass  # the agent's write then fails and says why; never strand the job
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
+                "drafts": str(drafts),
                 "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
                 "review_round": t["review_round"], "dispatch": t["dispatch"],
                 "test_commands": project_test_prefixes(self.cfg, t["project"]),

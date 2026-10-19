@@ -91,6 +91,21 @@ class RunTest(RepoFixture, unittest.TestCase):
                 self.assertNotIn("Traceback", err)
                 run.assert_not_called()
 
+    def test_empty_and_worktree_relative_commands_are_refused(self):
+        """An empty command would run the URL itself as a program; ./x runs a file the builder can edit."""
+        tid = self.add()
+        self.to_baking(tid)
+        for cmd, why in (("   ", "is empty"), ("./scripts/ci.sh", "relative to the ticket's worktree"),
+                         ("tools/ci logs", "relative to the ticket's worktree")):
+            with self.subTest(cmd=cmd):
+                store.save_config({**self.cfg, "ci_log_command": {"app": cmd}})
+                with mock.patch("wonka.cilogs.subprocess.run") as run:
+                    code, err = self.run_logs(tid, self.URL)
+                self.assertEqual(code, 1)
+                self.assertIn(why, err)
+                run.assert_not_called()
+        self.assertIsNone(cilogs.command_problem("/opt/ci/bin/logs --json"))
+
     def test_disallowed_url_never_runs(self):
         tid = self.add()
         self.to_baking(tid)

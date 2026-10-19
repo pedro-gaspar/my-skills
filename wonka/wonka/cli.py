@@ -86,10 +86,6 @@ def cmd_config(a):
             raise WonkaError("usage: wonka config <key> <value>")
         store.set_setting(cfg, a.key, a.value)
         store.save_config(cfg)
-        if a.key.startswith("test_commands."):
-            from .testrun import OPEN_WARNING, open_prefixes
-            for proj, p in open_prefixes(cfg, a.key.split(".", 1)[1]):
-                print(f"⚠️ test_commands.{proj}: '{p}' {OPEN_WARNING}", file=sys.stderr)
     show_config(cfg)
 
 
@@ -98,6 +94,16 @@ def _stdin_json():
         return json.loads(sys.stdin.read())
     except ValueError as e:
         raise WonkaError(f"stdin is not valid JSON: {e}")
+
+
+def _text(a):
+    """Markdown from --file (what agents use: a heredoc keeps the call inside the sandbox) or from stdin."""
+    if a.file is None:
+        return sys.stdin.read()
+    try:
+        return Path(a.file).expanduser().read_text()
+    except (OSError, UnicodeDecodeError) as e:
+        raise WonkaError(f"cannot read --file {a.file}: {e}")
 
 
 def parse_question(text):
@@ -156,18 +162,18 @@ def run(a, f):
         msg = f.ask(a.id, qs, a.dispatch)
         print(msg or f.summary(a.id))
     elif c == "section":
-        msg = f.set_section(a.id, a.key, sys.stdin.read(), a.dispatch)
+        msg = f.write_spec(a.id, _text(a), a.dispatch)
         if msg:
             print(msg)
     elif c == "plan":
-        msg = f.write_plan(a.id, sys.stdin.read(), a.dispatch)
+        msg = f.write_plan(a.id, _text(a), a.dispatch)
         print(msg or f"📋 {f.plan_path(a.id)}")
     elif c == "drafted":
         msg = f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r], a.dispatch,
                         split=a.split)
         print(msg or f.summary(a.id))
     elif c == "pr-body":
-        msg = f.write_pr_body(a.id, sys.stdin.read(), a.dispatch)
+        msg = f.write_pr_body(a.id, _text(a), a.dispatch)
         print(msg or f"📝 {f.pr_body_path(a.id)}")
     elif c == "baked":
         print(f.baked(a.id, a.dispatch, flaky=a.flaky, disputes=a.dispute or ()) or f.summary(a.id))
@@ -211,6 +217,7 @@ def _key(value, table):
     return key
 
 
+FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
 READ_ONLY = ("status", "show", "repos", "metrics")  # read a snapshot of the state, so they never wait for a long tick
 
@@ -278,12 +285,14 @@ def parser():
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
     s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
-    s = sub.add_parser("section", help="write a ## section from stdin (e.g. spec)")
+    s = sub.add_parser("section", help="analyst: write the ## 📜 Spec section (markdown) from --file or stdin")
     s.add_argument("id")
-    s.add_argument("key")
+    s.add_argument("key", choices=["spec"])
+    s.add_argument("--file", help=FILE)
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
-    s = sub.add_parser("plan", help="analyst: the detailed plan (markdown) on stdin")
+    s = sub.add_parser("plan", help="analyst: the detailed plan (markdown) from --file or stdin")
     s.add_argument("id")
+    s.add_argument("--file", help=FILE)
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("drafted", help="analyst: spec and plan are done")
     s.add_argument("id")
@@ -296,8 +305,10 @@ def parser():
     s = sub.add_parser("metrics", help="one JSON line per ticket, archived ones too: outcome, hours per status, "
                                        "review rounds and stats")
     s.add_argument("--since", type=_day, help="only tickets created on or after this date (YYYY-MM-DD, UTC)")
-    s = sub.add_parser("pr-body", help="builder: the PR description (markdown) on stdin, written from the repo's PR template")
+    s = sub.add_parser("pr-body", help="builder: the PR description (markdown) from --file or stdin, written from the "
+                                       "repo's PR template")
     s.add_argument("id")
+    s.add_argument("--file", help=FILE)
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")

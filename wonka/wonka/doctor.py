@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,20 @@ def _permissions(paths=None):
     return allow, dirs
 
 
+def _sandbox_writes(paths=None):
+    """sandbox.filesystem.allowWrite from every settings file that exists (odd shapes skipped)."""
+    writes = []
+    for path in paths or SETTINGS:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        box = data.get("sandbox") if isinstance(data, dict) else None
+        fs = box.get("filesystem") if isinstance(box, dict) else None
+        writes += _strings(fs.get("allowWrite")) if isinstance(fs, dict) else []
+    return writes
+
+
 def _strings(value):
     """The string items of value when it is a list, else nothing."""
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
@@ -74,7 +89,8 @@ def _test_command_checks(cfg):
     """A warn for test_commands prefixes that leave the program or code to the caller, else ok (or nothing)."""
     found = testrun.open_prefixes(cfg)
     if found:
-        yield "warn", ("test_commands prefixes that " + testrun.OPEN_WARNING + ":\n"
+        yield "warn", ("test_commands prefixes that " + testrun.OPEN_WARNING + " (wonka test refuses them; "
+                       "a human pins each with wonka config test_commands.<project> <command>):\n"
                        + "\n".join(f"  {proj}: {p}" for proj, p in found))
     elif cfg.get("test_commands"):
         yield "ok", "test_commands: no shell or interpreter prefixes"
@@ -110,9 +126,22 @@ def _worktree_file_checks(cfg, tickets):
                 yield "ok", f"worktree files for {project} in {repo}: {len(paths)} present and gitignored"
 
 
+# The subcommands background agents and the /loop manager run. The rest (init, config, set, move, block, unblock,
+# doctor) change settings or stand in for the human's ticks, so they must ask the human: an agent that read a
+# hostile CI log or diff must not be able to switch the sandbox off (`wonka config test_commands.<p> bash`) or pass
+# its own gates (`wonka move`, `wonka set <id> spec_review agent`).
+AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "baked",
+                  "resolved", "report", "add", "show", "status", "repos", "metrics", "tick", "finished", "retry")
+BROAD = ("Bash(wonka)", "Bash(wonka *)", "Bash(wonka:*)")
+
+
+def _covered(allow, cmd):
+    return f"Bash(wonka {cmd} *)" in allow or f"Bash(wonka {cmd}:*)" in allow
+
+
 def permission_checks(allow, dirs, want_dirs):
     """Yield (level, message) for Claude Code permissions (allow rules and additional directories)."""
-    missing = [] if "Bash(wonka *)" in allow or "Bash(wonka:*)" in allow else ["Bash(wonka *)"]
+    missing = [f"Bash(wonka {c} *)" for c in AGENT_COMMANDS if not _covered(allow, c)]
     missing_dirs = [d for d in want_dirs if d not in dirs]
     if missing or missing_dirs:
         perms = {k: v for k, v in (("allow", missing), ("additionalDirectories", missing_dirs)) if v}
@@ -121,12 +150,28 @@ def permission_checks(allow, dirs, want_dirs):
                        + json.dumps({"permissions": perms}, indent=2))
     else:
         yield "ok", "Claude Code permissions for the CLI (agents run git through wonka git), worktrees and factory folder"
-    broad = [r for r in allow if r == "Bash(git)" or r.startswith(("Bash(git ", "Bash(git:"))]
+    broad = [r for r in allow if r in BROAD]
     if broad:
+        yield "warn", ("this allow rule lets any agent run every wonka command, the human ones too: wonka config "
+                       "(an agent could set test_commands to bash and run anything outside the sandbox), move, set; "
+                       "replace it with the per-command rules above: " + ", ".join(broad))
+    git = [r for r in allow if r == "Bash(git)" or r.startswith(("Bash(git ", "Bash(git:"))]
+    if git:
         yield "warn", ("git allow rules are no longer needed: background agents run git through 'wonka git', which "
-                       "is covered by Bash(wonka *). These rules let any session run git with any options "
+                       "is covered by Bash(wonka git *). These rules let any session run git with any options "
                        "(git -c core.pager=..., config, push --force); remove them from ~/.claude/settings.json "
-                       "unless you want them for your own sessions: " + ", ".join(broad))
+                       "unless you want them for your own sessions: " + ", ".join(git))
+
+
+def sandbox_checks(writes):
+    """Yield (level, message) for sandbox.filesystem.allowWrite: ~/.wonka itself holds the config and the state,
+    which sandboxed test code must never edit. Only its worktrees folder may be writable."""
+    home = store.home().resolve()
+    bad = [w for w in writes if Path(w).expanduser().resolve() in (home, *home.parents)]
+    if bad:
+        yield "warn", (f"sandbox.filesystem.allowWrite lets sandboxed commands (any test code) edit {home}, "
+                       "Wonka's config and state, and so turn off the sandbox for wonka test; remove "
+                       + ", ".join(bad) + " (agents now hand text over with --file, so wonka never runs sandboxed)")
 
 
 def _notifier_checks():
@@ -143,6 +188,28 @@ def _notifier_checks():
     else:
         yield "warn", ("no desktop notifier (notify-send on Linux, terminal-notifier or osascript on macOS): "
                        "nothing pings you when a ticket needs you or the factory stops")
+
+
+def _canonical(command):
+    """A command with its whitespace and quoting normalised, so 'beyond  ci logs' matches 'beyond ci logs'; None
+    when it does not parse or is not a string."""
+    try:
+        return shlex.join(shlex.split(command)) if isinstance(command, str) else None
+    except ValueError:
+        return None
+
+
+def _rule_lets(rule, command):
+    """True when an allow rule like 'Bash(beyond  ci *)' lets an agent run `command` (normalised) with any URL."""
+    if not (rule.startswith("Bash(") and rule.endswith(")")):
+        return False
+    body = rule[5:-1]
+    wild = body.endswith((":*", " *"))
+    body = _canonical(body[:-2] if wild else body)
+    if not body:
+        return False
+    return (body == command or body.startswith(command + " ")
+            or (wild and command.startswith(body + " ")))
 
 
 def _ci_log_checks(cfg, allow):
@@ -164,12 +231,12 @@ def _ci_log_checks(cfg, allow):
             clean = False
             yield "warn", (f"ci_log_command.{p} {problem}; wonka ci-logs refuses to run it until a human sets it "
                            f"with wonka config ci_log_command.{p} <command>")
-    bypass = [r for r in allow for c in cmds.values() if isinstance(c, str)
-              if r.startswith(f"Bash({c}") and r[len(f"Bash({c}"):][:1] in (" ", ":", ")")]
+    tools = [c for c in map(_canonical, cmds.values()) if c]
+    bypass = [r for r in allow for c in tools if _rule_lets(r, c)]
     if bypass:
         clean = False
         yield "warn", ("these allow rules let any agent run the CI log tool on any URL, bypassing the CI host check; "
-                       "agents use wonka ci-logs (covered by Bash(wonka *)); remove them and the tool's sandbox "
+                       "agents use wonka ci-logs (covered by Bash(wonka ci-logs *)); remove them and the tool's sandbox "
                        "exclusion: " + ", ".join(dict.fromkeys(bypass)))
     if clean:
         yield "ok", f"CI log tools: {len(cmds)} project(s) pinned to their CI hosts"
@@ -210,6 +277,7 @@ def checks():
     allow, dirs = _permissions()
     yield from _ci_log_checks(cfg, allow)
     yield from permission_checks(allow, dirs, [str(store.worktrees_dir()), str(board)])
+    yield from sandbox_checks(_sandbox_writes())
 
 
 def doctor():

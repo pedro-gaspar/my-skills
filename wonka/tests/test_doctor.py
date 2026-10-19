@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -65,8 +66,14 @@ class CiLogChecksTest(unittest.TestCase):
                 result = list(doctor._ci_log_checks(self.CFG, ["Bash(wonka *)", rule]))
                 self.assertEqual([lv for lv, _ in result], ["warn"])
                 self.assertIn(rule, result[0][1])
-        result = list(doctor._ci_log_checks(self.CFG, ["Bash(beyond ci logsx *)"]))
+        result = list(doctor._ci_log_checks(self.CFG, ["Bash(beyond ci logsx *)", "Bash(beyond ci)"]))
         self.assertEqual([lv for lv, _ in result], ["ok"])
+
+    def test_bypass_rules_match_whatever_the_spacing(self):
+        cfg = {**self.CFG, "ci_log_command": {"p": "beyond  ci logs"}}
+        for rule in ("Bash(beyond ci logs *)", "Bash(beyond 'ci' logs)", "Bash(beyond ci *)", "Bash(beyond *)"):
+            with self.subTest(rule=rule):
+                self.assertEqual([lv for lv, _ in doctor._ci_log_checks(cfg, [rule])], ["warn"])
 
     def test_open_command_warns(self):
         for cmd in ("bash", "python3 -c"):
@@ -94,29 +101,40 @@ class CiLogChecksTest(unittest.TestCase):
 
 class PermissionChecksTest(unittest.TestCase):
     DIRS = ["/w/worktrees", "/v/wonka"]
+    AGENT = [f"Bash(wonka {c} *)" for c in doctor.AGENT_COMMANDS]
 
     def snippet(self, msg):
         return json.loads(msg.split("\n", 1)[1])["permissions"]
 
-    def test_wonka_rule_and_dirs_are_ok(self):
-        for rule in ("Bash(wonka *)", "Bash(wonka:*)"):
-            with self.subTest(rule=rule):
-                result = list(doctor.permission_checks([rule], self.DIRS, self.DIRS))
+    def test_agent_rules_and_dirs_are_ok(self):
+        for allow in (self.AGENT, [f"Bash(wonka {c}:*)" for c in doctor.AGENT_COMMANDS]):
+            with self.subTest(allow=allow[0]):
+                result = list(doctor.permission_checks(allow, self.DIRS, self.DIRS))
                 self.assertEqual([lv for lv, _ in result], ["ok"])
 
-    def test_git_rule_is_no_longer_asked_for(self):
+    def test_human_commands_are_never_asked_for(self):
         result = list(doctor.permission_checks([], [], self.DIRS))
         self.assertEqual([lv for lv, _ in result], ["warn"])
         perms = self.snippet(result[0][1])
-        self.assertEqual(perms, {"allow": ["Bash(wonka *)"], "additionalDirectories": self.DIRS})
-        self.assertFalse(any("git" in r for r in perms["allow"]))
+        self.assertEqual(perms, {"allow": self.AGENT, "additionalDirectories": self.DIRS})
+        for human in ("config", "move", "set", "init", "block", "unblock"):
+            self.assertNotIn(f"Bash(wonka {human} *)", perms["allow"])
+        self.assertNotIn("Bash(wonka *)", perms["allow"])
 
-    def test_only_missing_keys_are_printed(self):
-        result = list(doctor.permission_checks(["Bash(wonka *)"], self.DIRS[:1], self.DIRS))
-        self.assertEqual(set(self.snippet(result[0][1])), {"additionalDirectories"})
+    def test_only_missing_rules_and_keys_are_printed(self):
+        result = list(doctor.permission_checks(self.AGENT[1:], self.DIRS[:1], self.DIRS))
+        self.assertEqual(self.snippet(result[0][1]), {"allow": self.AGENT[:1], "additionalDirectories": self.DIRS[1:]})
+
+    def test_broad_wonka_rule_warns(self):
+        for rule in doctor.BROAD:
+            with self.subTest(rule=rule):
+                result = list(doctor.permission_checks(self.AGENT + [rule], self.DIRS, self.DIRS))
+                self.assertEqual([lv for lv, _ in result], ["ok", "warn"])
+                self.assertIn(rule, result[1][1])
+                self.assertIn("wonka config", result[1][1])
 
     def test_old_git_rules_warn(self):
-        allow = ["Bash(wonka *)", "Bash(git *)", "Bash(git -C * status)", "Bash(git:*)", "Bash(github-cli *)"]
+        allow = self.AGENT + ["Bash(git *)", "Bash(git -C * status)", "Bash(git:*)", "Bash(github-cli *)"]
         result = list(doctor.permission_checks(allow, self.DIRS, self.DIRS))
         self.assertEqual([lv for lv, _ in result], ["ok", "warn"])
         msg = result[1][1]
@@ -124,6 +142,25 @@ class PermissionChecksTest(unittest.TestCase):
         for rule in ("Bash(git *)", "Bash(git -C * status)", "Bash(git:*)"):
             self.assertIn(rule, msg)
         self.assertNotIn("github-cli", msg)
+
+
+class SandboxChecksTest(unittest.TestCase):
+    def test_writable_wonka_home_warns(self):
+        with mock.patch.dict(os.environ, {"WONKA_HOME": "/tmp/wh"}):
+            for w in ("/tmp/wh", "/tmp/wh/", "/tmp", "/"):
+                with self.subTest(w=w):
+                    result = list(doctor.sandbox_checks([w]))
+                    self.assertEqual([lv for lv, _ in result], ["warn"])
+                    self.assertIn("--file", result[0][1])
+            self.assertEqual(list(doctor.sandbox_checks(["/tmp/wh/worktrees", "/tmp/other"])), [])
+
+    def test_reads_allow_write_from_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b, c = Path(d, "a.json"), Path(d, "b.json"), Path(d, "c.json")
+            a.write_text(json.dumps({"sandbox": {"filesystem": {"allowWrite": ["~/.wonka", 3]}}}))
+            b.write_text(json.dumps({"sandbox": {"filesystem": ["odd"]}}))
+            c.write_text("not json")
+            self.assertEqual(doctor._sandbox_writes([a, b, c, Path(d, "missing.json")]), ["~/.wonka"])
 
 
 class OkTest(unittest.TestCase):

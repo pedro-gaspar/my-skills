@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import io
 import json
+import shlex
 import time
 import unittest
 from unittest import mock
@@ -72,7 +73,12 @@ class ParseTest(unittest.TestCase):
 class RunTest(RepoFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.cfg = {**self.cfg, "test_commands": {"app": ["./t.sh", "python3 -c"]}, "test_lock_wait_minutes": 0.01}
+        # a pinned prefix that still runs the code a test passes: python3 -c itself is open, so wonka test refuses it
+        runner = self.tmp / "run.py"
+        runner.write_text("import sys\nexec(sys.argv.pop(1))\n")  # argv as with python3 -c
+        self.py = ("python3", str(runner))
+        self.cfg = {**self.cfg, "test_commands": {"app": ["./t.sh", shlex.join(self.py)]},
+                    "test_lock_wait_minutes": 0.01}
         store.save_config(self.cfg)
 
     def wtest(self, *argv):
@@ -84,11 +90,20 @@ class RunTest(RepoFixture, unittest.TestCase):
     def test_allowed_prefix_runs_in_the_worktree_and_passes_the_exit_code(self):
         tid = self.add()
         wt = self.to_baking(tid)
-        code, _ = self.wtest(tid, "--", "python3", "-c",
+        code, _ = self.wtest(tid, "--", *self.py,
                              "import os,sys; open('cwd.txt','w').write(os.getcwd()); sys.exit(3)")
         self.assertEqual(code, 3)
         self.assertTrue((wt / "cwd.txt").exists())
         self.assertFalse((self.repo / "cwd.txt").exists())
+
+    def test_open_prefix_set_by_hand_is_refused(self):
+        store.save_config({**self.cfg, "test_commands": {"app": ["python3 -c"]}})
+        tid = self.add()
+        wt = self.to_baking(tid)
+        code, err = self.wtest(tid, "--", "python3", "-c", "open('ran.txt','w')")
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to run it", err)
+        self.assertFalse((wt / "ran.txt").exists())
 
     def test_disallowed_prefix_is_refused(self):
         tid = self.add()
@@ -116,7 +131,7 @@ class RunTest(RepoFixture, unittest.TestCase):
             held.flush()
             fcntl.flock(held, fcntl.LOCK_EX)
             start = time.monotonic()
-            code, err = self.wtest(tid, "--", "python3", "-c", "open('ran.txt','w')")
+            code, err = self.wtest(tid, "--", *self.py, "open('ran.txt','w')")
             waited = time.monotonic() - start
         self.assertEqual(code, 75)
         self.assertIn("tests busy: WONKA-00012 has held the lock since 14:03, run it again", err)
@@ -127,7 +142,7 @@ class RunTest(RepoFixture, unittest.TestCase):
         tid = self.add()
         wt = self.to_baking(tid)
         lp = testrun.lock_path("app")
-        code, _ = self.wtest(tid, "--dispatch", "4", "--", "python3", "-c",
+        code, _ = self.wtest(tid, "--dispatch", "4", "--", *self.py,
                              "import sys; open('holder.json','w').write(open(sys.argv[1]).read())", str(lp))
         self.assertEqual(code, 0)
         holder = json.loads((wt / "holder.json").read_text())
@@ -150,10 +165,10 @@ class RunTest(RepoFixture, unittest.TestCase):
         lp = testrun.lock_path("app")
         lp.parent.mkdir(parents=True, exist_ok=True)
         lp.write_text(json.dumps({"id": "WONKA-00012", "dispatch": 1, "started": "2026-10-19T14:03:00"}))
-        self.assertEqual(self.wtest(tid, "--", "python3", "-c", "pass")[0], 0)
+        self.assertEqual(self.wtest(tid, "--", *self.py, "pass")[0], 0)
         with open(lp, "a+") as held:  # a new holder that has not written its info yet
             fcntl.flock(held, fcntl.LOCK_EX)
-            code, err = self.wtest(tid, "--", "python3", "-c", "pass")
+            code, err = self.wtest(tid, "--", *self.py, "pass")
         self.assertEqual(code, 75)
         self.assertIn("tests busy: another run holds the lock, run it again", err)
         self.assertNotIn("WONKA-00012", err)
@@ -184,7 +199,7 @@ class RunTest(RepoFixture, unittest.TestCase):
         self.to_baking(tid)
         with open(self.tmp / "home" / ".lock", "w") as held, mock.patch.object(store, "LOCK_TIMEOUT", 0.3):
             fcntl.flock(held, fcntl.LOCK_EX)
-            self.assertEqual(self.wtest(tid, "--", "python3", "-c", "import sys; sys.exit(5)")[0], 5)
+            self.assertEqual(self.wtest(tid, "--", *self.py, "import sys; sys.exit(5)")[0], 5)
 
     def test_signal_exit_maps_to_128_plus_n(self):
         tid = self.add()

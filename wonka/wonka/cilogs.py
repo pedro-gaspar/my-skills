@@ -47,9 +47,14 @@ def command_problem(command):
     if not isinstance(command, str):
         return "is not a string command"
     try:
-        shlex.split(command)
+        tokens = shlex.split(command)
     except ValueError as e:
         return f"is not a valid command prefix ({e})"
+    if not tokens:
+        return "is empty, so the URL itself would run as the program"
+    if "/" in tokens[0] and not tokens[0].startswith("/"):
+        return (f"runs {tokens[0]!r}, a path relative to the ticket's worktree, which the builder can edit; "
+                "use an absolute path or a program on PATH")
     if testrun.open_prefix(command):
         return f"is {command!r}, which {store.CI_LOG_OPEN_WARNING}"
     return None
