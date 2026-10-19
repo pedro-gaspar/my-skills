@@ -2395,6 +2395,27 @@ class FactoryTest(unittest.TestCase):
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
         self.assertTrue(any(h.get("why") == "The PR is mergeable again: unstuck" for h in self.history(tid)))
 
+    def test_change_request_on_a_conflict_stuck_ticket_unsticks_and_rebakes(self):
+        tid = self.add()
+        self.to_conflict_stuck(tid)
+        self.pr_feedback()
+        tick = self.request_changes(tid, "Rebase onto the new base")
+        self.assertEqual([j["job"] for j in tick["jobs"] if j["id"] == tid], ["bake"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        t = self.f_ticket(tid)
+        self.assertNotIn("stuck", t)
+        self.assertNotIn("conflict_fixes", t)
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+
+    def test_merge_of_a_conflict_stuck_ticket_unsticks(self):
+        tid = self.add()
+        self.to_conflict_stuck(tid)
+        self.pr_state.write_text("MERGED")
+        self.assertIn(f"{tid}: shipped", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+
     def test_change_request_clears_conflict_fixes(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
