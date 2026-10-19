@@ -30,11 +30,55 @@ push and `wonka resolved` refuse main, master, the base branch, or a worktree th
 GitHub it only changes PRs it opened itself: before every push it checks the open PRs on the branch, and one opened
 by anyone else (by hand, or another tool) makes the ticket 🎩 Stuck instead of being pushed to or taken over.
 
+## Sandbox boundary
+
+`wonka git` is a guardrail against model mistakes, not a sandbox. Builders, fixers and squirrels run the plan's
+test commands, which is arbitrary code, and builders and fixers also have Edit and Write. Both reach whatever the
+`/loop` session reaches: its working directory and the `additionalDirectories` in your settings. Run the loop from
+inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its uncommitted work and its
+`.git/config`. For a real boundary, do both:
+
+1. **Run the loop from an empty, neutral directory**, such as `~/.wonka/floor`
+   (`mkdir -p ~/.wonka/floor && cd ~/.wonka/floor && claude`), not `~/.wonka` itself, which holds Wonka's state
+   and config. Add tickets with `--repo` (`/wonka add --repo ~/Work/my-skills "idea"`), or from another session
+   opened in the repo: only the loop session's directory matters. Edit and Write then reach only the worktrees and
+   the factory folder.
+2. **Turn on Claude Code's sandbox** ([docs](https://code.claude.com/docs/en/sandboxing)): `/sandbox`, or in
+   `~/.claude/settings.json`; on Linux it needs `bubblewrap` and `socat`. The OS then confines every shell command
+   and whatever it starts: writes only to the working directory, a temp dir and `additionalDirectories`, and network
+   only to the domains you allow. It does not cover Edit and Write, which is why step 1 still matters. Wonka needs
+   these settings to keep working under it:
+
+   ```json
+   {
+     "sandbox": {
+       "enabled": true,
+       "allowUnsandboxedCommands": false,
+       "excludedCommands": ["wonka *"],
+       "filesystem": { "allowWrite": ["~/.wonka"] }
+     }
+   }
+   ```
+
+   - `wonka *` runs outside the sandbox: the CLI writes to the main repo's `.git` (worktrees, fetches, commit
+     objects) and talks to GitHub and npm.
+   - `allowWrite` is needed because a call that pipes text in with a heredoc (the analyst's `wonka plan` and
+     `wonka section`) stays sandboxed, and every wonka call takes the lock in `~/.wonka`. Sandboxed test code
+     can then edit Wonka's state, but not your checkouts.
+   - `allowUnsandboxedCommands: false` stops an agent from retrying a blocked command outside the sandbox.
+
+   Tests that need the network fail until you add their hosts to `sandbox.network.allowedDomains`.
+
+What stays open: sandboxed commands can still read most of your home, `~/.ssh` included (close it with
+`sandbox.filesystem.denyRead`), and commit hooks run outside the sandbox with `wonka git commit`. In a repo whose
+hooks live in tracked files (husky, `pre-commit` with `repo: local`), an agent can write a hook and it runs at the
+next commit.
+
 ## Use
 
 | | |
 |---|---|
-| `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo; `--pr-repo owner/name`, `--jira`) |
+| `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo or pass `--repo <path>`; `--pr-repo owner/name`, `--jira`) |
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
