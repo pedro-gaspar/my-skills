@@ -1354,6 +1354,17 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", self.tick()["events"],
                       "a note that comes back is reported again")
 
+    def test_tick_migrates_an_old_factory_base(self):
+        event = "🍫 Factory.base: column 🎫-Ready renamed to 🎫-Planned"
+        store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
+        self.assertNotIn(event, self.tick()["events"], "no base file: nothing to migrate")
+        base = store.board(self.cfg) / store.BASE_FILE
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
+        self.assertIn(event, self.tick()["events"])
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
+        self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
+
     def test_add_with_unknown_parent_leaves_nothing_behind(self):
         with self.assertRaises(WonkaError):
             self.add(parent="WONKA-09999")
