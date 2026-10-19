@@ -5682,6 +5682,61 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.path(tid)
 
+    # -- a fixer that stopped after its rebase ------------------------------
+
+    def test_fixer_that_stops_after_rebasing_is_reset_and_called_again(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        pr_head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.rebase_onto(wt, job["base_ref"])  # the rebase is done, then the tests stay busy: the fixer stops
+        rebased = sh("git", "rev-parse", "HEAD", cwd=wt)
+        out = self.finished(tid, "wonka:oompa-loompa-fixer", job["dispatch"])
+        self.assertIn("left no result, back in the queue", out)
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), pr_head, "back where the PR is")
+        self.assertEqual(sh("git", "symbolic-ref", "--short", "HEAD", cwd=wt), branch)
+        refs = sh("git", "for-each-ref", "--format=%(objectname)", f"refs/wonka/rebased/{tid}", cwd=self.repo)
+        self.assertEqual(refs, rebased, "the fixer's rebase is kept")
+        self.assertTrue(any("is back at" in h.get("why", "") for h in self.history(tid)))
+        self.tick()  # ship() pushes nothing new: no rejected push, no stuck
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        again = self.fixer_job(tid)  # still conflicting: a fixer again, from a clean branch
+        self.assertEqual(again["job"], "conflicts")
+        self.rebase_onto(wt, again["base_ref"])
+        with self.f() as f:
+            f.resolved(tid, dispatch=again["dispatch"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_resolved_checks_the_base_sha_the_fixer_was_given(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(wt, job["base_ref"])
+        self.upstream_change("other.txt", "later\n")  # another ticket's fetch moves origin/main meanwhile
+        sh("git", "fetch", "-q", "origin", "main", cwd=self.repo)
+        with self.f() as f:
+            f.resolved(tid, dispatch=job["dispatch"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_resolved_accepts_a_rebase_onto_a_newer_base_but_not_an_older_one(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        old = sh("git", "rev-parse", "origin/main", cwd=self.repo)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.assertEqual(self.f_ticket(tid)["merge_sha"], sh("git", "rev-parse", "origin/main", cwd=self.repo))
+        sh("git", "rebase", "-q", old, cwd=wt)  # a no-op: still on the old base
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "is not rebased onto origin/main yet"):
+            f.resolved(tid, dispatch=job["dispatch"])
+        self.upstream_change("other.txt", "later\n")
+        sh("git", "fetch", "-q", "origin", "main", cwd=self.repo)
+        self.rebase_onto(wt, "origin/main")
+        with self.f() as f:
+            f.resolved(tid, dispatch=job["dispatch"])
+
 
 if __name__ == "__main__":
     unittest.main()

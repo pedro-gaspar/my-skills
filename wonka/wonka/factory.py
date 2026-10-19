@@ -715,6 +715,8 @@ class Factory:
             # ship(), killed, merged) starts clean and the next tick re-detects conflicts
             t.pop("conflicts", None)
             t.pop("merge_ref", None)
+            t.pop("merge_sha", None)
+            t.pop("fix_head", None)
             t.pop("lease", None)
         if dst != ("drafting", "awaiting"):
             t.pop("spec_review_pending", None)  # only a drafting/awaiting ticket can wait on the spec review
@@ -1922,7 +1924,10 @@ class Factory:
         wt = t["worktree"]
         if git("status", "--porcelain", cwd=wt) or _ref_exists(wt, "MERGE_HEAD") or _rebasing(wt):
             raise WonkaError("the worktree has uncommitted changes or an unfinished rebase: finish the rebase first")
-        rebased = _exec(["git", "merge-base", "--is-ancestor", t["merge_ref"], "HEAD"], cwd=wt)[0] == 0
+        # the base sha the fixer was given (a rebase onto a newer base contains it too); a fixer dispatched before
+        # the sha was kept is checked against the ref
+        base = t.get("merge_sha") or t["merge_ref"]
+        rebased = _exec(["git", "merge-base", "--is-ancestor", base, "HEAD"], cwd=wt)[0] == 0
         if not rebased:
             raise WonkaError(f"{t['branch']} is not rebased onto {t['merge_ref']} yet")
         check_branch(t)
@@ -2218,6 +2223,9 @@ class Factory:
                 # what GitHub has now: the rebased branch may only replace this (--force-with-lease in resolved())
                 t["lease"] = git("rev-parse", f"refs/remotes/origin/{t['branch']}", cwd=t["worktree"])
                 base_ref = t["merge_ref"] = self._fetch_pr_base(tid)
+                # the base the fixer is given, by sha: a later fetch moves the ref, resolved() checks against this
+                t["merge_sha"] = git("rev-parse", f"{base_ref}^{{commit}}", cwd=t["worktree"])
+                t["fix_head"] = git("rev-parse", "HEAD", cwd=t["worktree"])  # what a fixer that gives up is reset to
             except (WonkaError, OSError) as e:
                 return self._fixer_failed_to_start(tid, e)
             self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
@@ -2282,6 +2290,8 @@ class Factory:
             retries = max(retries, MAX_RETRIES)
         why = " ".join(str(why).split())
         why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+        if s == ("shipped", "progress") and t.get("conflicts"):
+            self._undo_fixer(tid)  # before move() drops fix_head
         if s[1] == "progress":
             if s[0] == "reviewing":
                 t["review_round"] -= 1
@@ -2294,6 +2304,34 @@ class Factory:
         if stuck:
             return f"{tid}: stuck, needs a human" if final else f"{tid}: stuck after {retries} tries"
         return f"{tid}: back in the queue"
+
+    def _undo_fixer(self, tid):
+        """A fixer stopped without `wonka resolved` (a conflict it could not resolve, tests that failed or stayed busy
+        after its rebase): put the branch back where it was when the fixer started, which is what the PR has, so the
+        retry's push is a fast-forward and the next fixer starts clean. Its rebase is kept under a ref, never lost.
+        Never raises: a failure is logged and the retry goes on."""
+        t = self.ticket(tid)
+        wt, start = t.get("worktree"), t.get("fix_head")
+        if not (wt and start and Path(wt).is_dir()):
+            return
+        try:
+            for unfinished, abort in ((_ref_exists(wt, "MERGE_HEAD"), "merge"), (_rebasing(wt), "rebase")):
+                if unfinished:
+                    git(abort, "--abort", cwd=wt)
+            head = git("rev-parse", "HEAD", cwd=wt)
+            if head == start:
+                return
+            if _worktree_branch(t["repo"], wt) != t["branch"]:
+                raise WonkaError(f"the worktree is not on {t['branch']}")
+            self._stash_leftovers(tid)
+            ref = f"refs/wonka/rebased/{tid}/{now().strftime('%Y%m%dT%H%M%SZ')}"
+            git("update-ref", ref, head, cwd=wt)
+            git("reset", "--hard", "--quiet", start, cwd=wt)
+            self.log_event(tid, f"The fixer stopped without pushing: {t['branch']} is back at {start[:7]}, as the PR has "
+                                f"it; its rebase is kept as {ref}")
+        except (WonkaError, OSError) as e:
+            self.log_event(tid, f"Could not put {t['branch']} back after the fixer stopped "
+                                f"({' '.join(str(e).split())})")
 
     def _count_failure(self, tid, why, final=False):
         """Bump the retry count; at MAX_RETRIES (at once when `final`) mark the ticket stuck with a Retry checkbox.
