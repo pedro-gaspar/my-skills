@@ -1358,7 +1358,7 @@ class FactoryTest(unittest.TestCase):
         event = "🍫 Factory.base: column 🎫-Ready renamed to 🎫-Planned"
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.assertNotIn(event, self.tick()["events"], "no base file: nothing to migrate")
-        base =store.board(self.cfg) / store.BASE_FILE
+        base = store.board(self.cfg) / store.BASE_FILE
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
         self.assertIn(event, self.tick()["events"])
