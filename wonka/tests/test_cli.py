@@ -379,6 +379,12 @@ class CliTest(unittest.TestCase):
                      "denyRead"]:
             self.assertIn(text, section)
 
+    def test_readme_documents_the_ci_state_fields(self):
+        readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
+        section = readme.split("## Reading a ticket", 1)[1].split("\n## ", 1)[0]
+        for field in ["ci_failures", "ci_fixes", "ci_handled_sha", "ci_handled_runs"]:
+            self.assertIn(f"`{field}`", section)
+
     def test_squirrel_docs_differ_only_in_name_emoji_focus_and_model(self):
         """The squirrel agents share one body; only who they are, what they look at and their model may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"
