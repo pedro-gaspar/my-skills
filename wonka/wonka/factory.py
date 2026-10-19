@@ -559,7 +559,7 @@ class Factory:
         self.expect(tid, ("drafting", "progress"))
         t = self.ticket(tid)
         if split:
-            kids = [k for k in t["children"] if k in self.db["tickets"]]
+            kids = self._live_children(t)
             if not kids:
                 raise WonkaError(f"{tid}: add one ticket per repo first with "
                                  f"`wonka add --repo <path> --parent {tid} ...`")
@@ -569,21 +569,20 @@ class Factory:
                 raise WonkaError(f"{tid}: every child builds in {t['repo']}; --split is for work in other repos "
                                  f"(split a ticket that is too big for one repo with --size l)")
             self.set_field(tid, "size", size)
-            meta, body = self.read(tid)
-            lines = [f"- [[{k}]] {self.read(k)[0].get('title', '')} · {self.ticket(k)['project']}" for k in kids]
-            self.write(tid, meta, note.set_section(body, "split", "\n".join(lines)))
             repos = {self.ticket(k)["repo"] for k in kids}
-            self.move(tid, KILLED, "analyst", f"Split by repo: {len(kids)} tickets in {len(repos)} repos")
+            self._close_with_children(
+                tid, kids, "split",
+                lambda k: f"{self.read(k)[0].get('title', '')} · {self.ticket(k)['project']}",
+                f"Split by repo: {len(kids)} tickets in {len(repos)} repos")
             return
         self.set_field(tid, "size", size)
         meta, body = self.read(tid)
         if size not in machine.BUILDABLE:
-            kids = [k for k in t["children"] if k in self.db["tickets"]]
+            kids = self._live_children(t)
             if not kids:
                 raise WonkaError(f"{tid} is {size}: split it first with `wonka add --parent {tid} ...`")
-            lines = [f"- [[{k}]] {self.read(k)[0].get('title', '')}" for k in kids]
-            self.write(tid, meta, note.set_section(body, "toobig", "\n".join(lines)))
-            self.move(tid, KILLED, "analyst", f"Too big ({size}): split into {len(kids)} tickets")
+            self._close_with_children(tid, kids, "toobig", lambda k: self.read(k)[0].get("title", ""),
+                                      f"Too big ({size}): split into {len(kids)} tickets")
             return
         bad = [r for r in reviewers if r not in REVIEWERS]
         if bad:
@@ -849,6 +848,17 @@ class Factory:
             except (WonkaError, OSError):
                 pass  # lost note or unknown child: nothing to match against
         return titles
+
+    def _live_children(self, t):
+        """The ticket's children that still exist in the db, in order."""
+        return [k for k in t["children"] if k in self.db["tickets"]]
+
+    def _close_with_children(self, tid, kids, section, line, why):
+        """List the children as `- [[KID]] <line(KID)>` in a note section and close the ticket (KILLED)."""
+        meta, body = self.read(tid)
+        text = "\n".join(f"- [[{k}]] {line(k)}" for k in kids)
+        self.write(tid, meta, note.set_section(body, section, text))
+        self.move(tid, KILLED, "analyst", why)
 
     def _depth(self, tid):
         """How many parents up the ticket's family goes: follow-ups of follow-ups stop at max_followup_depth."""
