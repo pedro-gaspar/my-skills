@@ -80,6 +80,36 @@ def _test_command_checks(cfg):
         yield "ok", "test_commands: no shell or interpreter prefixes"
 
 
+def _worktree_file_checks(cfg, tickets):
+    """(level, message) for each project in config worktree_files: its sources must be files in the project's
+    main checkout that git ignores there, or the CLI never copies them into worktrees and scouts."""
+    files = cfg.get("worktree_files") or {}
+    for project, paths in sorted(files.items()):
+        repos = sorted({t["repo"] for t in tickets.values()
+                        if isinstance(t, dict) and t.get("project") == project and t.get("repo")})
+        if not repos:
+            yield "warn", (f"worktree_files.{project}: no ticket is in a repo named {project}, so its files are not "
+                           "checked (is the project name right?)")
+            continue
+        for repo in repos:
+            bad = False
+            for rel in paths:
+                if not store.safe_relpath(rel):
+                    msg = f"worktree_files.{project}: {rel} must be relative to the repo, inside it; it is never copied"
+                elif not (Path(repo) / rel).is_file():
+                    msg = (f"worktree_files.{project}: {rel} is missing in {repo}; "
+                           "it is never copied into worktrees and scouts")
+                elif not _ok(["git", "-C", repo, "check-ignore", "-q", "--", rel]):
+                    msg = (f"worktree_files.{project}: {rel} is not gitignored in {repo}; "
+                           "it is never copied (a builder could commit it)")
+                else:
+                    continue
+                bad = True
+                yield "warn", msg
+            if not bad:
+                yield "ok", f"worktree files for {project} in {repo}: {len(paths)} present and gitignored"
+
+
 def permission_checks(allow, dirs, want_dirs):
     """Yield (level, message) for Claude Code permissions (allow rules and additional directories)."""
     missing = [] if "Bash(wonka *)" in allow or "Bash(wonka:*)" in allow else ["Bash(wonka *)"]
@@ -139,11 +169,13 @@ def checks():
     yield from _orphans(cfg)
     yield from _test_command_checks(cfg)
     path = store.home() / store.STATE_FILE
+    tickets = {}
     try:
-        n = len(json.loads(path.read_text())["tickets"]) if path.exists() else 0
-        yield "ok", f"state {path} ({n} tickets)"
+        tickets = json.loads(path.read_text())["tickets"] if path.exists() else {}
+        yield "ok", f"state {path} ({len(tickets)} tickets)"
     except (ValueError, KeyError) as e:
         yield "fail", f"state {path} is unreadable: {e}"
+    yield from _worktree_file_checks(cfg, tickets if isinstance(tickets, dict) else {})
 
     allow, dirs = _permissions()
     yield from permission_checks(allow, dirs, [str(store.worktrees_dir()), str(board)])
