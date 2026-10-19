@@ -204,7 +204,11 @@ indentation, headings, blockquotes, fences, lists, inline HTML, tables); style-o
 languages, bare URLs, line length, table alignment and the like) are disabled. Missing blank lines around lists (MD032) are inserted automatically first, outside code fences. A section it flags is kept as raw text in a code block under a warning that lists the problems, so broken
 markdown can't spill into the rest of the note. Clean sections are written as is. `WONKA_MDLINT` overrides the
 linter command, `WONKA_MDLINT=off` turns the check off; if the linter is missing, offline or fails, the section is
-written unchecked and the reason goes to `~/.wonka/factory.log`.
+written unchecked and the reason goes to `~/.wonka/factory.log`. Only output lines that name a markdownlint rule
+(`MD032/...`) count as problems: an npx or npm error (no network, a 404 from the registry, a cache it cannot write)
+exits 1 as well and counts as the linter failing. A line that continues a list item without indent (a lazy
+continuation) is left in its list. Headings in any section's text (`#`, `##`) become `###`, so they cannot end the
+section early; inside a code fence only `##` lines do, so `# install deps` in a bash block stays as written.
 
 Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian is renamed back on the
 next tick (found by the `id` in its frontmatter); a deleted note drops its ticket to Wont-Do. Since that is final, a
