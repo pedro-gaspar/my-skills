@@ -133,6 +133,16 @@ def _ref_exists(repo, ref):
     return subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo, capture_output=True).returncode == 0
 
 
+def _drop_stash_entry(repo, sha):
+    """Take the stash entry `sha` out of the shared stash list (refs/stash), wherever it now sits."""
+    try:
+        entries = git("log", "-g", "--format=%H", "refs/stash", cwd=repo).splitlines()
+    except WonkaError:
+        return
+    if sha in entries:
+        git("stash", "drop", "--quiet", f"stash@{{{entries.index(sha)}}}", cwd=repo)
+
+
 def _rebasing(wt):
     """True while a rebase is unfinished in the worktree (it stopped on a conflict)."""
     return any(Path(git("rev-parse", "--path-format=absolute", "--git-path", d, cwd=wt)).exists()
@@ -970,8 +980,16 @@ class Factory:
             return
         git("stash", "push", "--include-untracked", "--quiet", "-m",
             f"wonka: leftovers before fixing conflicts on {tid}", cwd=wt)
-        self.log_event(tid, f"Stashed uncommitted leftovers in {wt} before the conflict fix "
-                            "(git stash list there to get them back)")
+        sha = git("rev-parse", "refs/stash", cwd=wt)
+        base = ref = f"refs/wonka/stash/{tid}/{now().strftime('%Y%m%dT%H%M%SZ')}"
+        n = 1
+        while _ref_exists(wt, ref):
+            n += 1
+            ref = f"{base}-{n}"
+        git("update-ref", ref, sha, cwd=wt)
+        _drop_stash_entry(wt, sha)
+        self.log_event(tid, f"Stashed uncommitted leftovers in {wt} before the conflict fix as {ref} "
+                            f"(git stash apply {ref} there to get them back)")
 
     def _fixer_failed_to_start(self, tid, exc):
         """The fixer could not be dispatched: count it like a retry, stuck after MAX_RETRIES (at once if diverged)."""
