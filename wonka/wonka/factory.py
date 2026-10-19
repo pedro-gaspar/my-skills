@@ -961,8 +961,7 @@ class Factory:
 
     def drafted(self, tid, size, reviewers=(), dispatch=None, split=False):
         if self._stale_dispatch(tid, dispatch):
-            return (f"{tid}: analyst result is from an earlier dispatch "
-                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+            return self._stale_msg(tid, "analyst result", dispatch)
         self.expect(tid, ("drafting", "progress"))
         t = self.ticket(tid)
         if split:
@@ -1297,8 +1296,7 @@ class Factory:
 
     def baked(self, tid, dispatch=None, flaky=None, disputes=()):
         if self._stale_dispatch(tid, dispatch):
-            return (f"{tid}: builder result is from an earlier dispatch "
-                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+            return self._stale_msg(tid, "builder result", dispatch)
         self.expect(tid, ("baking", "progress"))
         t = self.ticket(tid)
         if flaky is not None:
@@ -1373,8 +1371,7 @@ class Factory:
         if reviewer not in REVIEWERS:
             raise WonkaError(f"unknown squirrel {reviewer}; one of {', '.join(REVIEWERS)}")
         if self._stale_dispatch(tid, dispatch):
-            return (f"{tid}: squirrel-{reviewer} report is from an earlier dispatch "
-                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+            return self._stale_msg(tid, f"squirrel-{reviewer} report", dispatch)
         self.expect(tid, ("reviewing", "progress"))
         t = self.ticket(tid)
         if reviewer not in (t["reviewers"] or ["architect"]):
@@ -2381,7 +2378,7 @@ class Factory:
             raise WonkaError(f"unknown agent {agent}; one of {', '.join(known)}")
         t, s = self.ticket(tid), self.state(tid)
         if self._stale_dispatch(tid, dispatch):
-            return f"{tid}: {agent} is from an earlier dispatch ({dispatch}, now {t['dispatch']}), ignored"
+            return self._stale_msg(tid, agent, dispatch)
         held = t.get("held_by")
         if (held and name in held.get("agents", [])
                 and (dispatch is None or held.get("dispatch") is None or held["dispatch"] == dispatch)):
