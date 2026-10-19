@@ -94,7 +94,7 @@ push.
 | `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `test_lock_wait_minutes` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
-| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions, open test_commands prefixes and notes with stray ## sections |
+| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions, open test_commands prefixes, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
 
 ## The floor
 
@@ -117,7 +117,7 @@ Worktrees and scouts have no gitignored files. List the ones a project's tests n
 removes it): the CLI copies them from your checkout into each worktree and scout, keeping their mode. Only files git
 ignores there are copied (never one a builder could commit), an existing file is never overwritten, and a missing one is
 noted in the ticket's factory log without blocking the job. They are copied, never symlinked, so a builder cannot change
-your checkout's file.
+your checkout's file. `wonka doctor` warns when a listed file is missing in your checkout or not gitignored there.
 
 Agents run a project's tests with `wonka test <id> -- <command>`. List the allowed command prefixes with
 `wonka config test_commands.<project> ./test.sh,make test` (a comma list; an empty value removes it). `wonka test`

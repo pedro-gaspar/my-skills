@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -215,6 +216,63 @@ class TestCommandChecksTest(unittest.TestCase):
                 lines = [c for c in doctor.checks() if "test_commands" in c[1]]
         self.assertEqual([lv for lv, _ in lines], ["warn"])
         self.assertIn("app: bash", lines[0][1])
+
+
+class WorktreeFilesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = self.tmp / "app"
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / ".gitignore").write_text(".env\n")
+        (self.repo / "server").mkdir()
+        (self.repo / "server" / ".env").write_text("A=1\n")
+        self.tickets = {"WONKA-00001": {"project": "app", "repo": str(self.repo)}}
+
+    def run_checks(self, files):
+        return list(doctor._worktree_file_checks({"worktree_files": files}, self.tickets))
+
+    def test_present_and_ignored_is_ok(self):
+        result = self.run_checks({"app": ["server/.env"]})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "ok")
+        self.assertIn("app", result[0][1])
+
+    def test_missing_file_warns(self):
+        result = self.run_checks({"app": ["server/.env", "web/.env"]})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "warn")
+        self.assertIn("web/.env", result[0][1])
+        self.assertIn("missing", result[0][1])
+
+    def test_not_ignored_file_warns(self):
+        (self.repo / "config.yml").write_text("x: 1\n")
+        result = self.run_checks({"app": ["config.yml"]})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "warn")
+        self.assertIn("config.yml", result[0][1])
+        self.assertIn("not gitignored", result[0][1])
+
+    def test_unknown_project_warns(self):
+        result = self.run_checks({"other": ["x/.env"]})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "warn")
+        self.assertIn("other", result[0][1])
+        self.assertIn("no ticket", result[0][1])
+
+    def test_no_config_yields_nothing(self):
+        self.assertEqual(self.run_checks({}), [])
+
+    def test_checks_reads_tickets_from_state(self):
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / doctor.store.STATE_FILE).write_text(json.dumps({"tickets": self.tickets}))
+        cfg = {"vault": str(self.tmp), "folder": "wonka", "worktree_files": {"app": ["server/.env"]}}
+        with mock.patch.dict(doctor.os.environ, {"WONKA_HOME": str(home)}), \
+                mock.patch.object(doctor.store, "load_config", return_value=cfg), \
+                mock.patch.object(doctor, "_permissions", return_value=([], [])):
+            lines = [c for c in doctor.checks() if c[1].startswith("worktree files for app")]
+        self.assertEqual([lv for lv, _ in lines], ["ok"])
 
 
 class NpxCheckTest(unittest.TestCase):
