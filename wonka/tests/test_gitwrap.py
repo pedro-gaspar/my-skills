@@ -56,7 +56,9 @@ class CheckTest(unittest.TestCase):
                      "ls-files --exclude-per-directory ../../etc/passwd", "ls-files --exclude-p=x",
                      "blame -S /etc/passwd f", "blame -wS /etc/passwd f", "blame --ignore-revs-file=/etc/x f",
                      "blame --ignore-revs f", "diff -O/etc/passwd", "log -p -O/etc/x", "show -O x",
-                     "status --pathspec-from-file=x"):
+                     "status --pathspec-from-file=x", "rev-parse --resolve-git-dir /home/u/other/.git",
+                     "rev-parse --resolve-git-dir=/x/.git", "rev-parse --prefix /etc/ passwd",
+                     "rev-parse --prefix=/etc/ passwd"):
             sub, *args = line.split()
             with self.subTest(line=line), self.assertRaises(WonkaError):
                 check(sub, args)
@@ -70,6 +72,16 @@ class CheckTest(unittest.TestCase):
         for args in (["a", "b/c"], ["HEAD", "--", "src/x.py"], ["a/../b"], ["main...HEAD", "--", "."]):
             with self.subTest(args=args):
                 self.assertIsNone(check("diff", args))
+
+    def test_rev_parse_paths_must_stay_inside_the_tree(self):
+        for args in (["/etc/passwd"], ["HEAD", "/etc/passwd"], ["../x"], ["a/../../x"], [".."],
+                     ["--", "/etc/passwd"]):
+            with self.subTest(args=args), self.assertRaises(WonkaError):
+                check("rev-parse", args)
+        for args in (["HEAD"], ["--abbrev-ref", "HEAD"], ["--show-toplevel"], ["--git-path", "hooks"],
+                     ["HEAD:wonka/x.py"], ["main...HEAD"], ["--verify", "HEAD~1"]):
+            with self.subTest(args=args):
+                self.assertIsNone(check("rev-parse", args))
 
     def test_merge_only_takes_the_fixer_forms(self):
         for args in ([], ["origin/main"], ["--no-edit"], ["--no-edit", "-s", "ours"], ["--no-edit", "--squash"],
