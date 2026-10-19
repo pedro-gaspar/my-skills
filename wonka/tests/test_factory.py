@@ -442,9 +442,9 @@ class FactoryTest(unittest.TestCase):
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["test_commands"], [])
         self.cfg["test_commands"] = {"other": ["./t.sh"]}
-        self.assertEqual(factory.test_prefixes(self.cfg, "app"), [])
-        self.assertEqual(factory.test_prefixes({"test_commands": None}, "p"), [])
-        self.assertEqual(factory.test_prefixes({"test_commands": {"p": ["./t.sh"]}}, "p"), ["./t.sh"])
+        self.assertEqual(factory.project_test_prefixes(self.cfg, "app"), [])
+        self.assertEqual(factory.project_test_prefixes({"test_commands": None}, "p"), [])
+        self.assertEqual(factory.project_test_prefixes({"test_commands": {"p": ["./t.sh"]}}, "p"), ["./t.sh"])
 
     def test_pr_body_is_archived_with_the_plan(self):
         tid = self.ship_with_template()

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from . import gitwrap, store
-from .factory import Factory, test_prefixes
+from .factory import Factory, project_test_prefixes
 from .store import WonkaError
 
 USAGE = "usage: wonka test <id> [--dispatch <n>] -- <command> [args...]"
@@ -122,13 +122,9 @@ def open_prefix(prefix):
 
 
 def open_prefixes(cfg, project=None):
-    """(project, prefix) for each open test_commands prefix, sorted by project."""
-    found = []
-    for proj, plist in sorted((cfg.get("test_commands") or {}).items()):
-        if project is not None and proj != project:
-            continue
-        found += [(proj, p) for p in plist if open_prefix(p)]
-    return found
+    """(project, prefix) for each open test_commands prefix, sorted by project (only `project` when given)."""
+    projects = sorted(cfg.get("test_commands") or {}) if project is None else [project]
+    return [(proj, p) for proj in projects for p in project_test_prefixes(cfg, proj) if open_prefix(p)]
 
 
 def check(argv, allowed, project):
@@ -186,7 +182,7 @@ def main(argv):
     f = Factory(cfg, store.snapshot())
     t = f.ticket(tid)
     project = t["project"]
-    check(cmd, test_prefixes(cfg, project), project)
+    check(cmd, project_test_prefixes(cfg, project), project)
     path = gitwrap.target(t, f.state(tid), "status")
     if Path(path).resolve() == Path(t["repo"]).resolve():
         raise WonkaError(f"no worktree or scout for {tid}: wonka test only runs in a ticket's worktree or scout")
