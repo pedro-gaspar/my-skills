@@ -53,6 +53,7 @@ views:
       - size
       - jira
       - spec_review
+      - blocked_by
     sort:
       - property: file.name
         direction: ASC

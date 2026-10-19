@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import machine, store
-from .factory import Factory, alert, fmt
+from .factory import Factory, alert, fmt, split_ids
 from .store import WonkaError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -123,8 +123,14 @@ def run(a, f):
     c = a.cmd
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
-                  spec_review="human" if a.needs_human_spec_review else None)
+                  spec_review="human" if a.needs_human_spec_review else None, blocked_by=split_ids(a.blocked_by))
         print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
+    elif c == "block":
+        f.block(a.id, a.blockers)
+        print(f.summary(a.id))
+    elif c == "unblock":
+        f.unblock(a.id, a.blockers)
+        print(f.summary(a.id))
     elif c == "set":
         f.set_field(a.id, a.field, a.value)
         print(f.summary(a.id))
@@ -179,7 +185,8 @@ def run(a, f):
     elif c == "status":
         for k in f.live():
             meta = f.read(k)[0]
-            print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('title', '')}")
+            print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('title', '')}"
+                  + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
 
 
 def _key(value, table):
@@ -220,6 +227,14 @@ def parser():
     s.add_argument("--jira")
     s.add_argument("--needs-human-spec-review", action="store_true",
                    help="a human approves the spec and plan before baking (spec_review: human)")
+    s.add_argument("--blocked-by", action="append",
+                   help="ids this ticket waits on (comma list or repeat): WONKA-00001,WONKA-00002")
+    s = sub.add_parser("block", help="record that a ticket waits on other tickets (only before baking)")
+    s.add_argument("id")
+    s.add_argument("blockers", nargs="+", help="blocker ids, space or comma separated")
+    s = sub.add_parser("unblock", help="remove blockers from a ticket; no ids clears them all")
+    s.add_argument("id")
+    s.add_argument("blockers", nargs="*")
     s = sub.add_parser("set", help="set title, size, jira, pr_repo or spec_review (agent|human)")
     s.add_argument("id")
     s.add_argument("field")

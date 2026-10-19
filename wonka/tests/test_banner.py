@@ -14,6 +14,13 @@ class BannerTest(unittest.TestCase):
                 self.assertTrue(text.startswith("# 🎫 WONKA-00001\n\n> [!"), (status, sub))
                 self.assertIn(banner.QUIPS[(status, sub)], text)
 
+    def test_blocked_by_fact(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "triage", "phase": "pending"}, "project": "app", "history": []}
+        self.assertNotIn("⛓️", banner.render("WONKA-00002", t, {"size": "s"}, cfg))
+        t["blocked_by"] = ["WONKA-00001"]
+        self.assertIn("⛓️ blocked by [[WONKA-00001]]", banner.render("WONKA-00002", t, {"size": "s"}, cfg))
+
     def test_log_is_newest_first_and_folded(self):
         t = {"history": [
             {"at": "2026-10-18T10:00:00+00:00", "from": "triage/pending", "to": "triage/ready", "by": "triage"},

@@ -1,6 +1,7 @@
 """The factory end to end, against a real git repo, a local 'origin' and a fake gh."""
 
 import contextlib
+import io
 import datetime as dt
 import json
 import os
@@ -12,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import factory, mdlint, note, store
+from wonka import cli, factory, mdlint, note, store
 from wonka.factory import Factory
 from wonka.machine import KILLED
 from wonka.store import WonkaError
@@ -1689,6 +1690,114 @@ class FactoryTest(unittest.TestCase):
         tid = self.add()
         self.assertEqual(tid, "WONKA-00001")
         self.assertFalse([e for e in self.tick()["events"] if "not a Wonka ticket" in e])
+
+    def test_add_refuses_unknown_or_wontdo_blocker_without_side_effects(self):
+        a = self.add()
+        with self.assertRaises(WonkaError):
+            self.add(blocked_by=["WONKA-09999"])
+        with self.f() as f:
+            f.move(a, KILLED, "human")
+        with self.assertRaises(WonkaError) as cm:
+            self.add(blocked_by=[a])
+        self.assertIn("Won't do", str(cm.exception))
+        with self.f() as f:
+            self.assertEqual(f.db["next_id"], 2)
+        self.assertEqual([p.name for p in store.tickets_dir(self.cfg).glob("*.md")], ["WONKA-00001.md"])
+
+    def test_add_stores_blocked_by_in_state_note_and_banner(self):
+        a, b = self.add(), self.add()
+        c = self.add(blocked_by=[f"{a},{b}", a])
+        self.assertEqual(self.f_ticket(c)["blocked_by"], [a, b])
+        meta, body = self.note(c)
+        self.assertEqual(meta["blocked_by"], "WONKA-00001, WONKA-00002")
+        self.assertIn("⛓️ blocked by [[WONKA-00001]], [[WONKA-00002]]", body)
+        with self.f() as f:
+            self.assertNotIn("blocked_by", f.path(a).read_text())
+
+    def test_note_blocked_by_is_overwritten_from_state(self):
+        a = self.add()
+        c = self.add(blocked_by=[a])
+        self.edit_note(c, lambda s: s.replace(f"blocked_by: {a}", "blocked_by: WONKA-00042"))
+        self.assertEqual(self.note(c)[0]["blocked_by"], "WONKA-00042")
+        with self.f() as f:
+            f.log_event(c, "x")
+        self.assertEqual(self.note(c)[0]["blocked_by"], a)
+
+    def test_block_unblock_round_trip(self):
+        a, b, c = self.add(), self.add(), self.add()
+        with self.f() as f:
+            f.block(c, [f"{a},{b}"])
+            f.block(c, [a])
+        self.assertEqual(self.f_ticket(c)["blocked_by"], [a, b])
+        self.assertEqual(len([h for h in self.f_ticket(c)["history"] if h["why"].startswith("Blocked by")]), 1)
+        with self.f() as f:
+            f.unblock(c, [a])
+        self.assertEqual(self.f_ticket(c)["blocked_by"], [b])
+        with self.f() as f, self.assertRaises(WonkaError) as cm:
+            f.unblock(c, [a])
+        self.assertIn(b, str(cm.exception))
+        with self.f() as f:
+            f.block(c, [a])
+            f.unblock(c, [])
+        meta, body = self.note(c)
+        self.assertNotIn("blocked_by", meta)
+        self.assertNotIn("⛓️", body)
+        with self.f() as f, self.assertRaises(WonkaError) as cm:
+            f.unblock(c, [])
+        self.assertIn("not blocked by any ticket", str(cm.exception))
+        self.assertTrue(all(h["by"] == "human" for h in self.f_ticket(c)["history"] if "locked" in h.get("why", "")))
+
+    def test_block_refuses_self_unknown_wontdo_and_cycles(self):
+        a, b, c, k = self.add(), self.add(), self.add(), self.add()
+        with self.f() as f:
+            f.move(k, KILLED, "human")
+        for tid, blocker, msg in ((a, a, "itself"), (a, "WONKA-09999", "No ticket"), (a, k, "Won't do")):
+            with self.f() as f, self.assertRaises(WonkaError) as cm:
+                f.block(tid, [blocker])
+            self.assertIn(msg, str(cm.exception))
+        with self.f() as f:
+            f.block(a, [b])
+            f.block(b, [c])
+        for tid, blocker in ((b, a), (c, a)):
+            with self.f() as f, self.assertRaises(WonkaError) as cm:
+                f.block(tid, [blocker])
+            self.assertIn("cycle", str(cm.exception))
+        self.assertEqual(self.f_ticket(a)["blocked_by"], [b])
+        self.assertEqual(self.f_ticket(b)["blocked_by"], [c])
+        self.assertEqual(self.f_ticket(c)["blocked_by"], [])
+
+    def test_block_refused_once_baking(self):
+        a, t, k = self.add(), self.add(), self.add()
+        self.to_planned(t)
+        with self.f() as f:
+            f.block(t, [a])
+        self.tick()
+        self.assertEqual(self.state(t), ("baking", "progress"))
+        for fn in ("block", "unblock"):
+            with self.f() as f, self.assertRaises(WonkaError) as cm:
+                getattr(f, fn)(t, [a])
+            self.assertIn("before baking", str(cm.exception))
+        with self.f() as f:
+            f.move(k, KILLED, "human")
+        with self.f() as f, self.assertRaises(WonkaError):
+            f.block(k, [a])
+
+    def test_waiting_on_and_status_marker(self):
+        a, b = self.add(), self.add()
+        c = self.add(blocked_by=[a, b])
+        with self.f() as f:
+            f.ticket(a)["last_valid"] = {"status": "shipped", "phase": "ready"}
+            self.assertEqual(f.waiting_on(c), [b])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                cli.run(cli.parser().parse_args(["status"]), f)
+            lines = {ln.split()[0]: ln for ln in buf.getvalue().splitlines()}
+            self.assertTrue(lines[c].endswith("⛓️ WONKA-00002"))
+            self.assertNotIn("⛓️", lines[b])
+            del f.ticket(c)["blocked_by"]
+            self.assertEqual(f.waiting_on(c), [])
+            meta, body = f.read(c)
+            f.write(c, meta, body)
 
     def test_child_inherits_repo_pr_repo_and_jira_from_parent(self):
         tid = self.add(jira="CALC-42")

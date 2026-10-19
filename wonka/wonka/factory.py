@@ -415,6 +415,17 @@ def test_prefixes(cfg, project):
     return list((cfg.get("test_commands") or {}).get(project) or [])
 
 
+def split_ids(values):
+    """Ticket ids from a list of strings: split on commas, strip, drop empties, dedupe in order."""
+    out = []
+    for v in values or []:
+        for x in str(v).split(","):
+            x = x.strip()
+            if x and x not in out:
+                out.append(x)
+    return out
+
+
 class Factory:
     def __init__(self, cfg, db):
         self.cfg, self.db = cfg, db
@@ -444,6 +455,7 @@ class Factory:
     def write(self, tid, meta, body):
         """Every write re-renders the banner and the factory log from the JSON state."""
         t = self.ticket(tid)
+        meta["blocked_by"] = ", ".join(t.get("blocked_by") or [])  # mirror of the state; a hand edit is overwritten
         body = note.set_banner(body, banner.render(tid, t, meta, self.cfg))
         body = note.set_section(body, "log", banner.log(t))
         note.write(self.path(tid), meta, body)
@@ -458,6 +470,70 @@ class Factory:
         if self.path(tid).exists():
             meta, body = self.read(tid)
             self.write(tid, meta, body)
+
+    def _finished(self, tid):
+        t = self.db["tickets"].get(tid)
+        return bool(t) and (t["last_valid"]["status"], t["last_valid"]["phase"]) == ("shipped", "ready")
+
+    def waiting_on(self, tid):
+        """Blockers of tid that have not merged yet. Part 2 (tick) holds a ticket while this is non-empty."""
+        return [b for b in (self.ticket(tid).get("blocked_by") or []) if not self._finished(b)]
+
+    def _check_blockers(self, tid, blockers):
+        for b in blockers:
+            self.ticket(b)
+            if tid is not None and b == tid:
+                raise WonkaError(f"{tid} cannot block itself")
+            if self.state(b) == KILLED:
+                raise WonkaError(f"{b} is Won't do: it will never merge, so it cannot block {tid or 'a ticket'}")
+            if tid is not None:
+                seen, stack = set(), [b]
+                while stack:
+                    x = stack.pop()
+                    if x == tid:
+                        raise WonkaError(f"{b} is already blocked by {tid} (directly or through other tickets): "
+                                         f"blocking {tid} by {b} would make a cycle")
+                    if x in seen:
+                        continue
+                    seen.add(x)
+                    stack.extend(self.db["tickets"].get(x, {}).get("blocked_by") or [])
+
+    def _check_editable(self, tid):
+        s = self.state(tid)
+        if s[0] in ("triage", "drafting") or s == ("planned", "pending"):
+            return
+        raise WonkaError(f"{tid} is {fmt(s)}: blockers can only change before baking starts (Triage, Drafting or Planned)")
+
+    def block(self, tid, blockers):
+        blockers = split_ids(blockers)
+        if not blockers:
+            raise WonkaError("block needs at least one blocker id")
+        self._check_editable(tid)
+        self._check_blockers(tid, blockers)
+        t = self.ticket(tid)
+        cur = list(t.get("blocked_by") or [])
+        new = [b for b in blockers if b not in cur]
+        if not new:
+            return
+        t["blocked_by"] = cur + new
+        self.log_event(tid, f"Blocked by {', '.join(new)}", by="human")
+
+    def unblock(self, tid, blockers=()):
+        self._check_editable(tid)
+        blockers = split_ids(blockers)
+        t = self.ticket(tid)
+        cur = list(t.get("blocked_by") or [])
+        if not cur:
+            raise WonkaError(f"{tid} is not blocked by any ticket")
+        if not blockers:
+            gone = cur
+        else:
+            missing = [b for b in blockers if b not in cur]
+            if missing:
+                raise WonkaError(f"{tid} is not blocked by {', '.join(missing)}; it is blocked by {', '.join(cur)}")
+            gone = blockers
+        t["blocked_by"] = [b for b in cur if b not in gone]
+        self.log_event(tid, f"No longer blocked by {', '.join(gone)}", by="human")
 
     def state(self, tid):
         lv = self.ticket(tid)["last_valid"]
@@ -518,12 +594,14 @@ class Factory:
     # -- intake -----------------------------------------------------------
 
     def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None,
-            spec_review=None):
+            spec_review=None, blocked_by=None):
         if size and size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
         if spec_review is not None and spec_review not in machine.SPEC_REVIEWS:
             raise WonkaError("spec_review must be agent or human")
         parent_t = self.ticket(parent) if parent else None  # fail before touching anything
+        blocked_by = split_ids(blocked_by)
+        self._check_blockers(None, blocked_by)
         top, base, origin = repo_info(repo or (parent_t and parent_t["repo"]) or os.getcwd())
         if parent_t:
             # A child defaults to its parent's repo, PR target and Jira key. The PR target only
@@ -546,7 +624,7 @@ class Factory:
         self.db["tickets"][tid] = {
             "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
-            "review_round": 0, "parent": parent, "children": [],
+            "review_round": 0, "parent": parent, "children": [], "blocked_by": blocked_by,
             "last_valid": {"status": "triage", "phase": "pending"},
             "created_at": _iso(now()), "history": [],
         }

@@ -128,6 +128,8 @@ def render(tid, t, meta, cfg):
     facts = [f"{' · '.join(machine.label(s))}", f"size **{meta.get('size') or '?'}**", f"`{t['project']}`"]
     if t.get("parent"):
         facts.append(f"parent [[{t['parent']}]]")
+    if t.get("blocked_by"):
+        facts.append("⛓️ blocked by " + ", ".join(f"[[{b}]]" for b in t["blocked_by"]))
     if t.get("plan"):
         facts.append(f"plan [[{tid}-plan]]")
     if t.get("pr_url"):
