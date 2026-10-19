@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from . import note, store
+from .factory import notifier
 
 SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
 
@@ -88,13 +89,28 @@ def permission_checks(allow, dirs, want_dirs):
                        "unless you want them for your own sessions: " + ", ".join(broad))
 
 
+def _notifier_checks():
+    """Desktop pings: notify-send (+ xdg-open for the click) on Linux, terminal-notifier or osascript on macOS."""
+    tool = notifier()
+    if tool == "notify-send":
+        yield "ok", "notify-send (desktop pings when a ticket needs you)"
+        yield ("ok" if shutil.which("xdg-open") else "warn"), "xdg-open (clicking a PR notification opens the PR)"
+    elif tool == "terminal-notifier":
+        yield "ok", "terminal-notifier (desktop pings when a ticket needs you; a click opens the PR)"
+    elif tool == "osascript":
+        yield "warn", ("osascript (desktop pings work, but clicking a PR notification opens nothing: "
+                       "brew install terminal-notifier)")
+    else:
+        yield "warn", ("no desktop notifier (notify-send on Linux, terminal-notifier or osascript on macOS): "
+                       "nothing pings you when a ticket needs you or the factory stops")
+
+
 def checks():
     """Yield (level, message): level is ok, warn or fail."""
     yield ("ok" if sys.version_info >= (3, 11) else "fail"), f"python {sys.version.split()[0]} (needs 3.11+)"
     yield ("ok" if shutil.which("git") else "fail"), "git"
     yield ("ok" if _ok(["gh", "auth", "status"]) else "fail"), "gh installed and logged in (opens PRs, checks merges)"
-    yield ("ok" if shutil.which("notify-send") else "warn"), "notify-send (desktop pings when a ticket needs you)"
-    yield ("ok" if shutil.which("xdg-open") else "warn"), "xdg-open (clicking a PR notification opens the PR)"
+    yield from _notifier_checks()
     if "WONKA_MDLINT" not in os.environ:
         yield ("ok" if shutil.which("npx") else "warn"), "npx (markdownlint checks Idea and Spec sections; without it they are written unchecked)"
     try:

@@ -14,6 +14,7 @@ from unittest import mock
 
 from wonka import factory, mdlint, note, store
 from wonka.factory import Factory
+from wonka.machine import KILLED
 from wonka.store import WonkaError
 
 FAKE_GH = """#!/bin/sh
@@ -1775,8 +1776,15 @@ class FactoryTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         os.environ.pop("WONKA_NO_NOTIFY", None)
 
+    def on(self, tool):
+        """Pretend this machine's desktop notifier is `tool`."""
+        patcher = mock.patch.object(factory, "notifier", return_value=tool)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_notify_without_url_runs_notify_send_once(self):
         self.notify_env()
+        self.on("notify-send")
         with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
             factory.notify("WONKA-00001", "Hi")
         run.assert_called_once_with(["notify-send", "-a", "Wonka", "🎩 Wonka needs you", "WONKA-00001 — Hi"], check=False)
@@ -1784,6 +1792,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_notify_with_url_waits_for_a_click_in_the_background(self):
         self.notify_env()
+        self.on("notify-send")
         url = "https://x/pull/7"
         with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
             factory.notify("WONKA-00001", "Hi", url)
@@ -1796,6 +1805,46 @@ class FactoryTest(unittest.TestCase):
         i = argv.index("-A")
         self.assertEqual(argv[i + 1], "default=Open PR")
         self.assertTrue(kwargs["start_new_session"])
+
+    def test_alert_is_urgent(self):
+        self.notify_env()
+        self.on("notify-send")
+        with mock.patch.object(factory.subprocess, "run") as run:
+            factory.alert("vault missing")
+        run.assert_called_once_with(["notify-send", "-a", "Wonka", "-u", "critical", "🎩 Wonka is stopped",
+                                     "vault missing"], check=False)
+
+    def test_macos_terminal_notifier_opens_the_pr_on_click(self):
+        self.notify_env()
+        self.on("terminal-notifier")
+        with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
+            factory.notify("WONKA-00001", "Hi", "https://x/pull/7")
+        popen.assert_not_called()
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], "terminal-notifier")
+        self.assertEqual(argv[argv.index("-open") + 1], "https://x/pull/7")
+        self.assertEqual(argv[argv.index("-message") + 1], "WONKA-00001 — Hi\nClick to open the PR")
+        self.assertEqual(argv[argv.index("-subtitle") + 1], "🎩 Wonka needs you")
+
+    def test_macos_osascript_passes_the_text_as_arguments(self):
+        self.notify_env()
+        self.on("osascript")
+        title = 'Hi" & (do shell script "touch /tmp/pwned") & "'
+        with mock.patch.object(factory.subprocess, "run") as run:
+            factory.notify("WONKA-00001", title, "https://x/pull/7")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:len(factory._OSASCRIPT)], factory._OSASCRIPT)
+        self.assertEqual(argv[len(factory._OSASCRIPT):], ["🎩 Wonka needs you", f"WONKA-00001 — {title}"])
+        self.assertFalse(any(title in a for a in factory._OSASCRIPT), "the text never enters the script")
+
+    def test_no_notifier_is_silent(self):
+        self.notify_env()
+        self.on(None)
+        with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
+            factory.notify("WONKA-00001", "Hi", "https://x/pull/7")
+            factory.alert("stopped")
+        run.assert_not_called()
+        popen.assert_not_called()
 
     def fake_notify(self, notify_send):
         bin_dir = self.tmp / "bin"
@@ -3169,6 +3218,144 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(job["base_ref"], "origin/release")
         self.assertEqual(self.f_ticket(tid)["pr_base"], "release")
         self.assertEqual(self.f_ticket(tid)["base_branch"], "main")
+
+
+    # -- the vault going missing, renamed notes ----------------------------
+
+    def test_missing_tickets_folder_skips_the_tick(self):
+        ids = [self.add(f"idea {i}") for i in range(3)]
+        os.rename(self.tmp / "vault", self.tmp / "vault-unmounted")  # an unmounted drive, a moved vault
+        with self.assertRaisesRegex(WonkaError, "tickets folder .* is missing"):
+            self.tick()
+        self.assertEqual([self.state(k) for k in ids], [("inbox", "pending")] * 3)
+        os.rename(self.tmp / "vault-unmounted", self.tmp / "vault")
+        self.assertEqual(len(self.tick()["jobs"]), 2, "back to normal once the vault is back")
+
+    def test_every_note_gone_at_once_needs_drop_missing(self):
+        ids = [self.add(f"idea {i}") for i in range(2)]
+        for k in ids:
+            with self.f() as f:
+                f.path(k).unlink()
+        with self.assertRaisesRegex(WonkaError, "--drop-missing"):
+            self.tick()
+        self.assertEqual([self.state(k) for k in ids], [("inbox", "pending")] * 2)
+        with self.f() as f:
+            events = f.tick(drop_missing=True)["events"]
+        self.assertEqual([self.state(k) for k in ids], [("wontdo", "done")] * 2)
+        self.assertIn(f"{ids[0]}: note was deleted, ticket dropped", events)
+
+    def test_renamed_note_gets_its_name_back(self):
+        tid = self.add()
+        with self.f() as f:
+            path = f.path(tid)
+        renamed = path.with_name("Add a hello script.md")
+        path.rename(renamed)
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: note was renamed to Add a hello script.md, renamed back", events)
+        self.assertTrue(path.exists())
+        self.assertFalse(renamed.exists())
+        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertFalse([e for e in events if "not a Wonka ticket" in e])
+
+    def test_note_writes_leave_no_temp_file(self):
+        tid = self.add()
+        with self.f() as f:
+            folder = f.path(tid).parent
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), [f"{tid}.md"])
+
+    # -- a PR merged while its fix round ran ------------------------------
+
+    def test_pr_merged_during_a_fix_round_is_stuck_not_reopened(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        tick = self.request_changes(tid, "Please also add a test")
+        wt = Path([j for j in tick["jobs"] if j["id"] == tid][0]["worktree"])
+        self.commit_and_bake(wt, "test.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.pr_state.write_text("MERGED")
+        Path(f"{self.pr_state}.open").unlink()  # `pr list --state open` finds nothing once it is merged
+        events = self.tick()["events"]
+        self.assertTrue(any("merged while the fix round ran" in e for e in events), events)
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"])
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text(), "x\n", "no second PR")
+        self.assertIn("Open a PR for them by hand", note.get_section(self.note(tid)[1], "stuck"))
+
+    # -- limits on work nobody asked for ----------------------------------
+
+    def test_triage_has_a_wip_limit(self):
+        ids = [self.add(f"idea {i}") for i in range(3)]
+        jobs = self.tick()["jobs"]
+        self.assertEqual([j["id"] for j in jobs], ids[:2])
+        with self.f() as f:
+            f.triage(ids[0], "m", dispatch=jobs[0]["dispatch"])
+        self.assertEqual([j["id"] for j in self.tick()["jobs"]], [ids[2]], "a finished triage frees its slot")
+
+    def test_stale_triage_is_ignored(self):
+        tid = self.add()
+        job = self.tick()["jobs"][0]
+        with self.f() as f:
+            f.retry(tid)
+        self.tick()
+        with self.f() as f:
+            msg = f.triage(tid, "s", dispatch=job["dispatch"])
+        self.assertIn("from an earlier dispatch", msg)
+        self.assertEqual(self.state(tid), ("inbox", "pending"))
+
+    def test_followups_stop_at_max_followup_depth(self):
+        self.cfg["max_followup_depth"] = 1
+        parent = self.add("the parent")
+        with self.f() as f:
+            f.move(parent, KILLED, "human")
+        tid = self.add("a follow-up", parent=parent)
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut", "followups": [{"title": "Another one", "idea": "more"}]})
+        with self.f() as f:
+            self.assertEqual(sorted(f.db["tickets"]), [parent, tid], "no grandchild filed")
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        log = [h.get("why", "") for h in self.history(tid)]
+        self.assertTrue(any("Follow-up not filed" in w and "Another one: more" in w for w in log), log)
+
+    # -- worktree setup failures, a lost state update, archiving ----------
+
+    def test_worktree_setup_failure_goes_stuck(self):
+        tid = self.add()
+        self.to_ready(tid)
+        with mock.patch.object(Factory, "ensure_worktree", side_effect=WonkaError("disk full")):
+            events = [e for _ in range(3) for e in self.tick()["events"] if e.startswith(tid)]
+        self.assertIn(f"{tid}: ⚠️ could not set up the worktree (try 1/3), retried next tick: disk full", events)
+        self.assertIn(f"{tid}: ⚠️ could not set up the worktree, stuck: disk full", events)
+        self.assertTrue(self.f_ticket(tid)["stuck"])
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        self.assertEqual(self.tick()["jobs"], [], "a stuck ticket waits for Retry")
+
+    def test_registered_worktree_from_a_lost_update_is_adopted(self):
+        tid = self.add()
+        self.to_ready(tid)
+        job = self.tick()["jobs"][0]
+        with self.f() as f:
+            t = f.ticket(tid)
+            t["worktree"], t["branch"] = None, None  # as if that tick's state was never saved
+            f.ensure_worktree(tid)
+            self.assertEqual((t["worktree"], t["branch"]), (job["worktree"], job["branch"]))
+
+    def test_failed_archive_keeps_the_ticket_live(self):
+        tid = self.add()
+        with self.f() as f:
+            f.move(tid, KILLED, "human")
+            f.ticket(tid)["entered_done_at"] = "2000-01-01T00:00:00+00:00"
+        with mock.patch.object(factory.shutil, "move", side_effect=OSError("read-only")):
+            events = self.tick()["events"]
+        self.assertIn(f"{tid}: ⚠️ read-only", events)
+        self.assertFalse(self.f_ticket(tid).get("archived"))
+        self.assertIn(f"{tid}: archived", self.tick()["events"])
+        with self.f() as f:
+            self.assertTrue(f.path(tid).exists())
 
 
 if __name__ == "__main__":

@@ -73,7 +73,9 @@ def _story(tid, t, meta, cfg):
                 "tick; after 3 failed tries it stops and asks you to tick Retry.")
         return "info", "The PR has merge conflicts", "🔧 A fixer Oompa-Loompa picks it up on this tick."
     return {
-        ("inbox", "pending"): ("abstract", "Waiting for triage", "📏 An Oompa-Loompa sizes this ticket on the next tick."),
+        ("inbox", "pending"): ("abstract", "Waiting for triage",
+                               "📏 An Oompa-Loompa sizes this ticket as soon as triage has room "
+                               f"({wip.get('triage', 2)} at a time)."),
         ("inbox", "awaiting"): ("question", "🙋 Your turn: approve it", (
             f"The triage Oompa-Loompa sized it **{size}**. Tick **Approve** and answer every question (⭐ is the recommendation) "
             "to send it to Drafting." if size not in machine.AUTO_DONE else

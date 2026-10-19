@@ -1,6 +1,7 @@
 """wonka git: the subcommand and option checks, and the wrapper end to end against a real repo."""
 
 import contextlib
+import fcntl
 import io
 import os
 import pwd
@@ -258,6 +259,16 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(sh("git", "rev-list", "--count", "origin/main..HEAD", cwd=wt), "1")
         self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=self.repo), head)
         self.assertEqual(sh("git", "status", "--porcelain", cwd=self.repo), status)
+
+    def test_runs_while_a_tick_holds_the_lock(self):
+        """Agents call wonka git all the time: it reads a snapshot, so a long tick never stalls them."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        (wt / "hello.sh").write_text("echo hi\n")
+        with open(self.tmp / "home" / ".lock", "w") as held, mock.patch.object(store, "LOCK_TIMEOUT", 0.3):
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.assertEqual(self.git(tid, "--dispatch", str(self.dispatch), "add", "hello.sh")[0], 0)
+            self.assertEqual(self.git(tid, "status", "--short")[0], 0)
 
     def test_write_refused_outside_baking(self):
         tid = self.add()

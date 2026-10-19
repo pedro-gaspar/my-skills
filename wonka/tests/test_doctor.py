@@ -202,5 +202,31 @@ class NpxCheckTest(unittest.TestCase):
             self.assertEqual(self.npx_lines(), [])
 
 
+class NotifierCheckTest(unittest.TestCase):
+    def lines(self, tools):
+        which = lambda name: f"/usr/bin/{name}" if name in tools else None  # noqa: E731
+        with mock.patch.object(doctor.shutil, "which", side_effect=which), \
+                mock.patch("wonka.factory.shutil.which", side_effect=which):
+            return list(doctor._notifier_checks())
+
+    def test_linux(self):
+        self.assertEqual([lv for lv, _ in self.lines({"notify-send", "xdg-open"})], ["ok", "ok"])
+        self.assertEqual(self.lines({"notify-send"})[1][0], "warn", "no xdg-open: clicks open nothing")
+
+    def test_macos_prefers_terminal_notifier(self):
+        self.assertEqual(self.lines({"terminal-notifier", "osascript"}),
+                         [("ok", "terminal-notifier (desktop pings when a ticket needs you; a click opens the PR)")])
+
+    def test_macos_osascript_only_warns_about_clicks(self):
+        (level, msg), = self.lines({"osascript"})
+        self.assertEqual(level, "warn")
+        self.assertIn("brew install terminal-notifier", msg)
+
+    def test_no_notifier_warns(self):
+        (level, msg), = self.lines(set())
+        self.assertEqual(level, "warn")
+        self.assertIn("no desktop notifier", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

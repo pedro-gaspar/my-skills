@@ -8,7 +8,9 @@ ticket, the Nut Room **squirrels** test it (good nut or bad nut?), then Wonka sh
 
 ## Install
 
-Needs Python 3.11+ (stdlib only), git, `gh` (logged in) and Obsidian 1.14+ (Bases kanban view).
+Needs Python 3.11+ (stdlib only), git, `gh` (logged in) and Obsidian 1.14+ (Bases kanban view). Desktop pings use
+`notify-send` (and `xdg-open` for clicks) on Linux. On macOS they use `terminal-notifier` if installed (`brew install
+terminal-notifier`, a click opens the PR), else the built-in `osascript` (a click opens nothing).
 
 ```bash
 claude plugin marketplace add ~/Work/my-skills
@@ -26,7 +28,8 @@ registered git dir (a rewritten `.git` file is ignored) and allows only status, 
 ls-files, blame, add and commit (plus the fixer's `rebase <ref>`, `rebase --continue` and `rebase --abort`; no `-c`, config,
 push or options that run programs), so no git permission rule is needed; the doctor warns if an old `Bash(git *)`
 rule is still there. Writes (add, commit, rebase) must carry the agent's `--dispatch` and are refused unless it
-is the ticket's current dispatch, so a builder or fixer left over from an earlier dispatch cannot commit next to its
+is the ticket's current dispatch (every agent command, from `wonka triage` to `wonka report`, requires `--dispatch`
+too, and a result from an earlier dispatch is ignored), so a builder or fixer left over from an earlier dispatch cannot commit next to its
 replacement. Wonka only ever commits and pushes the ticket's own `wonka/` branch: `wonka git` writes, the PR
 push and `wonka resolved` refuse main, master, the base branch, or a worktree that is no longer on its branch. On
 GitHub it only changes PRs it opened itself: before every push it checks the open PRs on the branch, and one opened
@@ -72,9 +75,10 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
    Tests that need the network fail until you add their hosts to `sandbox.network.allowedDomains`.
 
 What stays open: sandboxed commands can still read most of your home, `~/.ssh` included (close it with
-`sandbox.filesystem.denyRead`), and commit hooks run outside the sandbox with `wonka git commit`. In a repo whose
-hooks live in tracked files (husky, `pre-commit` with `repo: local`), an agent can write a hook and it runs at the
-next commit.
+`sandbox.filesystem.denyRead`), and git hooks run outside the sandbox: commit hooks with `wonka git commit`, and
+pre-push hooks when Wonka pushes the PR branch (`wonka tick`, `wonka resolved`). In a repo whose hooks live in
+tracked files (husky, `pre-commit` with `repo: local`), an agent can write a hook and it runs at the next commit or
+push.
 
 ## Use
 
@@ -84,7 +88,7 @@ next commit.
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
-| `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds` |
+| `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
 
@@ -96,8 +100,8 @@ next commit.
 | 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Inbox tickets (`## 🗑️ Too big`, then Wont-Do) |
 | 🎫-Ready | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Sonnet) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
-| 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (architect on Opus, the rest on Sonnet; picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); the answers are logged in the plan as `### Decisions` under that `## 🐿️ Review round N` (the log holds only squirrels that raised issues; a clean round with no answered questions logs nothing); a clean round ships once every answer is the recommended one, otherwise rebakes. Max `max_review_rounds` (default 3) rounds with issues, then Wont-Do; a clean round that rebakes adds an extra round |
-| 🚢-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed (a worktree with local changes is kept and retried each tick: clean or delete it and Wonka removes it and the branch). Or tick **🔁 Request changes** (write what to change under it and/or leave PR review comments): back to Baking for a fix round with a fresh 3 review rounds; the fixes are pushed to the same PR. A fix round starts from the PR branch on GitHub, so commits pushed there (an applied suggestion, "Update branch") are kept; if the push is still rejected the ticket goes stuck at once with what to do. Only comments by the repo's owners, members and collaborators are copied to the builder (others could slip it instructions on a public repo); the number skipped shows in the factory log. Each tick an open PR with merge conflicts gets 🔧 **oompa-loompa-fixer** (Sonnet): it rebases the PR branch onto the PR's current base on GitHub (never a merge commit), resolves, and the CLI pushes (`wonka resolved`, with `--force-with-lease` against the PR branch GitHub had when the fixer started, so a commit pushed there meanwhile is never overwritten); no new review, the PR is back to 🙋. Uncommitted leftovers in the worktree are stashed first, under `refs/wonka/stash/<id>/<time>` and not in your `git stash list` (the factory log names the ref; `git stash apply <ref>` gets them back, `git update-ref -d <ref>` deletes it). A fixer that cannot start (the fetch fails, the worktree is missing) is retried each tick and goes 🎩 Stuck after 3 tries; a PR branch that diverged from GitHub is stuck at once with what to do. If GitHub still calls the PR conflicting after 3 pushed fixes in a row, the ticket goes stuck instead (tick Retry for 3 more; a PR that turns mergeable unsticks itself). A PR closed while a fixer or a fix round was running sends the ticket to Wont-Do instead of opening a new PR |
+| 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (architect on Opus, the rest on Sonnet; picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets (not for a ticket already `max_followup_depth`, default 2, parents deep: those are only logged on the ticket, so follow-ups can't breed forever); decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); the answers are logged in the plan as `### Decisions` under that `## 🐿️ Review round N` (the log holds only squirrels that raised issues; a clean round with no answered questions logs nothing); a clean round ships once every answer is the recommended one, otherwise rebakes. Max `max_review_rounds` (default 3) rounds with issues, then Wont-Do; a clean round that rebakes adds an extra round |
+| 🚢-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed (a worktree with local changes is kept and retried each tick: clean or delete it and Wonka removes it and the branch). Or tick **🔁 Request changes** (write what to change under it and/or leave PR review comments): back to Baking for a fix round with a fresh 3 review rounds; the fixes are pushed to the same PR. A fix round starts from the PR branch on GitHub, so commits pushed there (an applied suggestion, "Update branch") are kept; if the push is still rejected the ticket goes stuck at once with what to do. Only comments by the repo's owners, members and collaborators are copied to the builder (others could slip it instructions on a public repo); the number skipped shows in the factory log. Each tick an open PR with merge conflicts gets 🔧 **oompa-loompa-fixer** (Sonnet): it rebases the PR branch onto the PR's current base on GitHub (never a merge commit), resolves, and the CLI pushes (`wonka resolved`, with `--force-with-lease` against the PR branch GitHub had when the fixer started, so a commit pushed there meanwhile is never overwritten); no new review, the PR is back to 🙋. Uncommitted leftovers in the worktree are stashed first, under `refs/wonka/stash/<id>/<time>` and not in your `git stash list` (the factory log names the ref; `git stash apply <ref>` gets them back, `git update-ref -d <ref>` deletes it). A fixer that cannot start (the fetch fails, the worktree is missing) is retried each tick and goes 🎩 Stuck after 3 tries; a PR branch that diverged from GitHub is stuck at once with what to do. If GitHub still calls the PR conflicting after 3 pushed fixes in a row, the ticket goes stuck instead (tick Retry for 3 more; a PR that turns mergeable unsticks itself). A PR closed while a fixer or a fix round was running sends the ticket to Wont-Do instead of opening a new PR; one merged during a fix round makes the ticket 🎩 Stuck (its new commits are only on the local branch: open a PR for them by hand, then drag the card to Wont-Do) |
 | 🗑️-Wont-Do | killed, split or closed (the local branch is kept, it may hold work). You can drag any card here. A ticket killed while a builder, squirrel or fixer still works in its worktree keeps the worktree until that agent ends (`wonka finished`) or `stale_hours` pass, then Wonka removes it |
 
 Triage and the analyst read a throwaway read-only checkout of the latest `origin/<base>` in
@@ -109,11 +113,14 @@ Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Done.
 
 ## WIP limits
 
-`wip.drafting` and `wip.baking` cap how many tickets an Oompa-Loompa is working on, not how many cards sit in a
+`wip.triage`, `wip.drafting` and `wip.baking` cap how many tickets an Oompa-Loompa is working on, not how many cards sit in a
 column. A ticket counts toward its column's limit only while it is 🕰️-Pending or 🎩-In-Progress there, and the limit
-is checked only when a ticket is pulled in (✉️ Inbox to 🧪 Drafting, 🎫 Ready to 🍫 Baking). This is on purpose:
+is checked only when a ticket is pulled in (✉️ Inbox to 🧪 Drafting, 🎫 Ready to 🍫 Baking) or, for triage, when a
+triage job is handed out. This is on purpose:
 waiting for a human should never block the line.
 
+- 📏 Triage: `wip.triage` (default 2) triage Oompa-Loompas run at once, so a burst of new tickets (say, a batch of
+  squirrel follow-ups) is sized a few at a time.
 - 🧪 Drafting: a ticket waiting on your answers (🙋) frees its slot. When you answer, drafting resumes at once,
   even if that briefly puts Drafting over the limit.
 - 🍫 Baking: tickets in 🐿️-Reviewing and 🚢-Shipped don't count, and squirrel reviews run without a limit. A ticket
@@ -138,10 +145,20 @@ markdown can't spill into the rest of the note. Clean sections are written as is
 linter command, `WONKA_MDLINT=off` turns the check off; if the linter is missing, offline or fails, the section is
 written unchecked and the reason goes to `~/.wonka/factory.log`.
 
+Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian is renamed back on the
+next tick (found by the `id` in its frontmatter); a deleted note drops its ticket to Wont-Do. Since that is final, a
+tick refuses to run when the tickets folder is missing (an unmounted or moved vault, a changed `vault` setting) or
+when every live ticket's note is gone at once; if you really deleted them all, run `wonka tick --drop-missing`.
+Errors that stop the whole factory (that refusal, an unreadable state or config file, a lock held for 10 minutes)
+also send an urgent desktop notification, so a `/loop` running in the background doesn't fail silently.
+
 **The state machine** (`wonka/machine.py`) is the only way a ticket moves. Drag a card anywhere other than Wont-Do
 and the next tick puts it back, with a note on the ticket. Notes keep only `id, title, status, phase, size,
 jira`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
-`~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`).
+`~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It and the notes
+are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
+giving up after 10 minutes. `wonka git`, `wonka status` and `wonka show` only read, so they never wait for it: an agent
+is never stalled by a tick that is busy talking to GitHub.
 
 ## Develop
 

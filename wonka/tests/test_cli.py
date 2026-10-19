@@ -33,7 +33,7 @@ class CliTest(unittest.TestCase):
                                     "--archive-days", "14", "--max-review-rounds", "4")
         self.assertEqual(code, 0)
         cfg = store.load_config()
-        self.assertEqual((cfg["wip"], cfg["archive_after_days"]), ({"drafting": 2, "baking": 3}, 14))
+        self.assertEqual((cfg["wip"], cfg["archive_after_days"]), ({"triage": 2, "drafting": 2, "baking": 3}, 14))
         self.assertEqual(cfg["max_review_rounds"], 4)
         self.assertIn("🐿️ review rounds    : 4", out)
         base = (self.tmp / "vault/wonka/🍫 Factory.base").read_text()
@@ -104,7 +104,7 @@ class CliTest(unittest.TestCase):
             "--issue", "calc.py:4: no zero test → add one",
             "--followup", "Cache lookups :: memoise the user lookup",
             "--question", "Keep the old API? | Yes | *No, nothing uses it",
-            "--suggest", "draft", "--why", "the spec missed the API"])
+            "--suggest", "draft", "--why", "the spec missed the API", "--dispatch", "1"])
         self.assertEqual(cli._report(a), {
             "verdict": "bad nut", "issues": ["calc.py:4: no zero test → add one"],
             "questions": [{"q": "Keep the old API?", "options": ["Yes", "No, nothing uses it"], "recommended": 1}],
@@ -112,40 +112,34 @@ class CliTest(unittest.TestCase):
             "followups": [{"title": "Cache lookups", "idea": "memoise the user lookup"}]})
 
     def test_finished_needs_an_agent(self):
-        a = cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend"])
-        self.assertEqual((a.cmd, a.id, a.agent),
-                         ("finished", "WONKA-00001", "wonka:squirrel-backend"))
-        self.assertIsNone(a.dispatch)
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            cli.parser().parse_args(["finished", "WONKA-00001"])
-
-    def test_finished_and_report_take_a_dispatch_number(self):
         a = cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend", "--dispatch", "3"])
+        self.assertEqual((a.cmd, a.id, a.agent, a.dispatch),
+                         ("finished", "WONKA-00001", "wonka:squirrel-backend", 3))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parser().parse_args(["finished", "WONKA-00001", "--dispatch", "3"])
+
+    def test_report_ignores_the_dispatch(self):
+        args = ["report", "WONKA-00001", "--squirrel", "architect", "--verdict", "good", "--dispatch", "3"]
+        a = cli.parser().parse_args(args)
         self.assertEqual(a.dispatch, 3)
-        args = ["report", "WONKA-00001", "--squirrel", "architect", "--verdict", "good"]
-        plain, numbered = cli.parser().parse_args(args), cli.parser().parse_args(args + ["--dispatch", "3"])
-        self.assertIsNone(plain.dispatch)
-        self.assertEqual(numbered.dispatch, 3)
-        self.assertEqual(cli._report(numbered), cli._report(plain))
-        self.assertNotIn("dispatch", cli._report(numbered))
+        self.assertNotIn("dispatch", cli._report(a))
 
-    def test_drafted_and_baked_take_a_dispatch_number(self):
-        drafted = ["drafted", "WONKA-00001", "--size", "s"]
-        self.assertEqual(cli.parser().parse_args(drafted + ["--dispatch", "3"]).dispatch, 3)
-        self.assertIsNone(cli.parser().parse_args(drafted).dispatch)
-        self.assertEqual(cli.parser().parse_args(["baked", "WONKA-00001", "--dispatch", "3"]).dispatch, 3)
-        self.assertIsNone(cli.parser().parse_args(["baked", "WONKA-00001"]).dispatch)
-
-    def test_ask_plan_section_resolved_take_a_dispatch_number(self):
+    def test_agent_commands_require_a_dispatch_number(self):
+        """Without it the factory cannot tell a late agent from the live one, so argparse refuses the call."""
         for argv in (["ask", "WONKA-00001", "--question", "Q? | a | *b"], ["plan", "WONKA-00001"],
-                     ["section", "WONKA-00001", "spec"], ["resolved", "WONKA-00001"]):
-            self.assertIsNone(cli.parser().parse_args(argv).dispatch, argv)
+                     ["section", "WONKA-00001", "spec"], ["resolved", "WONKA-00001"],
+                     ["drafted", "WONKA-00001", "--size", "s"], ["baked", "WONKA-00001"],
+                     ["triage", "WONKA-00001", "--size", "s"],
+                     ["report", "WONKA-00001", "--squirrel", "architect", "--verdict", "good"],
+                     ["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend"]):
             self.assertEqual(cli.parser().parse_args(argv + ["--dispatch", "3"]).dispatch, 3, argv)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit, msg=argv):
+                cli.parser().parse_args(argv)
 
     def test_agent_docs_pass_the_dispatch(self):
         root = Path(cli.__file__).resolve().parent.parent
         for name, verbs in (("oompa-loompa-analyst", ("ask", "plan", "section", "drafted")),
-                            ("oompa-loompa-fixer", ("resolved",))):
+                            ("oompa-loompa-fixer", ("resolved",)), ("oompa-loompa-triage", ("triage",))):
             lines = (root / "agents" / f"{name}.md").read_text().splitlines()
             for verb in verbs:
                 cmds = [ln for ln in lines if f"wonka {verb} <id>" in ln]
@@ -154,11 +148,11 @@ class CliTest(unittest.TestCase):
                     self.assertIn("--dispatch <dispatch>", ln, (name, verb))
 
     def test_resolved_takes_an_id(self):
-        a = cli.parser().parse_args(["resolved", "WONKA-00001"])
+        a = cli.parser().parse_args(["resolved", "WONKA-00001", "--dispatch", "1"])
         self.assertEqual((a.cmd, a.id), ("resolved", "WONKA-00001"))
 
     def test_triage_takes_a_duplicate_of(self):
-        args = ["triage", "WONKA-00002", "--size", "s"]
+        args = ["triage", "WONKA-00002", "--size", "s", "--dispatch", "1"]
         self.assertEqual(cli.parser().parse_args(args + ["--duplicate-of", "WONKA-00001"]).duplicate_of, "WONKA-00001")
         self.assertIsNone(cli.parser().parse_args(args).duplicate_of)
 
@@ -221,6 +215,30 @@ class CliTest(unittest.TestCase):
         first = next(iter(bodies))
         for name, body in bodies.items():
             self.assertEqual(body, bodies[first], f"squirrel-{name}.md drifted from squirrel-{first}.md")
+
+    def test_critical_errors_ping_the_desktop(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        (self.tmp / "home" / store.STATE_FILE).write_text("{")
+        with mock.patch.object(cli, "alert") as alert:
+            code, _, err = self.run_cli("status")
+        self.assertEqual(code, 1)
+        self.assertIn("not valid JSON", err)
+        alert.assert_called_once()
+        self.assertIn("not valid JSON", alert.call_args[0][0])
+
+    def test_missing_vault_pings_the_desktop(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        shutil.rmtree(self.tmp / "vault")
+        with mock.patch.object(cli, "alert") as alert:
+            code, _, err = self.run_cli("tick")
+        self.assertEqual(code, 1)
+        self.assertIn("is missing", alert.call_args[0][0])
+
+    def test_ordinary_errors_do_not_ping(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        with mock.patch.object(cli, "alert") as alert:
+            self.assertEqual(self.run_cli("show", "WONKA-00042")[0], 1)
+        alert.assert_not_called()
 
     def test_errors_are_friendly_and_logged(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))

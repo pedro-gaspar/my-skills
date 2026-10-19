@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import banner, machine, mdlint, note, store
 from .machine import KILLED, review_budget
-from .store import WonkaError
+from .store import CriticalError, WonkaError
 
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 # free-text sections, checked with markdownlint; Wonka-rendered sections (approval, questions, stuck, log, ...) never are
@@ -183,6 +183,17 @@ def _drop_stash_entry(repo, sha):
         git("stash", "drop", "--quiet", f"stash@{{{entries.index(sha)}}}", cwd=repo)
 
 
+def _worktree_branch(repo, path):
+    """The branch git has checked out in the registered worktree at path, or None when it is not one."""
+    want, cur = str(Path(path).resolve()), None
+    for line in git("worktree", "list", "--porcelain", cwd=repo).splitlines():
+        if line.startswith("worktree "):
+            cur = str(Path(line[len("worktree "):]).resolve())
+        elif line.startswith("branch refs/heads/") and cur == want:
+            return line[len("branch refs/heads/"):]
+    return None
+
+
 def _rebasing(wt):
     """True while a rebase is unfinished in the worktree (it stopped on a conflict)."""
     return any(Path(git("rev-parse", "--path-format=absolute", "--git-path", d, cwd=wt)).exists()
@@ -221,6 +232,10 @@ class _Diverged(WonkaError):
     """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must rebase."""
 
 
+class _Merged(WonkaError):
+    """The ticket's PR was merged while a fix round ran: a new PR would repeat its commits, a human must decide."""
+
+
 class _NotOurs(WonkaError):
     """An open PR on the ticket's branch was not opened by Wonka for it: retrying cannot help, a human must look."""
 
@@ -251,25 +266,54 @@ def fmt(state):
 
 # Wait for the click in the background; open the URL only when the default action (a click) was chosen.
 _OPEN_ON_CLICK = 'u=$1; o=$2; shift 2; [ "$("$@")" = default ] && exec "$o" "$u"'
+NOTIFIERS = ("notify-send", "terminal-notifier", "osascript")  # Linux; macOS with a click action; macOS built in
+# macOS's built-in notifier: the text goes in as arguments, never into the AppleScript source
+_OSASCRIPT = ["osascript", "-e", "on run argv", "-e",
+              "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run"]
+_QUIET = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+
+
+def notifier():
+    """The first desktop notifier found on this machine, or None."""
+    return next((n for n in NOTIFIERS if shutil.which(n)), None)
+
+
+def _ping(title, body, url=None, urgent=False):
+    """Ping the desktop with whatever notifier this machine has. With a url, clicking opens it (notify-send waits
+    detached, never blocks; osascript cannot open anything, so there the click does nothing)."""
+    if os.environ.get("WONKA_NO_NOTIFY"):
+        return
+    tool = notifier()
+    try:
+        if tool == "notify-send":
+            cmd = ["notify-send", "-a", "Wonka", *(["-u", "critical"] if urgent else []), title, body]
+            if not url:
+                subprocess.run(cmd, check=False)
+                return
+            cmd[-1] += "\nClick to open the PR"
+            cmd += ["-A", "default=Open PR"]
+            opener = os.environ.get("WONKA_OPEN", "xdg-open")
+            subprocess.Popen(["sh", "-c", _OPEN_ON_CLICK, "wonka-notify", url, opener, *cmd], **_QUIET,
+                             start_new_session=True)
+        elif tool == "terminal-notifier":
+            cmd = ["terminal-notifier", "-title", "Wonka", "-subtitle", title,
+                   "-message", body + ("\nClick to open the PR" if url else "")]
+            cmd += (["-open", url] if url else []) + (["-sound", "default"] if urgent else [])
+            subprocess.run(cmd, check=False, **_QUIET)
+        elif tool == "osascript":
+            subprocess.run([*_OSASCRIPT, title, body], check=False, **_QUIET)
+    except OSError:
+        pass
 
 
 def notify(tid, title, url=None):
-    """Ping the desktop. With a url, clicking the notification opens it (waits detached, never blocks)."""
-    if os.environ.get("WONKA_NO_NOTIFY"):
-        return
-    cmd = ["notify-send", "-a", "Wonka", "🎩 Wonka needs you", f"{tid} — {title}"]
-    try:
-        if not url:
-            subprocess.run(cmd, check=False)
-            return
-        cmd[-1] += "\nClick to open the PR"
-        cmd += ["-A", "default=Open PR"]
-        opener = os.environ.get("WONKA_OPEN", "xdg-open")
-        subprocess.Popen(["sh", "-c", _OPEN_ON_CLICK, "wonka-notify", url, opener, *cmd],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-    except OSError:
-        pass
+    """Ping the desktop when a ticket needs a human. With a url, clicking the notification opens it."""
+    _ping("🎩 Wonka needs you", f"{tid} — {title}", url)
+
+
+def alert(message):
+    """Ping the desktop, urgently, about a problem that stops the whole factory rather than one ticket."""
+    _ping("🎩 Wonka is stopped", message, urgent=True)
 
 
 def _default_title(idea):
@@ -418,7 +462,9 @@ class Factory:
         else:
             raise WonkaError("settable fields: title, size, jira, pr_repo")
 
-    def triage(self, tid, size, title=None, questions=None, duplicate_of=None):
+    def triage(self, tid, size, title=None, questions=None, duplicate_of=None, dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "triage result", dispatch)
         self.expect(tid, ("inbox", "pending"))
         if size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
@@ -540,6 +586,10 @@ class Factory:
         branch = t["branch"] or f"wonka/{tid}-{slug(title)}"
         path.parent.mkdir(parents=True, exist_ok=True)
         recreated = bool(t["worktree"])  # the folder was deleted from outside
+        if path.is_dir() and _worktree_branch(t["repo"], path) == branch:
+            # made by an earlier call whose state was never saved (a crash): take it as is
+            t["worktree"], t["branch"] = str(path), branch
+            return
         if not path.is_dir():
             git("worktree", "prune", cwd=t["repo"])  # forget a registration whose folder was deleted
         if _ref_exists(t["repo"], f"refs/heads/{branch}"):
@@ -775,16 +825,32 @@ class Factory:
                 pass  # lost note or unknown child: nothing to match against
         return titles
 
+    def _depth(self, tid):
+        """How many parents up the ticket's family goes: follow-ups of follow-ups stop at max_followup_depth."""
+        depth, seen, cur = 0, {tid}, self.db["tickets"].get(tid, {}).get("parent")
+        while cur in self.db["tickets"] and cur not in seen:
+            seen.add(cur)
+            depth, cur = depth + 1, self.db["tickets"][cur].get("parent")
+        return depth
+
     def _verdict(self, tid):
         t = self.ticket(tid)
         reps, rnd = t.pop("reports"), t["review_round"]
         t.pop("finished", None)
         seen = self._child_titles(tid)
+        depth, max_depth = self._depth(tid), self.cfg.get("max_followup_depth", 2)
         for rep in reps.values():
             for f in rep.get("followups", []):
                 title = (f.get("title") or _default_title(f["idea"])).strip()
                 if title.casefold() in seen:
                     self.log_event(tid, f"Follow-up already in the factory, skipped: {title}")
+                    continue
+                if depth >= max_depth:  # follow-ups breeding follow-ups would never end without a human
+                    idea = " ".join(f["idea"].split())
+                    idea = idea if len(idea) <= 300 else idea[:299] + "…"
+                    self.log_event(tid, f"Follow-up not filed, this ticket is {depth} follow-ups deep (max_followup_depth "
+                                        f"{max_depth}); add it by hand if you want it: {title}: {idea}")
+                    seen.add(title.casefold())
                     continue
                 self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid)
                 seen.add(title.casefold())
@@ -853,6 +919,8 @@ class Factory:
                 if state == "CLOSED":
                     self.move(tid, KILLED, "github", "PR closed without merging")
                     return f"{tid}: PR closed"
+                if state == "MERGED":
+                    raise _Merged(f"{t['pr_url']} was merged while the fix round ran")
             check_branch(t)
             ours = self._own_prs(tid)  # before the push: pushing the branch changes every PR opened from it
             try:
@@ -876,6 +944,12 @@ class Factory:
             if isinstance(e, _NotOurs):  # someone else's PR is on the branch: never touch it, a human decides
                 why = (f"an open PR on {t['branch']} was not opened by Wonka, so Wonka will not push to it: close it "
                        "or move it off the branch, then tick Retry")
+                outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
+                self.log_event(tid, err)
+                return f"{tid}: PR failed: {why}; {outcome}"
+            if isinstance(e, _Merged):  # never open a second PR with the merged commits in it
+                why = (f"the PR was merged while the fix round ran: the new commits are only on {t['branch']}. "
+                       "Open a PR for them by hand, then drag the card to Wont-Do")
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
                 self.log_event(tid, err)
                 return f"{tid}: PR failed: {why}; {outcome}"
@@ -1088,6 +1162,38 @@ class Factory:
 
     # -- the tick ---------------------------------------------------------
 
+    def _find_renamed(self, foreign):
+        """Notes renamed in Obsidian (their frontmatter id is a live ticket whose note is gone) get their name back,
+        so a rename is never taken for a deletion. Returns the events."""
+        events = []
+        folder = store.tickets_dir(self.cfg)
+        for name in foreign:
+            try:
+                tid = str(note.read(folder / name)[0].get("id") or "")
+            except (OSError, UnicodeDecodeError):
+                continue
+            t = self.db["tickets"].get(tid)
+            if not t or t.get("archived") or self.path(tid).exists():
+                continue
+            (folder / name).rename(self.path(tid))
+            self.log_event(tid, f"The note was renamed to {name}: renamed it back to {self.path(tid).name} "
+                                "(Wonka finds tickets by file name)")
+            events.append(f"{tid}: note was renamed to {name}, renamed back")
+        return events
+
+    def _check_notes(self, drop_missing):
+        """Refuse to tick when the tickets folder is missing, or when every live ticket's note is gone at once: that
+        is an unmounted, moved or reconfigured vault, not a human deleting notes, and dropping is final."""
+        folder = store.tickets_dir(self.cfg)
+        if not folder.is_dir():
+            raise CriticalError(f"the tickets folder {folder} is missing (vault not mounted or moved, or `vault` changed "
+                             "in ~/.wonka/config.json): tick skipped so no ticket is dropped")
+        live = self.live()
+        missing = [k for k in live if not self.path(k).exists()]
+        if not drop_missing and len(live) > 1 and len(missing) == len(live):
+            raise CriticalError(f"none of the {len(live)} live tickets has a note in {folder}: tick skipped so no "
+                             "ticket is dropped. If you deleted them all on purpose, run wonka tick --drop-missing")
+
     def reconcile(self, tid):
         """Put illegal board edits back and act on ticked checkboxes and merged PRs."""
         t = self.ticket(tid)
@@ -1205,12 +1311,13 @@ class Factory:
         if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
             return None
         src, plan = self.path(tid), self.plan_path(tid)
-        store.archive_dir(self.cfg).mkdir(parents=True, exist_ok=True)
+        folder = store.archive_dir(self.cfg)
+        folder.mkdir(parents=True, exist_ok=True)
+        if plan.exists():  # the plan first: if the note's move fails, the ticket is still live and retried next tick
+            shutil.move(plan, folder / plan.name)
+            t["plan"] = str(folder / plan.name)
+        shutil.move(src, folder / src.name)
         t["archived"] = True
-        shutil.move(src, self.path(tid))
-        if plan.exists():
-            shutil.move(plan, self.plan_path(tid))
-            t["plan"] = str(self.plan_path(tid))
         return f"{tid}: archived"
 
     def start(self, tid):
@@ -1222,7 +1329,8 @@ class Factory:
         if s == ("drafting", "pending"):
             self.move(tid, ("drafting", "progress"), "wonka")
         elif s == ("baking", "pending"):
-            self.ensure_worktree(tid)
+            if (failed := self._setup_worktree(tid)) is not None:
+                return failed
             if t.get("pr_url"):  # a fix round on an open PR: take what was pushed there, so the ship's push fast-forwards
                 try:
                     self._sync_pr_branch(tid)
@@ -1231,7 +1339,8 @@ class Factory:
                                         f"({' '.join(str(e).split())})")
             self.move(tid, ("baking", "progress"), "wonka")
         elif s == ("reviewing", "pending"):
-            self.ensure_worktree(tid)
+            if (failed := self._setup_worktree(tid)) is not None:
+                return failed
             t["reviewed_head"] = git("rev-parse", "HEAD", cwd=t["worktree"])
             t["review_round"] += 1
             t.pop("fixing_changes", None)
@@ -1273,6 +1382,21 @@ class Factory:
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
                 "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
                 "review_round": t["review_round"], "dispatch": t["dispatch"]}
+
+    def _setup_worktree(self, tid):
+        """ensure_worktree() before a bake or review job; a failure counts like a retry, stuck after MAX_RETRIES.
+        Returns None when the worktree is ready, else the event to report."""
+        try:
+            self.ensure_worktree(tid)
+            return None
+        except (WonkaError, OSError) as e:
+            err = " ".join(str(e).split())
+            err = err if len(err) <= 150 else err[:149] + "…"
+            retries, stuck = self._count_failure(tid, f"could not set up the worktree: {err}")
+            self.log_event(tid, f"Could not set up the worktree (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): {err}")
+            if stuck:
+                return f"{tid}: ⚠️ could not set up the worktree, stuck: {err}"
+            return f"{tid}: ⚠️ could not set up the worktree (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
 
     def retry(self, tid, why="the last job did not finish", final=False):
         """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help)."""
@@ -1372,16 +1496,28 @@ class Factory:
         except (WonkaError, OSError) as e:
             return f"{tid}: ⚠️ {e}"
 
-    def tick(self):
+    def _foreign(self):
+        folder = store.tickets_dir(self.cfg)
+        if not folder.exists():
+            return []
+        return sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"])
+
+    def _triaging(self):
+        return sum(1 for k in self.live()
+                   if self.state(k) == ("inbox", "pending") and self.ticket(k).get("job_started_at"))
+
+    def tick(self, drop_missing=False):
         self._base_cache = {}  # one base fetch per (repo, base) per tick
         try:
-            events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
+            events = self._find_renamed(self._foreign())
+            self._check_notes(drop_missing)
+            events += [m for k in self.live()
+                       for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
             events += [m for k, t in sorted(self.db["tickets"].items())
                        if (t.get("cleanup") or t.get("worktree")) and self.state(k) in (("shipped", "done"), KILLED)
                        for m in [self._safe(k, self.cleanup)] if m]
-            folder = store.tickets_dir(self.cfg)
-            foreign = sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"]) if folder.exists() else []
+            foreign = self._foreign()
             seen = set(self.db.get("foreign_notes", []))
             events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
             self.db["foreign_notes"] = foreign
@@ -1397,6 +1533,8 @@ class Factory:
                     continue
                 if s == ("shipped", "pending"):
                     events.append(self._safe(k, self.ship))
+                elif s == ("inbox", "pending") and self._triaging() >= self.cfg["wip"].get("triage", 2):
+                    continue  # triage has a limit too, or a burst of follow-ups dispatches a triage agent each
                 elif s in (("inbox", "pending"), ("drafting", "pending"), ("baking", "pending"), ("reviewing", "pending")) \
                         or (s == ("drafting", "progress") and t.get("resume")) \
                         or (s == ("shipped", "awaiting") and t.get("conflicts")):

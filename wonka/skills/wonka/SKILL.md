@@ -17,10 +17,10 @@ Arguments: `$ARGUMENTS`
 
 ## init
 1. Ask the user (AskUserQuestion, one call) for: the Obsidian vault path (offer vaults found with
-   `find ~ -maxdepth 4 -name .obsidian -type d`), tickets drafted at once (recommend 1; tickets waiting on the human
+   `find ~ -maxdepth 4 -name .obsidian -type d`), tickets triaged at once (recommend 2), tickets drafted at once (recommend 1; tickets waiting on the human
    don't count), tickets baked at once (recommend 2; reviewing and shipped tickets don't count) and days before Done
    tickets are archived (recommend 7).
-2. `wonka init --vault <path> --drafting <n> --baking <n> --archive-days <n>`, then `wonka doctor`; show both.
+2. `wonka init --vault <path> --triage <n> --drafting <n> --baking <n> --archive-days <n>`, then `wonka doctor`; show both.
 3. Tell the user to open `<vault>/wonka/🍫 Factory.base` in Obsidian 1.14+, and to apply any permission snippet the
    doctor prints. Settings can be changed any time with `wonka config <key> <value>`.
 
@@ -41,7 +41,8 @@ and Jira key default to the parent's (the PR repo only when the child builds in 
 `wonka status` and show the lines as they are.
 
 ## tick
-1. Run `wonka tick`. It returns JSON: `events` (what changed), `jobs` (already claimed for you; a `conflicts` job is
+1. Run `wonka tick`. If it refuses because the tickets folder or every note is missing, report that and stop: never
+   pass `--drop-missing` unless the user says they deleted the notes on purpose. It returns JSON: `events` (what changed), `jobs` (already claimed for you; a `conflicts` job is
    an open PR with merge conflicts, for `wonka:oompa-loompa-fixer`), `awaiting_human`, `stale`.
 2. For each job, dispatch one background agent per name in its `agents` list (Agent tool, `subagent_type` = that
    name exactly, e.g. `wonka:oompa-loompa-analyst`, `run_in_background: true`), all in one message. The prompt is the job JSON

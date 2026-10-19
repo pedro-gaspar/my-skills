@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import machine, store
-from .factory import Factory, fmt
+from .factory import Factory, alert, fmt
 from .store import WonkaError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +32,7 @@ def cmd_init(a):
     except WonkaError:
         cfg = copy.deepcopy(store.DEFAULT_CONFIG)
     cfg["vault"], cfg["folder"] = str(Path(a.vault).expanduser().resolve()), a.folder
-    for key, value in (("wip.drafting", a.drafting), ("wip.baking", a.baking),
+    for key, value in (("wip.triage", a.triage), ("wip.drafting", a.drafting), ("wip.baking", a.baking),
                        ("archive_after_days", a.archive_days), ("stale_hours", a.stale_hours),
                        ("max_review_rounds", a.max_review_rounds)):
         if value is not None:
@@ -52,11 +52,13 @@ def cmd_init(a):
 
 
 def show_config(cfg):
-    print(f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
+    print(f"📏 triage at once   : {cfg['wip']['triage']}\n"
+          f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
           f"🍫 baking at once   : {cfg['wip']['baking']}\n"
           f"🗄️ archive after    : {cfg['archive_after_days']} days\n"
           f"⏳ retry jobs after : {cfg['stale_hours']} hours\n"
-          f"🐿️ review rounds    : {cfg['max_review_rounds']}")
+          f"🐿️ review rounds    : {cfg['max_review_rounds']}\n"
+          f"🌱 follow-up depth  : {cfg['max_followup_depth']}")
 
 
 def cmd_config(a):
@@ -111,8 +113,8 @@ def run(a, f):
         f.set_field(a.id, a.field, a.value)
         print(f.summary(a.id))
     elif c == "triage":
-        f.triage(a.id, a.size, a.title, _questions(a) or None, duplicate_of=a.duplicate_of)
-        print(f.summary(a.id))
+        msg = f.triage(a.id, a.size, a.title, _questions(a) or None, duplicate_of=a.duplicate_of, dispatch=a.dispatch)
+        print(msg or f.summary(a.id))
     elif c == "ask":
         qs = _questions(a)
         if not qs:
@@ -146,7 +148,7 @@ def run(a, f):
         print(f.summary(a.id))
     elif c == "tick":
         ensure_link()
-        out = f.tick()
+        out = f.tick(drop_missing=a.drop_missing)
         store.log(*out["events"])
         print(json.dumps(out, indent=2, ensure_ascii=False))
     elif c == "show":
@@ -164,6 +166,10 @@ def _key(value, table):
     return key
 
 
+DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
+READ_ONLY = ("status", "show")  # read a snapshot of the state, so they never wait for a long tick
+
+
 def parser():
     p = argparse.ArgumentParser(prog="wonka", description="🎩 Wonka's golden ticket factory")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -174,6 +180,7 @@ def parser():
                                       "tickets waiting on your answers don't count (default 1)")
     s.add_argument("--baking", help="tickets the builder works on at once; "
                                     "reviewing and shipped tickets don't count (default 2)")
+    s.add_argument("--triage", help="tickets the triage Oompa-Loompa sizes at once (default 2)")
     s.add_argument("--archive-days", help="days before Done tickets are archived (default 7)")
     s.add_argument("--stale-hours", help="hours before a running job is offered for retry (default 2)")
     s.add_argument("--max-review-rounds", help="review rounds with issues before a ticket is rolled away (default 3)")
@@ -199,29 +206,30 @@ def parser():
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
     s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
     s.add_argument("--duplicate-of", help="an existing ticket this one duplicates: closes it as Wont-Do")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("ask", help="analyst: ask a human, one --question per question")
     s.add_argument("id")
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
     s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("section", help="write a ## section from stdin (e.g. spec)")
     s.add_argument("id")
     s.add_argument("key")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("plan", help="analyst: the detailed plan (markdown) on stdin")
     s.add_argument("id")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("drafted", help="analyst: spec and plan are done")
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
     s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security,spark,airflow")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("resolved", help="fixer: the merge conflicts are committed")
     s.add_argument("id")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("report", help="squirrel: file a review verdict")
     s.add_argument("id")
     s.add_argument("--squirrel", required=True)
@@ -232,19 +240,21 @@ def parser():
     s.add_argument("--suggest", choices=("close", "draft"))
     s.add_argument("--why", help="why you suggest closing or re-drafting")
     s.add_argument("--stdin", action="store_true", help="read the whole report as JSON from stdin instead")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("retry", help="give a stuck job back to the queue")
     s.add_argument("id")
     s = sub.add_parser("finished", help="manager: an agent finished; retry only if it left no result")
     s.add_argument("id")
     s.add_argument("--agent", required=True, help="the agent dispatched, e.g. wonka:squirrel-backend")
-    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     s = sub.add_parser("move", help="a manual move, still checked by the state machine")
     s.add_argument("id")
     s.add_argument("status")
     s.add_argument("phase")
     s.add_argument("--why")
-    sub.add_parser("tick", help="reconcile the factory and hand out jobs (JSON)")
+    s = sub.add_parser("tick", help="reconcile the factory and hand out jobs (JSON)")
+    s.add_argument("--drop-missing", action="store_true",
+                   help="drop every live ticket whose note is gone, even when all of them are (normally refused)")
     s = sub.add_parser("show", help="a ticket's JSON state")
     s.add_argument("id")
     sub.add_parser("status", help="one line per live ticket")
@@ -263,6 +273,8 @@ def main(argv=None):
         except WonkaError as e:
             store.log(f"git {' '.join(argv[1:3])}: {e}")
             print(f"🗑️ wonka: {e}", file=sys.stderr)
+            if isinstance(e, store.CriticalError):
+                alert(str(e))
             return 1
     a = parser().parse_args(argv)
     try:
@@ -276,10 +288,15 @@ def main(argv=None):
             from .doctor import doctor
             return doctor()
         cfg = store.load_config()
+        if a.cmd in READ_ONLY:
+            run(a, Factory(cfg, store.snapshot()))
+            return 0
         with store.state() as db:
             run(a, Factory(cfg, db))
         return 0
     except WonkaError as e:
         store.log(f"{a.cmd} {getattr(a, 'id', '')}: {e}".replace("  ", " "))
         print(f"🗑️ wonka: {e}", file=sys.stderr)
+        if isinstance(e, store.CriticalError):
+            alert(str(e))
         return 1

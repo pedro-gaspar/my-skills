@@ -3,6 +3,8 @@
 import json
 import re
 
+from . import store
+
 FIELDS = ("id", "title", "status", "phase", "size", "jira")
 
 HEADINGS = {
@@ -89,7 +91,7 @@ def _scalar(head, lines):
 def write(path, meta, body):
     lines = [f"{k}: {_quote(meta.get(k))}".rstrip() for k in FIELDS]
     lines += [v if isinstance(v, Raw) else f"{k}: {_quote(v)}".rstrip() for k, v in meta.items() if k not in FIELDS]
-    path.write_text("---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n")
+    store.write_atomic(path, "---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n")
 
 
 def _unquote(v):
