@@ -1,4 +1,5 @@
 import contextlib
+import importlib
 import io
 import json
 import os
@@ -318,7 +319,6 @@ class CliTest(unittest.TestCase):
         self.assertEqual((code, err.strip()), (1, "🗑️ wonka: No ticket WONKA-00042"))
         self.assertIn("No ticket WONKA-00042", (self.tmp / "home/factory.log").read_text())
 
-
     def test_needs_human_spec_review_flag(self):
         self.assertTrue(cli.parser().parse_args(["add", "x", "--needs-human-spec-review"]).needs_human_spec_review)
         self.assertFalse(cli.parser().parse_args(["add", "x"]).needs_human_spec_review)
@@ -334,6 +334,38 @@ class CliTest(unittest.TestCase):
         notes = list((self.tmp / "vault").rglob("WONKA-00001.md"))
         self.assertEqual(len(notes), 1)
         self.assertIn("spec_review: human\n", notes[0].read_text())
+
+
+class PassthroughTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        patcher = mock.patch.dict(os.environ, {"WONKA_HOME": str(self.tmp / "home")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_every_passthrough_is_a_subcommand_with_a_main(self):
+        for cmd, mod in cli.PASSTHROUGH.items():
+            self.assertEqual(cli.parser().parse_args([cmd]).cmd, cmd)
+            self.assertTrue(callable(importlib.import_module("wonka." + mod).main))
+
+    def test_dispatches_to_the_module(self):
+        for cmd, mod in (("git", "gitwrap"), ("test", "testrun")):
+            with mock.patch(f"wonka.{mod}.main", return_value=7) as m:
+                self.assertEqual(cli.main([cmd, "X", "status"]), 7)
+            m.assert_called_once_with(["X", "status"])
+
+    def test_wonka_error_returns_1(self):
+        with mock.patch("wonka.gitwrap.main", side_effect=store.WonkaError("boom")):
+            code, _, err = self.run_cli("git", "X", "status")
+        self.assertEqual(code, 1)
+        self.assertIn("🗑️ wonka: boom", err)
 
 
 if __name__ == "__main__":
