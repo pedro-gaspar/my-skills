@@ -16,13 +16,13 @@ class BannerTest(unittest.TestCase):
 
     def test_log_is_newest_first_and_folded(self):
         t = {"history": [
-            {"at": "2026-10-18T10:00:00+00:00", "from": "inbox/pending", "to": "inbox/done", "by": "triage"},
+            {"at": "2026-10-18T10:00:00+00:00", "from": "inbox/pending", "to": "inbox/ready", "by": "triage"},
             {"at": "2026-10-18T11:00:00+00:00", "by": "wonka", "why": "Reverted"},
         ]}
         lines = banner.log(t).splitlines()
         self.assertEqual(lines[0], "> [!note]- 2 events")
         self.assertIn("Reverted", lines[1])
-        self.assertIn("✉️-Inbox 🕰️-Pending → ✉️-Inbox 🌟-Done", lines[2])
+        self.assertIn("✉️-Inbox 🕰️-Pending → ✉️-Inbox 🌟-Ready", lines[2])
 
     def test_review_round_uses_the_max_rounds_setting(self):
         cfg = {**store.DEFAULT_CONFIG, "max_review_rounds": 5}

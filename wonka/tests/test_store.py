@@ -90,6 +90,28 @@ class StateTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.tmp.iterdir()),
                          [".lock", store.STATE_FILE, store.STATE_FILE + ".bak"])
 
+    def test_old_state_keys_are_migrated_on_read_and_saved_with_a_backup(self):
+        old = {"next_id": 2, "tickets": {"WONKA-1": {"last_valid": {"status": "ready", "phase": "pending"},
+                                                      "history": [{"from": "inbox/done", "to": "ready/pending"}]}}}
+        self.path.write_text(json.dumps(old))
+        snap = store.snapshot()
+        self.assertEqual(snap["tickets"]["WONKA-1"]["last_valid"], {"status": "planned", "phase": "pending"})
+        with store.state():
+            pass
+        new = json.loads(self.path.read_text())
+        self.assertEqual(new["tickets"]["WONKA-1"]["history"], [{"from": "inbox/ready", "to": "planned/pending"}])
+        self.assertEqual(json.loads(self.bak.read_text()), old)
+
+    def test_migrate_base_renames_the_column_only(self):
+        cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
+        base = self.tmp / "vault/wonka" / store.BASE_FILE
+        self.assertFalse(store.migrate_base(cfg))
+        base.parent.mkdir(parents=True)
+        base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
+        self.assertTrue(store.migrate_base(cfg))
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
+        self.assertFalse(store.migrate_base(cfg))
+
 
 if __name__ == "__main__":
     unittest.main()

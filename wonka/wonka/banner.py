@@ -11,23 +11,23 @@ MAX_ROUNDS_KEY = "max_review_rounds"
 QUIPS = {
     ("inbox", "pending"): "🎫 “I've got a golden ticket!”",
     ("inbox", "awaiting"): "🎩 “The suspense is terrible. I hope it'll last.”",
-    ("inbox", "done"): "🎶 “We are the music makers, and we are the dreamers of dreams.”",
+    ("inbox", "ready"): "🎶 “We are the music makers, and we are the dreamers of dreams.”",
     ("drafting", "pending"): "🚪 “Little surprises around every corner, but nothing dangerous.”",
     ("drafting", "progress"): "🧪 “Invention is 93% perspiration, 6% electricity, 4% evaporation and 2% butterscotch ripple.”",
     ("drafting", "awaiting"): "🤔 “Strike that. Reverse it.” …or don't. Your call.",
-    ("ready", "pending"): "🍫 “Everything in this room is eatable.” Almost.",
+    ("planned", "pending"): "🍫 “Everything in this room is eatable.” Almost.",
     ("baking", "pending"): "⏳ “Patience, my dear. A little nonsense now and then is relished by the wisest men.”",
     ("baking", "progress"): "🎶 Oompa-Loompa, doompadee-doo…",
-    ("baking", "done"): "🎶 …I've got another puzzle for you.",
+    ("baking", "ready"): "🎶 …I've got another puzzle for you.",
     ("reviewing", "pending"): "🐿️ The squirrels are cracking their knuckles.",
     ("reviewing", "progress"): "🐿️ Tap, tap, tap. Good nut or bad nut?",
     ("reviewing", "awaiting"): "🐿️ “Don't forget what happened to the man who suddenly got everything he wanted.”",
-    ("reviewing", "done"): "🥜 A good nut!",
+    ("reviewing", "ready"): "🥜 A good nut!",
     ("shipped", "pending"): "🚢 “All aboard!”",
     ("shipped", "progress"): "🚢 “There's no earthly way of knowing which direction we are going…”",
     ("shipped", "awaiting"): "🚢 “We have so much time and so little to see.” Strike that, reverse it: merge it.",
-    ("shipped", "done"): "✨ “So shines a good deed in a weary world.”",
-    ("wontdo", "done"): "🗑️ “She's a bad egg.”",
+    ("shipped", "ready"): "✨ “So shines a good deed in a weary world.”",
+    ("wontdo", "ready"): "🗑️ “She's a bad egg.”",
 }
 STUCK_QUIP = "🌊 Augustus is stuck in the chocolate pipe again."
 
@@ -78,9 +78,9 @@ def _story(tid, t, meta, cfg):
                                f"({wip.get('triage', 2)} at a time)."),
         ("inbox", "awaiting"): ("question", "🙋 Your turn: approve it", (
             f"The triage Oompa-Loompa sized it **{size}**. Tick **Approve** and answer every question (⭐ is the recommendation) "
-            "to send it to Drafting." if size not in machine.AUTO_DONE else
+            "to send it to Drafting." if size not in machine.AUTO_READY else
             "The triage Oompa-Loompa needs answers first: tick one option per question (⭐ is the recommendation).")),
-        ("inbox", "done"): ("info", "Ready for the Inventing Room",
+        ("inbox", "ready"): ("info", "Ready for the Inventing Room",
                             f"🧪 The analyst picks it up as soon as Drafting has room ({wip['drafting']} at a time)."),
         ("drafting", "pending"): ("info", "Next in line for the analyst", "🧪 Drafting starts on the next tick."),
         ("drafting", "progress"): ("info", "The analyst is drafting",
@@ -88,7 +88,7 @@ def _story(tid, t, meta, cfg):
         ("drafting", "awaiting"): ("question", "🙋 Your turn: the analyst has questions", (
             "Tick one option per question in ❓ Questions (⭐ is the recommendation). Write under a question to add "
             "detail. Drafting resumes once every question has a tick.")),
-        ("ready", "pending"): ("info", "Spec done, waiting for an oven",
+        ("planned", "pending"): ("info", "Spec done, waiting for an oven",
                                f"🍫 Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
         ("baking", "pending"): ("info", "Queued for baking", (
             f"🍫 A fix round after {_round(t, cfg)}." if t.get("review_round") else
@@ -96,21 +96,21 @@ def _story(tid, t, meta, cfg):
             "🍫 Baking starts on the next tick.")),
         ("baking", "progress"): ("info", "A builder Oompa-Loompa is baking",
                                  f"🍫 Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),
-        ("baking", "done"): ("info", "Baked", "🐿️ Off to the squirrels."),
+        ("baking", "ready"): ("info", "Baked", "🐿️ Off to the squirrels."),
         ("reviewing", "pending"): ("info", "Waiting for the squirrels", f"🐿️ Squirrels: {_reviewers(t)}."),
         ("reviewing", "progress"): ("info", "The squirrels are testing every nut",
                                     f"🐿️ {_reviewers(t)} ({_round(t, cfg)}). Nothing to do."),
         ("reviewing", "awaiting"): ("question", "🙋 Your turn: the squirrels have questions", (
             f"Tick one option per question in 🐿️ Review Questions ({_round(t, cfg)}). Then it goes back to baking, "
             "back to drafting, or is closed, as you choose.")),
-        ("reviewing", "done"): ("success", "A good nut", "🚢 Off to ship."),
+        ("reviewing", "ready"): ("success", "A good nut", "🚢 Off to ship."),
         ("shipped", "pending"): ("info", "Opening the pull request", "🚢 On the next tick."),
         ("shipped", "progress"): ("info", "Opening the pull request", "🚢 Pushing the branch and opening the PR."),
         ("shipped", "awaiting"): ("question", "🙋 Your turn: merge the PR", (
             f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree. "
             "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
-        ("shipped", "done"): ("success", "Shipped 🎉", f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}"),
-        ("wontdo", "done"): ("failure", "Down the chute 🗑️", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
+        ("shipped", "ready"): ("success", "Shipped 🎉", f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}"),
+        ("wontdo", "ready"): ("failure", "Down the chute 🗑️", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
     }[s]
 
 

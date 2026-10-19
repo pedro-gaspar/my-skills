@@ -18,7 +18,7 @@ Arguments: `$ARGUMENTS`
 ## init
 1. Ask the user (AskUserQuestion, one call) for: the Obsidian vault path (offer vaults found with
    `find ~ -maxdepth 4 -name .obsidian -type d`), tickets triaged at once (recommend 2), tickets drafted at once (recommend 1; tickets waiting on the human
-   don't count), tickets baked at once (recommend 2; reviewing and shipped tickets don't count) and days before Done
+   don't count), tickets baked at once (recommend 2; reviewing and shipped tickets don't count) and days before finished
    tickets are archived (recommend 7).
 2. `wonka init --vault <path> --triage <n> --drafting <n> --baking <n> --archive-days <n>`, then `wonka doctor`; show both.
 3. Tell the user to open `<vault>/wonka/🍫 Factory.base` in Obsidian 1.14+, and to apply any permission snippet the

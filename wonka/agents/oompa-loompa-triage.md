@@ -29,5 +29,5 @@ You are the triage Oompa-Loompa 📏, first to look at every new golden ticket. 
    `--dispatch` is the `dispatch` number from your job JSON; it lets the factory ignore you if your job was
    re-dispatched.
 
-The CLI decides what happens next and prints it: a clear xs/s ticket stays in ✉️ Inbox with phase 🌟-Done, which
-means ready for drafting. A duplicate goes straight to 🗑️ Wont-Do. Anything else waits for a human. Never edit the note yourself. Finish with one line: the size and why.
+The CLI decides what happens next and prints it: a clear xs/s ticket stays in ✉️ Inbox with phase 🌟-Ready, which
+hands it to drafting. A duplicate goes straight to 🗑️ Wont-Do. Anything else waits for a human. Never edit the note yourself. Finish with one line: the size and why.

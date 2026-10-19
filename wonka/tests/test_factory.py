@@ -115,7 +115,7 @@ class FactoryTest(unittest.TestCase):
             f.write_plan(tid, "# plan\n")
             f.set_section(tid, "spec", "Add hello.sh")
             f.drafted(tid, size, list(reviewers))
-        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertEqual(self.state(tid), ("planned", "pending"))
 
     def bake(self, tid, filename="hello.sh"):
         jobs = [j for j in self.tick()["jobs"] if j["id"] == tid]
@@ -165,12 +165,12 @@ class FactoryTest(unittest.TestCase):
 
         self.pr_state.write_text("MERGED")
         self.tick()
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertFalse(wt.exists())
         self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "merged branch is deleted")
 
         meta, body = self.note(tid)
-        self.assertEqual((meta["status"], meta["phase"]), ("🚢-Shipped", "🌟-Done"))
+        self.assertEqual((meta["status"], meta["phase"]), ("🚢-Shipped", "🌟-Ready"))
         self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
         self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
@@ -272,7 +272,29 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{a}: reverted illegal 🍫-Baking/🕰️-Pending", events)
         self.assertEqual(self.note(a)[0]["status"], "✉️-Inbox")
         self.assertIn("Reverted", self.note(a)[1])
-        self.assertEqual(self.state(b), ("wontdo", "done"))
+        self.assertEqual(self.state(b), ("wontdo", "ready"))
+
+    def check_old_label(self, tid, state, field, old, new):
+        self.edit_note(tid, lambda t: t.replace(new, old))
+        self.assertEqual(self.note(tid)[0][field], old)
+        with self.f() as f:
+            self.assertIsNone(f.reconcile(tid))
+        self.assertEqual(self.state(tid), state)
+        self.assertEqual(self.note(tid)[0][field], new)
+        self.assertNotIn("Reverted", self.note(tid)[1])
+        self.assertFalse(any("Reverted" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+
+    def test_old_done_phase_in_a_note_is_migrated_silently(self):
+        a = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(a, "s")
+        self.check_old_label(a, ("inbox", "ready"), "phase", "🌟-Done", "🌟-Ready")
+
+    def test_old_ready_status_in_a_note_is_migrated_silently(self):
+        b = self.add()
+        self.to_ready(b)
+        self.check_old_label(b, ("planned", "pending"), "status", "🎫-Ready", "🎫-Planned")
 
     def test_triage_closes_a_duplicate(self):
         a = self.add("Add a hello script")
@@ -280,7 +302,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(b, "s", duplicate_of=a)
-        self.assertEqual(self.state(b), ("wontdo", "done"))
+        self.assertEqual(self.state(b), ("wontdo", "ready"))
         body = self.note(b)[1]
         self.assertIn("## 🗑️ Duplicate", body)
         self.assertIn(f"[[{a}]]", body)
@@ -303,7 +325,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         killed = self.add("Dead idea")
         with self.f() as f:
-            f.move(killed, ("wontdo", "done"), "human")
+            f.move(killed, ("wontdo", "ready"), "human")
         cases = [dict(duplicate_of=b), dict(duplicate_of="WONKA-99999"), dict(duplicate_of=c), dict(duplicate_of=killed),
                  dict(duplicate_of=a, questions=[{"q": "Why?", "options": ["x", "y"], "recommended": 0}])]
         for kw in cases:
@@ -387,7 +409,7 @@ class FactoryTest(unittest.TestCase):
             f.add("Pages", title="Pages", repo=str(self.repo), parent=tid)
             f.add("Users", title="Users", repo=str(self.repo), parent=tid)
             f.drafted(tid, "l")
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         toobig = note.get_section(self.note(tid)[1], "toobig")
         self.assertEqual(toobig, "- [[WONKA-00002]] Pages\n- [[WONKA-00003]] Users")
 
@@ -417,7 +439,7 @@ class FactoryTest(unittest.TestCase):
             f.add("App part", title="App part", repo=str(self.repo), parent=tid)
             f.add("Lib part", title="Lib part", repo=str(lib), parent=tid)
             f.drafted(tid, "m", split=True)
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertEqual(note.get_section(self.note(tid)[1], "split"),
                          "- [[WONKA-00002]] App part · app\n- [[WONKA-00003]] Lib part · lib")
         kid = self.f_ticket("WONKA-00003")
@@ -463,7 +485,7 @@ class FactoryTest(unittest.TestCase):
         for n in range(3):
             self.bake(tid, f"f{n}.sh")
             self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertIn("3 review rounds", self.note(tid)[1])
 
     def test_max_review_rounds_setting_controls_the_kill(self):
@@ -475,7 +497,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("baking", "pending"))
         self.bake(tid, "f1.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertIn("2 review rounds", self.note(tid)[1])
 
     def test_fix_round_needs_a_new_commit_before_baked(self):
@@ -508,7 +530,7 @@ class FactoryTest(unittest.TestCase):
         self.edit_note(a, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
         self.edit_note(b, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
         self.tick()
-        self.assertEqual(self.state(a), ("wontdo", "done"))
+        self.assertEqual(self.state(a), ("wontdo", "ready"))
         self.assertEqual(self.state(b), ("drafting", "progress"), "back to drafting and re-claimed")
         self.assertNotIn("reviewed_head", self.f_ticket(b), "redrafting clears the reviewed head")
 
@@ -624,7 +646,7 @@ class FactoryTest(unittest.TestCase):
         self.bad_rounds(tid)
         self.clean_rebake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertIn("3 review rounds", self.note(tid)[1])
 
     def test_early_clean_rebake_does_not_shorten_the_budget(self):
@@ -638,7 +660,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("baking", "pending"), "only 2 rounds with issues so far")
         self.bake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
 
     def test_redraft_resets_the_extra_rounds(self):
         tid = self.add()
@@ -752,7 +774,7 @@ class FactoryTest(unittest.TestCase):
         self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
         self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
         self.tick()
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
 
     def test_wip_limits(self):
         ids = [self.add(f"t{n}") for n in range(3)]
@@ -819,7 +841,7 @@ class FactoryTest(unittest.TestCase):
         return tid
 
     def assert_finished_clean(self, tid):
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertNotIn("stuck", self.f_ticket(tid))
         self.assertNotIn("retries", self.f_ticket(tid))
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
@@ -865,7 +887,7 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(spec.startswith(mdlint.MARK))
         with self.f() as f:
             f.drafted(tid, "s", ["architect"])
-        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertEqual(self.state(tid), ("planned", "pending"))
         spec = note.get_section(self.note(tid)[1], "spec")
         self.assertTrue(spec.endswith(f"```\n\n📋 Plan: [[{tid}-plan]]"), spec)
         self.assertEqual(spec.count(mdlint.MARK), 1)
@@ -893,7 +915,7 @@ class FactoryTest(unittest.TestCase):
         msg = self.finished(tid, "wonka:oompa-loompa-triage")
         self.assertIn("moved on", msg)
         self.assertTrue(msg.startswith(f"{tid}: "))
-        self.assertEqual(self.state(tid), ("inbox", "done"))
+        self.assertEqual(self.state(tid), ("inbox", "ready"))
         self.assertNotIn("retries", self.f_ticket(tid))
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
         with self.f() as f:
@@ -901,7 +923,7 @@ class FactoryTest(unittest.TestCase):
             f.set_section(tid, "spec", "Add hello.sh")
             f.drafted(tid, "s", ["architect"])
         self.assertIn("moved on", self.finished(tid, "wonka:oompa-loompa-analyst"))
-        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertEqual(self.state(tid), ("planned", "pending"))
         self.bake(tid)
         self.assertIn("moved on", self.finished(tid, "oompa-loompa-builder"))
         self.assertEqual(self.state(tid), ("reviewing", "pending"))
@@ -1108,7 +1130,7 @@ class FactoryTest(unittest.TestCase):
         d3 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
         with self.f() as f:
             self.assertIsNone(f.drafted(tid, "s", ["architect"], d3))
-        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertEqual(self.state(tid), ("planned", "pending"))
 
     def test_late_analyst_writes_from_an_earlier_dispatch_are_ignored(self):
         tid = self.add()
@@ -1322,7 +1344,7 @@ class FactoryTest(unittest.TestCase):
         events = self.tick()["events"]
         self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
         self.assertIn("my scribble.md: not a Wonka ticket, use /wonka add instead", events)
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         foreign = [e for e in self.tick()["events"] if "not a Wonka ticket" in e]
         self.assertEqual(foreign, [], "a foreign note is reported only once")
         (path.parent / "my scribble.md").unlink()
@@ -1447,7 +1469,7 @@ class FactoryTest(unittest.TestCase):
 
         events = self.tick()["events"]
         self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertTrue(wt.exists())
         history = self.history(tid)
         self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in history))
@@ -1473,7 +1495,7 @@ class FactoryTest(unittest.TestCase):
         wt, branch = self.to_awaiting_merge(tid)
         self.pr_state.write_text("CLOSED")
         self.tick()
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertFalse(wt.exists())
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "a closed PR keeps its branch")
 
@@ -1483,7 +1505,7 @@ class FactoryTest(unittest.TestCase):
         (wt / "scratch.txt").write_text("wip\n")
         self.pr_state.write_text("MERGED")
         self.tick()
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertTrue(wt.exists())
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in self.history(tid)))
@@ -1501,7 +1523,7 @@ class FactoryTest(unittest.TestCase):
         self.pr_state.write_text("MERGED")
         with mock.patch.object(factory, "git", fake):
             self.tick()
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         self.assertTrue(any(h.get("why", "").startswith("Branch kept") for h in self.history(tid)))
 
@@ -1522,7 +1544,7 @@ class FactoryTest(unittest.TestCase):
     def test_kept_worktree_and_branch_are_cleaned_once_clean(self):
         tid = self.add()
         wt, branch = self.kept_after(tid, "MERGED")
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         with self.f() as f:
             self.assertTrue(f.ticket(tid).get("cleanup"))
@@ -1643,7 +1665,7 @@ class FactoryTest(unittest.TestCase):
     def test_killed_ticket_kept_worktree_cleanup_keeps_branch(self):
         tid = self.add()
         wt, branch = self.kept_after(tid, "CLOSED")
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         (wt / "scratch.txt").unlink()
         events = self.tick()["events"]
         self.assertFalse(wt.exists())
@@ -1701,7 +1723,7 @@ class FactoryTest(unittest.TestCase):
             label = f.read(tid)[0]["status"]
         self.edit_note(tid, lambda t: t.replace(f"status: {label}", "status: 🗑️-Wont-Do", 1))
         self.assertIn(f"{tid}: killed by a human", self.tick()["events"])
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
 
     def bake_job(self, tid):
         self.to_ready(tid)
@@ -1804,7 +1826,7 @@ class FactoryTest(unittest.TestCase):
         for n in range(3):
             wt = self.bake(tid, f"f{n}.sh")
             self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertNotIn("held_by", self.f_ticket(tid))
         self.assertFalse(wt.exists())
 
@@ -2075,7 +2097,7 @@ class FactoryTest(unittest.TestCase):
             f.write_plan(tid, "# plan\n")
             f.set_section(tid, "spec", "Add hello.sh")
             f.drafted(tid, "s", ["architect"])
-        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertEqual(self.state(tid), ("planned", "pending"))
         self.assertFalse(Path(job["code"]).exists())
         self.assertIsNone(self.scout_of(tid))
         self.assertNotIn("-scout", self.worktrees())
@@ -2229,7 +2251,7 @@ class FactoryTest(unittest.TestCase):
 
         self.edit_note(a, lambda t: t.replace("🧪-Drafting", "🗑️-Wont-Do"))
         sb = Path(self.job_for(b)["code"])  # a's slot frees up and b is drafted in the same tick
-        self.assertEqual(self.state(a), ("wontdo", "done"))
+        self.assertEqual(self.state(a), ("wontdo", "ready"))
         self.assertFalse(sa.exists())
         self.assertIsNone(self.scout_of(a))
         self.assertTrue(sb.exists())
@@ -2598,14 +2620,14 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("baking", "pending"), "two bad rounds after a change request")
         self.bake(tid, "g2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
 
     def test_merge_wins_over_a_ticked_change_request(self):
         tid = self.add()
         self.to_awaiting_merge(tid)
         self.pr_state.write_text("MERGED")
         self.request_changes(tid, "too late")
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertIsNone(note.get_section(self.note(tid)[1], "changes"))
 
     def test_open_pr_without_a_box_gets_one(self):
@@ -2879,7 +2901,7 @@ class FactoryTest(unittest.TestCase):
         Path(f"{self.pr_state}.open").unlink(missing_ok=True)
 
     def assert_closed_pr_not_reopened(self, tid, branch):
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "no second PR")
         last = self.history(tid)[-1]
         self.assertEqual((last["why"], last["by"]), ("PR closed without merging", "github"))
@@ -3071,7 +3093,7 @@ class FactoryTest(unittest.TestCase):
         tid = self.stuck_fixer()
         self.pr_state.write_text("MERGED MERGEABLE")
         self.tick()
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         t = self.f_ticket(tid)
         self.assertNotIn("stuck", t)
         self.assertNotIn("conflict_error", t)
@@ -3256,7 +3278,7 @@ class FactoryTest(unittest.TestCase):
         self.to_conflict_stuck(tid)
         self.pr_state.write_text("MERGED")
         self.assertIn(f"{tid}: shipped", self.tick()["events"])
-        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertNotIn("stuck", self.f_ticket(tid))
         self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
 
@@ -3299,7 +3321,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual([self.state(k) for k in ids], [("inbox", "pending")] * 2)
         with self.f() as f:
             events = f.tick(drop_missing=True)["events"]
-        self.assertEqual([self.state(k) for k in ids], [("wontdo", "done")] * 2)
+        self.assertEqual([self.state(k) for k in ids], [("wontdo", "ready")] * 2)
         self.assertIn(f"{ids[0]}: note was deleted, ticket dropped", events)
 
     def test_renamed_note_gets_its_name_back(self):

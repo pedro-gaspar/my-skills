@@ -46,6 +46,7 @@ def cmd_init(a):
         old.rename(base)
     elif not base.exists():
         base.write_text((ROOT / "templates" / "Factory.base").read_text().replace("{{folder}}", a.folder))
+    store.migrate_base(cfg)
     ensure_link()
     show_config(cfg)
     print(f"🎩 “Come with me, and you'll be in a world of pure imagination.”\n   🍫 Factory {base}\n   State {store.home()}")
@@ -185,7 +186,7 @@ def parser():
     s.add_argument("--baking", help="tickets the builder works on at once; "
                                     "reviewing and shipped tickets don't count (default 2)")
     s.add_argument("--triage", help="tickets the triage Oompa-Loompa sizes at once (default 2)")
-    s.add_argument("--archive-days", help="days before Done tickets are archived (default 7)")
+    s.add_argument("--archive-days", help="days before finished tickets (Shipped or Wont-Do) are archived (default 7)")
     s.add_argument("--stale-hours", help="hours before a running job is offered for retry (default 2)")
     s.add_argument("--max-review-rounds", help="review rounds with issues before a ticket is rolled away (default 3)")
     s = sub.add_parser("config", help="show settings, or change one: wonka config wip.baking 3")
