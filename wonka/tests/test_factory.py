@@ -45,6 +45,7 @@ def sh(*cmd, cwd):
 class FactoryTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.repo = self.tmp / "app"
         gh = self.tmp / "gh"
         gh.write_text(FAKE_GH)

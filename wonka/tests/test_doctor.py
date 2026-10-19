@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from wonka import doctor
 class PermissionsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def write(self, name, data):
         path = self.tmp / name
@@ -90,6 +92,7 @@ class PermissionChecksTest(unittest.TestCase):
 class OrphansTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.cfg = {"vault": str(self.tmp), "folder": "wonka"}
         self.board = self.tmp / "wonka"
 

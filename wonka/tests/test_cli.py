@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from wonka import cli, factory, store
 class CliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         for patcher in (mock.patch.dict(os.environ, {"WONKA_HOME": str(self.tmp / "home"), "WONKA_MDLINT": "off"}),
                         mock.patch.object(cli, "LINK", self.tmp / "bin" / "wonka")):
             patcher.start()
