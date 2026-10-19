@@ -166,9 +166,13 @@ checkout). One run per project holds `~/.wonka/worktrees/.locks/<project>-tests.
 `wonka test` can run inside the sandbox; a link planted in its place is refused); the others wait up to
 `test_lock_wait_minutes` (default 3, so wait plus run fit the agents' 10-minute Bash timeout), then exit 75 naming
 the holder. The exit code is the command's. `wonka config` and `wonka doctor` warn about a prefix that leaves the
-program or code to the caller (a shell, interpreter or launcher with nothing pinned after it, like `python3 -c`,
-`sh -c`, `bash`, `env`, `npx`; option values like `python3 -W ignore`, env assignments like `env FOO=1` and a
-wrapped runner like `env FOO=1 bash` do not count as pinned), since it allows any command outside the sandbox.
+program or code to the caller (a shell, interpreter, wrapper or launcher with nothing pinned after it, like
+`python3 -c`, `sh -c`, `bash`, `awk`, `env`, `setsid`, `flock <file>`, `npx`, `go run`, `cargo run`, or `uv` and
+`npm` with no subcommand; option values like `python3 -W ignore`, env assignments like `env FOO=1` and a wrapped
+runner like `env FOO=1 bash` do not count as pinned; `find`, `watch`, `script`, `parallel`, `gdb` and `su` take a
+command anywhere in their arguments, so nothing pins them), since it allows any command outside the sandbox. Tools
+that run the repo's own files are not open, even bare: `make`, `npm run`, `cargo test` and `pytest` run what the
+Makefile, package.json or conftest.py say, which the builder can edit anyway, like `./test.sh`.
 
 Every job JSON carries the project's `test_commands` (`[]` when none). The analyst, builder, fixer and squirrels run a
 test command that starts with one of them through `wonka test <id> --dispatch <n> -- <command>` with a 10-minute Bash

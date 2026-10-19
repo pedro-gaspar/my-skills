@@ -30,17 +30,35 @@ def _parse(argv):
     return tid, dispatch, rest[1:]
 
 
-# Programs that run whatever code or program they are given.
+# A test_commands prefix is open when what an agent appends to it can pick the program or the inline code to run,
+# rather than only pass arguments to the program, script or target the prefix names:
+# - shells and interpreters (RUNNERS) are open until a script, module or code operand pins them (python3 -m pytest);
+# - wrappers and launchers (WRAPPERS, RUNNER_SUBCOMMANDS) are open when the command they wrap is (env FOO=1 bash), and
+#   a launcher with no subcommand is open too (uv, npm, cargo: the caller could add run or exec);
+# - ALWAYS_OPEN programs take a command anywhere in their arguments (find -exec, watch, script -c): nothing pins them;
+# - build and test tools that run the repo's own files are not open, even bare: make, npm test, cargo test and pytest
+#   run what the Makefile, package.json or conftest.py say, files the builder can edit anyway, like ./test.sh.
+# This only catches the obvious: with Claude Code's sandbox on, wonka test runs inside it whatever the prefix.
 RUNNERS = frozenset(
-    "sh bash zsh dash ksh fish csh tcsh "
-    "python pypy ruby perl node deno bun php lua Rscript osascript pwsh powershell tclsh "
-    "env exec command xargs nice nohup timeout time sudo doas npx pnpx bunx uvx".split())
-# Launchers whose subcommand runs any command.
+    "sh bash zsh dash ksh fish csh tcsh busybox "
+    "python pypy ruby perl node deno bun php lua Rscript osascript pwsh powershell tclsh awk gawk mawk nawk java julia "
+    "elixir env exec command xargs nice ionice nohup timeout time sudo doas setsid setpriv stdbuf flock unshare "
+    "nsenter chroot taskset chrt strace ltrace valgrind fakeroot eatmydata firejail systemd-run "
+    "npx pnpx bunx uvx".split())
+# Launchers whose subcommand runs any command (or the file or code it is given).
 RUNNER_SUBCOMMANDS = frozenset({
-    ("uv", "run"), ("poetry", "run"), ("pipenv", "run"), ("npm", "exec"), ("pnpm", "exec"), ("pnpm", "dlx"),
-    ("yarn", "exec"), ("yarn", "dlx"), ("bundle", "exec"), ("hatch", "run"), ("pdm", "run")})
+    ("uv", "run"), ("poetry", "run"), ("pipenv", "run"), ("npm", "exec"), ("npm", "x"), ("pnpm", "exec"),
+    ("pnpm", "dlx"), ("yarn", "exec"), ("yarn", "dlx"), ("yarn", "node"), ("bundle", "exec"), ("hatch", "run"),
+    ("pdm", "run"), ("rye", "run"), ("pixi", "run"), ("conda", "run"), ("mamba", "run"), ("go", "run"),
+    ("cargo", "run"), ("deno", "run"), ("deno", "eval"), ("bun", "run"), ("bun", "x"), ("bun", "exec"),
+    ("mix", "run")})
+LAUNCHERS = frozenset(program for program, _ in RUNNER_SUBCOMMANDS)
 # Runners whose first operand is another command.
-WRAPPERS = frozenset("env exec command xargs nice nohup timeout time sudo doas".split())
+WRAPPERS = frozenset(
+    "env exec command xargs nice ionice nohup timeout time sudo doas busybox setsid setpriv stdbuf flock unshare "
+    "nsenter chroot taskset chrt strace ltrace valgrind fakeroot eatmydata firejail systemd-run".split())
+# Programs that run a command given anywhere in their arguments, or a shell without one.
+ALWAYS_OPEN = frozenset("find watch script parallel gdb su runuser".split())
 # Options that take the next token as their value (not the program or code to run), by program.
 OPTION_VALUES = {
     "python": frozenset({"-W", "-X"}),
@@ -58,9 +76,29 @@ OPTION_VALUES = {
     "doas": frozenset({"-u"}),
     "xargs": frozenset({"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a"}),
     "uv": frozenset({"--with", "--python", "-p", "--project", "--directory", "--package", "--extra", "--group"}),
+    "awk": frozenset({"-v", "-F", "--assign", "--field-separator"}),
+    "gawk": frozenset({"-v", "-F", "--assign", "--field-separator"}),
+    "mawk": frozenset({"-v", "-F"}),
+    "nawk": frozenset({"-v", "-F"}),
+    "java": frozenset({"-cp", "-classpath", "--class-path", "-p", "--module-path", "--add-modules"}),
+    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"}),
+    "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
+    "flock": frozenset({"-w", "--timeout", "-E", "--conflict-exit-code"}),
+    "unshare": frozenset({"-S", "--setuid", "-G", "--setgid", "-R", "--root", "-w", "--wd"}),
+    "nsenter": frozenset({"-t", "--target", "-S", "--setuid", "-G", "--setgid"}),
+    "chroot": frozenset({"--userspec", "--groups"}),
+    "strace": frozenset({"-o", "-e", "-p", "-s", "-u", "-E", "-P"}),
+    "ltrace": frozenset({"-o", "-e", "-p", "-s", "-u"}),
+    "systemd-run": frozenset({"-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine",
+                              "--description", "--slice"}),
+    "npm": frozenset({"--prefix", "-w", "--workspace"}),
+    "conda": frozenset({"-n", "--name", "-p", "--prefix"}),
+    "mamba": frozenset({"-n", "--name", "-p", "--prefix"}),
+    "cargo": frozenset({"--manifest-path", "--config", "-Z", "-C"}),
+    "go": frozenset({"-C", "-exec", "-tags", "-ldflags", "-gcflags", "-mod", "-o"}),
 }
-# Positionals before the wrapped command (timeout DURATION COMMAND).
-LEADING_ARGS = {"timeout": 1}
+# Positionals before the wrapped command (timeout DURATION COMMAND, flock FILE COMMAND, chroot NEWROOT COMMAND).
+LEADING_ARGS = {"timeout": 1, "flock": 1, "chroot": 1, "taskset": 1, "chrt": 1}
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 OPEN_WARNING = ("lets an agent run any program or inline code outside the sandbox through wonka test; "
                 "pin it to a script or module (e.g. ./test.sh, python3 -m pytest)")
@@ -91,21 +129,30 @@ def _operands(program, tokens):
     lead = LEADING_ARGS.get(program, 0)
     if rest and lead:
         rest = rest[lead:]
+    if program == "flock" and rest[:1] in (["-c"], ["--command"]):
+        rest = ["sh", "-c", *rest[1:]]  # flock FILE -c COMMAND runs COMMAND with sh -c
     return rest
 
 
 def _open(tokens):
-    if len(tokens) >= 2 and (_program(tokens[0]), tokens[1]) in RUNNER_SUBCOMMANDS:
-        program, rest, wrapper = _program(tokens[0]), tokens[2:], True
-    elif _program(tokens[0]) in RUNNERS:
-        program, rest = _program(tokens[0]), tokens[1:]
-        wrapper = program in WRAPPERS
-    else:
+    program = _program(tokens[0])
+    if program in ALWAYS_OPEN:
+        return True
+    if program in LAUNCHERS:
+        head = _operands(program, tokens[1:])
+        if head[:1] and head[0].startswith("+"):  # cargo +nightly run
+            head = _operands(program, head[1:])
+        if not head:
+            return True  # the caller picks the subcommand: uv run, npm exec
+        if (program, head[0]) in RUNNER_SUBCOMMANDS:
+            ops = _operands(program, head[1:])
+            return not ops or _open(ops)
+    if program not in RUNNERS:
         return False
-    ops = _operands(program, rest)
+    ops = _operands(program, tokens[1:])
     if not ops:
         return True
-    return wrapper and _open(ops)
+    return program in WRAPPERS and _open(ops)
 
 
 def open_prefix(prefix):

@@ -282,6 +282,57 @@ class RunnerTablesTest(unittest.TestCase):
             with self.subTest(p):
                 self.assertFalse(testrun.open_prefix(p))
 
+    def test_more_interpreters_and_wrappers_are_open(self):
+        for p in ["awk", "gawk -v x=1", "mawk -F ,", "nawk", "gawk -e", "busybox", "busybox sh", "busybox sh -c",
+                  "java", "java -jar", "java -cp lib", "julia -e", "elixir -e",
+                  "setsid", "setsid -w bash", "stdbuf -oL", "stdbuf -o L sh -c", "flock /tmp/l", "flock -w 5 /tmp/l",
+                  "flock /tmp/l -c", "flock /tmp/l --command", "flock /tmp/l bash", "unshare", "unshare -r",
+                  "unshare --wd /tmp sh -c", "nsenter -t 1", "nice", "ionice -c 3", "ionice -c 3 python3 -c",
+                  "chroot /", "chroot --userspec u:g / bash", "taskset 0x1", "chrt 10", "strace -o log",
+                  "ltrace", "valgrind", "fakeroot", "eatmydata", "firejail", "systemd-run --user", "setpriv",
+                  "xargs", "nohup", "sudo", "doas", "timeout 60 busybox sh"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+        for p in ["awk -f t.awk", "gawk '{print}'", "busybox make test", "java -jar t.jar", "java -cp lib org.T",
+                  "setsid ./test.sh", "stdbuf -oL ./test.sh", "flock /tmp/l ./test.sh", "flock /tmp/l -c ./test.sh",
+                  "unshare -r ./test.sh", "ionice -c 3 make test", "chroot / ./test.sh", "taskset 0x1 pytest",
+                  "strace -o log ./test.sh", "systemd-run --user ./test.sh", "nohup ./test.sh"]:
+            with self.subTest(p):
+                self.assertFalse(testrun.open_prefix(p))
+
+    def test_programs_that_run_a_command_anywhere_are_always_open(self):
+        """find -exec, watch (joins its arguments into sh -c), script -c, parallel, gdb -ex, su -c take a command
+        wherever it comes, so no operand pins them."""
+        for p in ["find", "find . -name '*_test.py'", "watch", "watch ./test.sh", "script", "script -q -c ./t.sh",
+                  "parallel", "parallel ./t.sh", "gdb --args ./t", "su", "runuser -u ci", "env FOO=1 find .",
+                  "timeout 60 watch ./t.sh"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+
+    def test_more_launcher_subcommands_are_open(self):
+        for p in ["go run", "go run -tags x", "cargo run", "cargo +nightly run", "cargo run --release",
+                  "deno run", "deno run -A", "deno eval", "bun run", "bun x", "bun exec", "npm x", "yarn node",
+                  "rye run", "pixi run", "conda run -n env", "mamba run", "mix run", "npm --prefix x exec",
+                  "uv --directory x run", "uv --directory x run bash"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+        for p in ["go run ./cmd/test", "go run .", "cargo run --bin tests", "deno run -A ./test.ts", "deno eval 'Deno.test()'",
+                  "bun run test", "conda run -n env pytest", "mix run test.exs", "go test ./...", "cargo test",
+                  "deno test", "bun test", "npm run test", "yarn test", "uv run pytest"]:
+            with self.subTest(p):
+                self.assertFalse(testrun.open_prefix(p))
+
+    def test_a_launcher_with_no_subcommand_is_open(self):
+        """The caller could append run or exec: uv run bash."""
+        for p in ["uv", "npm", "pnpm", "yarn", "go", "cargo", "poetry", "pipenv", "bundle", "hatch", "pdm", "rye",
+                  "pixi", "conda", "mamba", "mix", "uv --project x", "cargo +nightly", "env go"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+        # build tools that run the repo's own files, like ./test.sh does, are not open, even bare
+        for p in ["make", "make -j4", "make test", "pytest", "cargo test", "npm test", "npm run", "tox"]:
+            with self.subTest(p):
+                self.assertFalse(testrun.open_prefix(p))
+
     def test_env_long_options_take_a_value(self):
         for p in ["env --unset HOME", "env --unset HOME FOO=1", "env --chdir /tmp", "env --chdir /tmp FOO=1",
                   "env --unset HOME python3 -c", "env --chdir /tmp bash"]:
