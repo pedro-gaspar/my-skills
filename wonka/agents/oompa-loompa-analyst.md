@@ -29,7 +29,8 @@ not the absolute `code` path: the builder works in a different worktree.
    present, `## ❓ Questions` (ticked answers, plus any text written under a question) and the review rounds at the
    bottom of the plan file (when the ticket came back from review): `## 🐿️ Review round N`, plus
    `## 🐿️ Earlier review round N` from earlier re-drafts, and `## 🔁 Change request N` /
-   `## 🔁 Earlier change request N` (changes the human asked for on an open PR). A review round may hold a
+   `## 🔁 Earlier change request N` (changes the human asked for on an open PR), and `## 🔴 CI failure N` /
+   `## 🔴 Earlier CI failure N` (checks that failed on the open PR). A review round may hold a
    `### Decisions` list: the human's answers to the squirrels' questions, which the new plan must respect. `wonka plan`
    keeps them at the bottom automatically, so do not copy them into the new plan. If `## ❓ Questions` holds a ticked
    "📜 Approve the spec and plan?" with **Re-draft**, the human sent your spec back: revise the plan and spec following
