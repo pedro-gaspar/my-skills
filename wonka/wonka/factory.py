@@ -144,6 +144,19 @@ def _push_rejected(err):
     return bool(_REJECTED.search(str(err)))
 
 
+_REASON_MAX = 200  # retry() cuts longer reasons, which would lose the closing "then tick Retry"
+
+
+def _push_rejected_reason(branch):
+    """What to do after a rejected push. Names the branch when it fits in _REASON_MAX, else uses the
+    current-branch form of the same command (the worktree is on that branch)."""
+    head = "push rejected: the PR branch has commits on GitHub that the worktree lacks. In the worktree run "
+    why = f"{head}git pull --no-rebase origin {branch}, then tick Retry"
+    if len(why) <= _REASON_MAX:
+        return why
+    return f"{head}git pull --no-rebase origin $(git branch --show-current), then tick Retry"
+
+
 class _PushRejected(WonkaError):
     """git push was rejected as not a fast-forward: retrying cannot help, a human must merge."""
 
@@ -745,8 +758,7 @@ class Factory:
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
             if isinstance(e, _PushRejected):  # the human pushed to the PR: retrying cannot help, say what to do
-                why = (f"push rejected: the PR branch has commits on GitHub that the worktree lacks. "
-                       f"In the worktree run git pull --no-rebase origin {t['branch']}, then tick Retry")
+                why = _push_rejected_reason(t["branch"])
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
                 self.log_event(tid, f"Push rejected, not a fast-forward: {err}")
                 return f"{tid}: PR failed: {why}; {outcome}"
@@ -1110,7 +1122,7 @@ class Factory:
         if final:
             retries = max(retries, MAX_RETRIES)
         why = " ".join(str(why).split())
-        why = why if len(why) <= 200 else why[:199] + "…"
+        why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
         if s[1] == "progress":
             if s[0] == "reviewing":
                 t["review_round"] -= 1
