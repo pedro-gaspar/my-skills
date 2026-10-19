@@ -55,6 +55,17 @@ class BannerTest(unittest.TestCase):
         t["fixing_changes"] = False
         self.assertNotIn("changes you requested", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
+    def test_fix_round_for_failing_ci(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "baking", "phase": "pending"}, "project": "app", "history": [],
+             "review_round": 0, "fixing_ci": True, "reviewers": ["architect"]}
+        out = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("failing CI checks", out)
+        self.assertNotIn("changes you requested", out)
+        t["fixing_changes"] = True
+        out = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("changes you requested and the failing CI checks", out)
+
     def test_awaiting_merge_mentions_request_changes(self):
         cfg = dict(store.DEFAULT_CONFIG)
         t = {"last_valid": {"status": "shipped", "phase": "awaiting"}, "project": "app", "history": [],

@@ -96,7 +96,10 @@ def _story(tid, t, meta, cfg):
                                f"🍫 Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
         ("baking", "pending"): ("info", "Queued for baking", (
             f"🍫 A fix round after {_round(t, cfg)}." if t.get("review_round") else
+            "🍫 A fix round for the changes you requested and the failing CI checks on the PR."
+            if t.get("fixing_changes") and t.get("fixing_ci") else
             "🍫 A fix round for the changes you requested on the PR." if t.get("fixing_changes") else
+            "🍫 A fix round for the failing CI checks on the PR." if t.get("fixing_ci") else
             "🍫 Baking starts on the next tick.")),
         ("baking", "progress"): ("info", "A builder Oompa-Loompa is baking",
                                  f"🍫 Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),

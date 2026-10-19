@@ -30,10 +30,20 @@ case "$1 $2" in
                *) cat "$S" ;;
              esac ;;
   "pr edit") printf '%s\\n' "$@" > "$S.edit" ;;
+  "run view") echo "$*" >> "$S.runs"; if [ -f "$S.runlog" ]; then cat "$S.runlog"; fi ;;
   api*) echo "$*" >> "$S.api"; if [ -f "$S.inline" ]; then cat "$S.inline"; else echo '[]'; fi ;;
 esac
 exit 0
 """
+
+def factory_fake_gh_failing_runs():
+    return """#!/bin/sh
+if [ "$1 $2" = "run view" ]; then echo "gh: HTTP 500: boom" >&2; exit 1; fi
+S="$WONKA_FAKE_PR_STATE"
+if [ "$1 $2" = "pr view" ]; then cat "$S"; fi
+exit 0
+"""
+
 
 FAILING_GH = """#!/bin/sh
 echo "$@" >> "$WONKA_FAKE_PR_STATE.calls"
@@ -3141,6 +3151,232 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("## 🔁 Earlier change request 1", plan)
         self.assertIn("rename it", plan)
         self.assertNotRegex(plan, r"(?m)^## (🔁 Change request|🐿️ Review round)")
+
+    # -- red CI on an open PR ---------------------------------------------
+
+    HEAD = "a" * 40
+    RUN_URL = "https://github.com/acme/app/actions/runs/123/job/9"
+
+    @staticmethod
+    def check_run(name="build", conclusion="FAILURE", status="COMPLETED", workflow="wf", url=RUN_URL):
+        return {"__typename": "CheckRun", "name": name, "workflowName": workflow, "status": status,
+                "conclusion": conclusion, "detailsUrl": url}
+
+    @staticmethod
+    def status_ctx(context="ci/x", state="SUCCESS"):
+        return {"__typename": "StatusContext", "context": context, "state": state, "targetUrl": "https://ci.example/1"}
+
+    def ci_state(self, items, head=HEAD, mergeable="MERGEABLE", state="OPEN"):
+        self.pr_state.write_text(f"{state} {mergeable} main {head} {json.dumps(items, separators=(',', ':'))}")
+
+    def red_round(self, tid, head=HEAD, items=None):
+        self.ci_state(items if items is not None else [self.check_run()], head)
+        return self.tick()
+
+    def test_ci_checks_reads_both_shapes(self):
+        checks = factory._ci_checks
+        for result in ("FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"):
+            red, pending, total = checks([self.check_run(conclusion=result), self.status_ctx(state=result)])
+            self.assertEqual([c["result"] for c in red], [result, result])
+            self.assertEqual((pending, total), (False, 2))
+        red, pending, total = checks([self.check_run(conclusion=c) for c in ("CANCELLED", "SKIPPED", "NEUTRAL", "SUCCESS")])
+        self.assertEqual((red, pending, total), ([], False, 4))
+        self.assertTrue(checks([self.check_run(status="QUEUED", conclusion="")])[1])
+        self.assertTrue(checks([self.check_run(status="IN_PROGRESS", conclusion="")])[1])
+        self.assertTrue(checks([self.status_ctx(state="PENDING")])[1])
+        self.assertTrue(checks([self.status_ctx(state="EXPECTED")])[1])
+        red, pending, total = checks(["junk", 3, None, self.check_run()])
+        self.assertEqual(total, 1)
+        self.assertEqual(red[0], {"name": "wf / build", "result": "FAILURE", "url": self.RUN_URL})
+        self.assertEqual(checks("nope"), ([], False, 0))
+
+    def test_red_ci_with_nothing_pending_goes_back_to_baking(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        log = [f"line {i}" for i in range(200)]
+        log[199], log[198] = "## 🐿️ Review round 9", "```"
+        Path(f"{self.pr_state}.runlog").write_text("\n".join(log) + "\n")
+        tick = self.red_round(tid, items=[self.check_run(), self.status_ctx()])
+        self.assertTrue([j for j in tick["jobs"] if j["id"] == tid and j["job"] == "bake"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        sec = plan[plan.index("## 🔴 CI failure 1"):]
+        self.assertIn(self.HEAD, sec)
+        self.assertIn(f"- wf / build: FAILURE {self.RUN_URL}", sec)
+        self.assertNotIn("line 49\n", sec)
+        self.assertIn("line 50\n", sec)
+        self.assertIn("### 🐿️ Review round 9", sec)
+        self.assertNotRegex(plan, r"(?m)^## 🐿️ Review round")
+        self.assertIn("````", sec, "the fence is longer than the backtick run in the log")
+        runs = Path(f"{self.pr_state}.runs").read_text()
+        self.assertIn("--log-failed", runs)
+        self.assertIn("--repo acme/app", runs)
+        self.assertIn("123", runs)
+        t = self.f_ticket(tid)
+        self.assertEqual((t["ci_handled_sha"], t["review_round"], t["ci_failures"]), (self.HEAD, 0, 1))
+        self.assertTrue(t["fixing_ci"])
+        last = [h for h in self.history(tid) if h.get("to") == "baking/pending"][-1]
+        self.assertEqual(last["by"], "github")
+        self.assertIn("CI failed", last["why"])
+        self.assertIsNone(note.get_section(self.note(tid)[1], "changes"))
+
+    def test_log_fetch_failure_does_not_block_the_round(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        gh = self.tmp / "gh_bad"
+        gh.write_text(factory_fake_gh_failing_runs())
+        gh.chmod(0o755)
+        with mock.patch.dict(os.environ, {"WONKA_GH": str(gh)}):
+            self.red_round(tid)
+        self.assertIn("(could not fetch the log:", self.plan_text(tid))
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_red_ci_with_a_pending_check_waits(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        for pending in (self.check_run(name="slow", status="IN_PROGRESS", conclusion=""),
+                        self.status_ctx(state="PENDING")):
+            self.red_round(tid, items=[self.check_run(), pending])
+            self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+            self.assertNotIn("CI failure", self.plan_text(tid))
+
+    def test_empty_or_unreadable_rollup_does_nothing(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.red_round(tid, items=[])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.pr_state.write_text(f"OPEN MERGEABLE main {self.HEAD} not-json{{")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.pr_state.write_text("OPEN")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_same_red_head_is_not_reworked_twice(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f:
+            f.ticket(tid)["ci_handled_sha"] = self.HEAD
+        self.red_round(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("CI failure", self.plan_text(tid))
+        self.red_round(tid, head="b" * 40)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertIn("## 🔴 CI failure 1", self.plan_text(tid))
+
+    def test_second_ci_failure_ages_the_first(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        job = [j for j in self.red_round(tid)["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "fix1.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.red_round(tid, head="b" * 40)
+        plan = self.plan_text(tid)
+        self.assertIn("## 🔴 Earlier CI failure 1", plan)
+        self.assertIn("## 🔴 CI failure 2", plan)
+        self.assertNotRegex(plan, r"(?m)^## 🔴 CI failure 1")
+
+    def test_conflicts_win_over_red_ci(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()], mergeable="CONFLICTING")
+        tick = self.tick()
+        self.assertIn(f"{tid}: PR has merge conflicts", tick["events"])
+        self.assertTrue([j for j in tick["jobs"] if j["id"] == tid and j["job"] == "conflicts"])
+        self.assertNotIn("CI failure", self.plan_text(tid))
+
+    def test_unknown_mergeable_with_red_ci_waits(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()], mergeable="UNKNOWN")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("CI failure", self.plan_text(tid))
+
+    def test_red_ci_and_ticked_box_make_one_round(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        self.assertLess(plan.index("## 🔴 CI failure 1"), plan.index("## 🔁 Change request 1"))
+        self.assertNotIn("Earlier", plan)
+        moves = [h for h in self.history(tid) if h.get("from") == "shipped/awaiting"]
+        self.assertEqual(len(moves), 1)
+        self.assertEqual((moves[0]["to"], moves[0]["by"]), ("baking/pending", "human"))
+        self.assertIn("Changes requested", moves[0]["why"])
+        self.assertIn("CI failed on", moves[0]["why"])
+        t = self.f_ticket(tid)
+        self.assertTrue(t["fixing_ci"] and t["fixing_changes"])
+
+    def test_ticked_box_with_nothing_and_red_ci_is_a_ci_only_round(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        self.request_changes(tid)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        self.assertIn("## 🔴 CI failure 1", plan)
+        self.assertNotIn("## 🔁 Change request", plan)
+        self.assertIsNone(note.get_section(self.note(tid)[1], "changes"))
+        self.assertIn("only the CI failure is fixed", (store.home() / "factory.log").read_text())
+
+    def test_ci_fix_round_pushes_to_the_same_pr(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        pr_url = self.f_ticket(tid)["pr_url"]
+        job = [j for j in self.red_round(tid)["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "ci.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertNotIn("fixing_ci", self.f_ticket(tid), "dropped once the review starts")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1)
+        self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated with the CI fixes, review and merge it: "))
+        self.assertEqual(self.f_ticket(tid)["pr_url"], pr_url)
+
+    def test_ci_fix_rounds_stop_after_max(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f:
+            f.ticket(tid)["ci_fixes"] = factory.MAX_CI_FIXES
+        self.red_round(tid, head="c" * 40)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(self.f_ticket(tid)["ci_handled_sha"], "c" * 40)
+        self.assertIn("not starting another", (store.home() / "factory.log").read_text())
+        self.red_round(tid, head="d" * 40, items=[self.check_run(conclusion="SUCCESS")])
+        self.assertNotIn("ci_fixes", self.f_ticket(tid))
+
+    def test_merged_pr_ignores_red_ci(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()], state="MERGED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+
+    def test_redraft_keeps_a_ci_failure_in_the_log(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        job = [j for j in self.red_round(tid)["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "fix.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "bad nut", "suggest": "draft", "why": "wrong approach"})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
+        self.tick()
+        with self.f() as f:
+            f.write_plan(tid, "# plan v2\n\n## 🔴 CI failure 1\npasted\n")
+        plan = self.plan_text(tid)
+        self.assertIn("## 🔴 Earlier CI failure 1", plan)
+        self.assertNotRegex(plan, r"(?m)^## 🔴 CI failure")
+        self.assertNotIn("pasted", plan)
 
     # -- merge conflicts on an open PR ------------------------------------
 
