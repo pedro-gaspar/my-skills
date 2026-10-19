@@ -141,8 +141,17 @@ def parse_remote(url):
     return m.group(1) if m else None
 
 
+def _main_worktree(path):
+    """The repo's main checkout, even when `path` is inside a linked worktree (None for a bare repo)."""
+    first = git("worktree", "list", "--porcelain", cwd=path).split("\n\n", 1)[0].splitlines()
+    if not first or not first[0].startswith("worktree ") or "bare" in first:
+        return None
+    return first[0][len("worktree "):]
+
+
 def repo_info(path):
-    top = git("rev-parse", "--show-toplevel", cwd=path)
+    """The main checkout's path, base branch and GitHub `owner/name`; from a linked worktree it is still the main checkout."""
+    top = _main_worktree(path) or git("rev-parse", "--show-toplevel", cwd=path)
     try:
         origin_url = git("remote", "get-url", "origin", cwd=top)
     except WonkaError:

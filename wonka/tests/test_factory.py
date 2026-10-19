@@ -1467,6 +1467,43 @@ class FactoryTest(unittest.TestCase):
         with self.assertRaises(WonkaError):
             factory.repo_info(str(trunk))
 
+    def test_repo_info_from_linked_worktree_returns_main_checkout(self):
+        repo = self._new_repo("wt", "main")
+        linked = self.tmp / "wt-linked"
+        sh("git", "worktree", "add", "-q", "-b", "feat", str(linked), cwd=repo)
+        (linked / "sub").mkdir()
+        for where in (linked, linked / "sub"):
+            top, base, _ = factory.repo_info(str(where))
+            self.assertEqual(Path(top).resolve(), repo.resolve())
+            self.assertEqual(base, "main")
+
+    def test_repo_info_from_main_checkout_is_unchanged(self):
+        repo = self._new_repo("wm", "main")
+        sh("git", "worktree", "add", "-q", "-b", "feat", str(self.tmp / "wm-linked"), cwd=repo)
+        top = factory.repo_info(str(repo))[0]
+        self.assertEqual(Path(top).resolve(), repo.resolve())
+        self.assertEqual(top, factory.git("rev-parse", "--show-toplevel", cwd=str(repo)))
+
+    def test_add_from_linked_worktree_files_ticket_under_main_checkout(self):
+        linked = self.tmp / "app-linked"
+        sh("git", "worktree", "add", "-q", "-b", "feat", str(linked), cwd=self.repo)
+        with self.f() as f:
+            tid = f.add("x", repo=str(linked), pr_repo="acme/app")
+            ticket = f.ticket(tid)
+            self.assertEqual(Path(ticket["repo"]).resolve(), self.repo.resolve())
+            self.assertEqual(ticket["project"], Path(ticket["repo"]).name)
+            self.assertEqual(ticket["project"], self.repo.name)
+
+    def test_main_worktree_parses_porcelain(self):
+        normal = "worktree /x\nHEAD abc\nbranch refs/heads/main\n\nworktree /y\nHEAD def\n"
+        with mock.patch.object(factory, "git", return_value=normal):
+            self.assertEqual(factory._main_worktree("."), "/x")
+        bare = "worktree /x\nbare\n\nworktree /y\nHEAD def\nbranch refs/heads/main\n"
+        with mock.patch.object(factory, "git", return_value=bare):
+            self.assertIsNone(factory._main_worktree("."))
+        with mock.patch.object(factory, "git", return_value=""):
+            self.assertIsNone(factory._main_worktree("."))
+
     def test_child_of_parent_with_deleted_note_gets_no_jira(self):
         tid = self.add(jira="CALC-42")
         with self.f() as f:

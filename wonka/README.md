@@ -84,7 +84,7 @@ push.
 
 | | |
 |---|---|
-| `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo or pass `--repo <path>`; `--pr-repo owner/name`, `--jira`) |
+| `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`) |
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
