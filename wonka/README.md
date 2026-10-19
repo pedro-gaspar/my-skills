@@ -86,4 +86,5 @@ jira`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is
 
 ```bash
 cd wonka && python3 -m unittest discover tests
+python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd
 ```
