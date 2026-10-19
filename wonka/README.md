@@ -16,9 +16,10 @@ claude plugin install wonka@my-skills
 ```
 
 Then run `/wonka init`. It asks for your vault and how many tickets to draft and bake at once. It writes
-`~/.wonka/config.json`, creates `<vault>/wonka/{golden-tickets,plans,archive}` and `Wonka.base`, links `wonka` into
-`~/.local/bin`, and runs `wonka doctor`. Init never overwrites an existing `Wonka.base`, so an older vault keeps its
-old kanban view name until you rename it in Obsidian or delete `Wonka.base` and rerun `wonka init`. The doctor
+`~/.wonka/config.json`, creates `<vault>/wonka/{golden-tickets,plans,archive}` and `🍫 Factory.base` (shows as "🍫 Factory" in
+Obsidian), links `wonka` into `~/.local/bin`, and runs `wonka doctor`. Init never overwrites an existing
+`🍫 Factory.base`; an older vault's `Wonka.base` is renamed to `🍫 Factory.base` by `wonka init` (keeping any view
+changes), and the doctor warns until it is. The doctor
 prints the permission snippet that lets background agents run unattended (`Bash(wonka *)`, plus the worktree and
 factory folders as `additionalDirectories`). Agents run git only through `wonka git <id> <subcommand>`, which pins
 it to the ticket's worktree and that worktree's registered git dir (a rewritten `.git` file is ignored) and allows

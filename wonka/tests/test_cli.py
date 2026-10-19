@@ -36,13 +36,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual((cfg["wip"], cfg["archive_after_days"]), ({"drafting": 2, "baking": 3}, 14))
         self.assertEqual(cfg["max_review_rounds"], 4)
         self.assertIn("🐿️ review rounds    : 4", out)
-        base = (self.tmp / "vault/wonka/Wonka.base").read_text()
+        base = (self.tmp / "vault/wonka/🍫 Factory.base").read_text()
+        self.assertFalse((self.tmp / "vault/wonka/Wonka.base").exists())
         self.assertIn('file.inFolder("wonka/golden-tickets")', base)
         self.assertIn("name: 🍫 Factory floor", base)
         self.assertIn("🍫 Factory ", out)
         self.assertTrue((self.tmp / "vault/wonka/golden-tickets").is_dir())
         self.assertTrue(cli.LINK.is_symlink())
         self.assertIn("🍫 baking at once   : 3", out)
+
+    def test_init_renames_old_wonka_base(self):
+        board = self.tmp / "vault/wonka"
+        board.mkdir(parents=True)
+        (board / "Wonka.base").write_text("views: [] # mine\n")
+        self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
+        self.assertEqual((board / "🍫 Factory.base").read_text(), "views: [] # mine\n")
+        self.assertFalse((board / "Wonka.base").exists())
+
+    def test_init_keeps_both_when_both_exist(self):
+        board = self.tmp / "vault/wonka"
+        board.mkdir(parents=True)
+        (board / "Wonka.base").write_text("old\n")
+        (board / "🍫 Factory.base").write_text("new\n")
+        self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
+        self.assertEqual((board / "Wonka.base").read_text(), "old\n")
+        self.assertEqual((board / "🍫 Factory.base").read_text(), "new\n")
 
     def test_config_changes_and_validates(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))

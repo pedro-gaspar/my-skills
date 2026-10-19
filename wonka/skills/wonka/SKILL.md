@@ -21,7 +21,7 @@ Arguments: `$ARGUMENTS`
    don't count), tickets baked at once (recommend 2; reviewing and shipped tickets don't count) and days before Done
    tickets are archived (recommend 7).
 2. `wonka init --vault <path> --drafting <n> --baking <n> --archive-days <n>`, then `wonka doctor`; show both.
-3. Tell the user to open `<vault>/wonka/Wonka.base` in Obsidian 1.14+, and to apply any permission snippet the
+3. Tell the user to open `<vault>/wonka/🍫 Factory.base` in Obsidian 1.14+, and to apply any permission snippet the
    doctor prints. Settings can be changed any time with `wonka config <key> <value>`.
 
 ## config
