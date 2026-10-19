@@ -110,10 +110,11 @@ class CheckTest(unittest.TestCase):
     def test_command_pins_path_and_global_options(self):
         self.assertEqual(command("/w", "/r/.git/worktrees/w", "diff", ["x"]),
                          ["git", "--no-pager", "-C", "/w", "--git-dir=/r/.git/worktrees/w", "--work-tree=/w",
-                          "-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv", "x"])
+                          "-c", "core.fsmonitor=false", "-c", "diff.ignoreSubmodules=all",
+                          "diff", "--no-ext-diff", "--no-textconv", "x"])
         self.assertEqual(command("/w", "/r/.git/worktrees/w", "status", []),
                          ["git", "--no-pager", "-C", "/w", "--git-dir=/r/.git/worktrees/w", "--work-tree=/w",
-                          "-c", "core.fsmonitor=false", "status"])
+                          "-c", "core.fsmonitor=false", "-c", "diff.ignoreSubmodules=all", "status"])
 
     def test_env_is_scrubbed(self):
         with mock.patch.object(gitwrap, "_passwd_home", return_value="/home/real"):
@@ -319,6 +320,44 @@ class WrapperTest(RepoFixture, unittest.TestCase):
         self.assertEqual(argv[argv.index("-C") + 1], str(wt))
         self.assertIn(f"--git-dir={gitwrap.git_dir(self.repo, wt)}", argv)
         self.assertEqual(sh("git", "--git-dir", str(gitwrap.git_dir(self.repo, wt)), "rev-parse", "HEAD", cwd=wt), head)
+
+    def nested_repo_with_a_filter(self, wt):
+        """A repo inside the worktree whose own config has a clean filter that writes a file; returns that file."""
+        pwned = self.tmp / "pwned"
+        sub = wt / "sub"
+        sub.mkdir()
+        sh("git", "init", "-q", cwd=sub)
+        (sub / "f").write_text("x\n")
+        sh("git", "add", "f", cwd=sub)
+        sh("git", "commit", "-q", "-m", "s", cwd=sub)
+        sh("git", "config", "filter.x.clean", f"touch {pwned}; cat", cwd=sub)
+        (sub / ".git" / "info").mkdir(exist_ok=True)
+        (sub / ".git" / "info" / "attributes").write_text("* filter=x\n")
+        return pwned
+
+    def test_nested_repo_config_never_runs(self):
+        """git looks inside a submodule with that submodule's own config: wonka git never looks inside one, and
+        refuses to add one (git add looks inside whatever the outer config says)."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        pwned = self.nested_repo_with_a_filter(wt)
+        d = str(self.dispatch)
+        (wt / "hello.sh").write_text("echo hi\n")
+        code, err = self.git(tid, "--dispatch", d, "add", "hello.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("nested git repos", err)
+        self.assertIn("sub", err)
+        sh("git", "add", "sub", cwd=wt)  # recorded anyway (say by hand): now a submodule in the index
+        os.utime(wt / "sub" / "f", (1, 1))  # looks changed, so checking the submodule would run its filter
+        with contextlib.redirect_stdout(io.StringIO()):
+            for argv in (("status",), ("diff",), ("diff", "--stat"), ("--dispatch", d, "commit", "-q", "-a", "-m", "x")):
+                with self.subTest(argv=argv):
+                    self.assertEqual(self.git(tid, *argv)[0], 0)
+                    self.assertFalse(pwned.exists())
+        code, err = self.git(tid, "--dispatch", d, "add", "hello.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("sub", err)
+        self.assertFalse(pwned.exists())
 
     def test_global_config_from_env_is_ignored(self):
         tid = self.add()

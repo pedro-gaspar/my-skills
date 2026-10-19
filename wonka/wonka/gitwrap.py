@@ -107,8 +107,28 @@ def command(path, git_dir, sub, args):
     """git dir and work tree are both pinned, so git never reads the `.git` file inside the tree (an agent can
     rewrite it to point at a git dir it planted, with filters, hooks or core.worktree in its config)."""
     injected = ["--no-ext-diff", "--no-textconv"] if sub in NO_EXTERNAL else []
+    # a submodule (or a nested repo the agent made and added) brings its own git dir and config: checking whether it
+    # is dirty runs git inside it, with its filters. Never look inside one.
     return ["git", "--no-pager", "-C", str(path), f"--git-dir={git_dir}", f"--work-tree={path}",
-            "-c", "core.fsmonitor=false", sub, *injected, *args]
+            "-c", "core.fsmonitor=false", "-c", "diff.ignoreSubmodules=all", sub, *injected, *args]
+
+
+def _nested_repos(path, gd):
+    """Submodules in the index and untracked nested repos in the tree. `git add` looks inside both, running git
+    with their own config (filters, fsmonitor) whatever the outer config says, so `wonka git add` refuses them."""
+    def ls(*opts):
+        out = subprocess.run(command(path, gd, "ls-files", ["-z", *opts]), env=env(), stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True)
+        return [e for e in out.stdout.split("\0") if e]
+    found = [e.split("\t", 1)[1] for e in ls("--stage") if e.startswith("160000 ")]
+    for rel in ls("--others", "--exclude-standard", "--directory"):
+        if not rel.endswith("/"):
+            continue
+        for root, dirs, files in os.walk(Path(path) / rel):
+            if ".git" in dirs or ".git" in files:
+                found.append(str(Path(root).relative_to(path)))
+                dirs.clear()
+    return found
 
 
 def _passwd_home():
@@ -265,6 +285,10 @@ def main(argv):
             head = _on_branch(path, gd)
             if head != branch:
                 raise WonkaError(f"git {sub} only runs on {branch}, but the worktree is on {head or 'a detached HEAD'}")
+        if sub == "add" and (nested := _nested_repos(path, gd)):
+            raise WonkaError("git add does not run in a worktree with submodules or nested git repos (their own "
+                             f"config could run programs): {', '.join(nested)}. Remove the nested repo, or ask a "
+                             "human if the repo really uses submodules")
         return subprocess.run(command(path, gd, sub, args), env=env(), stdin=subprocess.DEVNULL).returncode
     except FileNotFoundError:
         raise WonkaError("git is not installed")
