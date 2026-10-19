@@ -24,8 +24,9 @@ Then run `/wonka init`. It asks for your vault and how many tickets to draft and
 existing `🍫 Factory.base`; an older vault's `Wonka.base` is renamed to `🍫 Factory.base` by `wonka init` (keeping
 any view changes), and the doctor warns until it is. The doctor prints the permission snippet that lets background
 agents run unattended (one `Bash(wonka <command> *)` rule per command agents and the loop run, plus the worktree and
-factory folders as `additionalDirectories`). The human's commands (`init`, `config`, `set`, `move`, `block`,
-`unblock`, `doctor`) are left out on purpose: an agent that read a hostile diff or CI log could otherwise switch the
+factory folders as `additionalDirectories`; never `~/.wonka` itself or a folder above it like `~`, which would let
+Edit and Write change the config and state: the doctor warns). The human's commands (`init`, `config`, `set`, `move`,
+`block`, `unblock`, `doctor`) are left out on purpose: an agent that read a hostile diff or CI log could otherwise switch the
 sandbox off (`wonka config test_commands.<project> bash`) or pass its own gates (`wonka move`, `wonka set <id>
 spec_review agent`). They ask you instead; never allow them, or `Bash(wonka *)`, in your settings (the doctor warns).
 `wonka section` only writes the analyst's 📜 Spec, while the ticket is being drafted, so no agent ticks a box for you. Agents
@@ -137,7 +138,7 @@ push.
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
 | `wonka ci-logs <id> --dispatch <n> <url>` | what builders use to fetch a failed CI log, only in a CI fix round and from the current dispatch: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
-| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, the sandbox (on, with every wonka command but `test` excluded), open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
+| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, the sandbox (on, with every wonka command but `test` excluded), `additionalDirectories` that would expose `~/.wonka`, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
 
 ## The floor
 

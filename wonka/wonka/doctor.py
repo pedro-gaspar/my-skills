@@ -175,6 +175,12 @@ def permission_checks(allow, dirs, want_dirs):
                        + json.dumps({"permissions": perms}, indent=2))
     else:
         yield "ok", "Claude Code permissions for the CLI (agents run git through wonka git), worktrees and factory folder"
+    home = store.home().resolve()
+    wide = [d for d in dirs if Path(d).expanduser().resolve() in (home, *home.parents)]
+    if wide:
+        yield "warn", (f"permissions.additionalDirectories lets Edit and Write change {home}, Wonka's config and state "
+                       "(an agent could set test_commands to bash or pass its own gates); list only the worktrees "
+                       "and factory folders, and remove " + ", ".join(wide))
     broad = [r for r in allow if r in BROAD]
     if broad:
         yield "warn", ("this allow rule lets any agent run every wonka command, the human ones too: wonka config "

@@ -132,6 +132,20 @@ class PermissionChecksTest(unittest.TestCase):
         result = list(doctor.permission_checks(self.AGENT[1:], self.DIRS[:1], self.DIRS))
         self.assertEqual(self.snippet(result[0][1]), {"allow": self.AGENT[:1], "additionalDirectories": self.DIRS[1:]})
 
+    def test_wonka_home_or_a_parent_in_additional_directories_warns(self):
+        """Edit and Write could change the config and state; only the worktrees and factory folders belong there."""
+        with mock.patch.dict(os.environ, {"WONKA_HOME": "/tmp/wh/.wonka"}):
+            for d in ("/tmp/wh/.wonka", "/tmp/wh/.wonka/", "/tmp/wh", "/tmp", "/"):
+                with self.subTest(d=d):
+                    result = list(doctor.permission_checks(self.AGENT, self.DIRS + [d], self.DIRS))
+                    self.assertEqual([lv for lv, _ in result], ["ok", "warn"])
+                    self.assertIn("additionalDirectories lets Edit and Write change /tmp/wh/.wonka", result[1][1])
+                    self.assertIn(d, result[1][1])
+            for d in ("/tmp/wh/.wonka/worktrees", "/tmp/wh/vault/wonka", "/tmp/other"):
+                with self.subTest(d=d):
+                    result = list(doctor.permission_checks(self.AGENT, self.DIRS + [d], self.DIRS))
+                    self.assertEqual([lv for lv, _ in result], ["ok"])
+
     def test_broad_wonka_rule_warns(self):
         for rule in doctor.BROAD:
             with self.subTest(rule=rule):
