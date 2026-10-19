@@ -92,6 +92,9 @@ jira`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is
 ## Develop
 
 ```bash
-cd wonka && python3 -m unittest discover tests
-python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd
+cd wonka && python3 -m unittest                  # from wonka/
+python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (what plans and squirrels use)
 ```
+
+A bare `python3 -m unittest` from the repo root finds no tests (`NO TESTS RAN`, exit code 5). If a run reports 0
+tests, the command is wrong, not passing.
