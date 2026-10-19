@@ -88,6 +88,7 @@ push.
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
+| `wonka repos` | the repos the factory knows (project, local path, PR repo); the analyst uses it to file a ticket in another repo |
 | `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
@@ -97,7 +98,7 @@ push.
 | Column | What happens |
 |---|---|
 | ✉️-Inbox | 📏 **oompa-loompa-triage** (Sonnet) sizes it. xs/s with a clear idea → 🌟 Done. m/l/xl or unclear → 🙋, tick **Approve** and answer the questions. A duplicate of an open ticket → 🗑️ Wont-Do (`## 🗑️ Duplicate`) |
-| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Inbox tickets (`## 🗑️ Too big`, then Wont-Do) |
+| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Inbox tickets (`## 🗑️ Too big`, then Wont-Do); an idea that spans several repos is split into one Inbox ticket per repo (`## 🗑️ Split by repo`, then Wont-Do): a ticket always builds in one repo |
 | 🎫-Ready | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Sonnet) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
 | 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (architect on Opus, the rest on Sonnet; picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets (not for a ticket already `max_followup_depth`, default 2, parents deep: those are only logged on the ticket, so follow-ups can't breed forever); decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); the answers are logged in the plan as `### Decisions` under that `## 🐿️ Review round N` (the log holds only squirrels that raised issues; a clean round with no answered questions logs nothing); a clean round ships once every answer is the recommended one, otherwise rebakes. Max `max_review_rounds` (default 3) rounds with issues, then Wont-Do; a clean round that rebakes adds an extra round |

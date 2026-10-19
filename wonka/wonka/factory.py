@@ -544,12 +544,37 @@ class Factory:
             out += "\n" + log.strip("\n") + "\n"
         path.write_text(out)
 
-    def drafted(self, tid, size, reviewers=(), dispatch=None):
+    def repos(self):
+        """The distinct repos of all known tickets: sorted (project, repo, pr_repo) tuples."""
+        found = {}
+        for t in self.db["tickets"].values():
+            if t.get("repo"):
+                found[t["repo"]] = (t.get("project", ""), t["repo"], t.get("pr_repo"))
+        return sorted(found.values(), key=lambda r: (r[0], r[1]))
+
+    def drafted(self, tid, size, reviewers=(), dispatch=None, split=False):
         if self._stale_dispatch(tid, dispatch):
             return (f"{tid}: analyst result is from an earlier dispatch "
                     f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
         self.expect(tid, ("drafting", "progress"))
         t = self.ticket(tid)
+        if split:
+            kids = [k for k in t["children"] if k in self.db["tickets"]]
+            if not kids:
+                raise WonkaError(f"{tid}: add one ticket per repo first with "
+                                 f"`wonka add --repo <path> --parent {tid} ...`")
+            if reviewers:
+                raise WonkaError("--split takes no --reviewers: each child is reviewed on its own")
+            if all(self.ticket(k)["repo"] == t["repo"] for k in kids):
+                raise WonkaError(f"{tid}: every child builds in {t['repo']}; --split is for work in other repos "
+                                 f"(split a ticket that is too big for one repo with --size l)")
+            self.set_field(tid, "size", size)
+            meta, body = self.read(tid)
+            lines = [f"- [[{k}]] {self.read(k)[0].get('title', '')} · {self.ticket(k)['project']}" for k in kids]
+            self.write(tid, meta, note.set_section(body, "split", "\n".join(lines)))
+            repos = {self.ticket(k)["repo"] for k in kids}
+            self.move(tid, KILLED, "analyst", f"Split by repo: {len(kids)} tickets in {len(repos)} repos")
+            return
         self.set_field(tid, "size", size)
         meta, body = self.read(tid)
         if size not in machine.BUILDABLE:
