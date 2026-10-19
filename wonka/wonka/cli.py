@@ -119,7 +119,8 @@ def _report(a):
 def run(a, f):
     c = a.cmd
     if c == "add":
-        tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira)
+        tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
+                  spec_review="human" if a.needs_human_spec_review else None)
         print(f"🎫 {tid} has a golden ticket! It's in the ✉️ Inbox: {f.path(tid)}")
     elif c == "set":
         f.set_field(a.id, a.field, a.value)
@@ -211,7 +212,9 @@ def parser():
     s.add_argument("--parent")
     s.add_argument("--size", choices=machine.SIZES)
     s.add_argument("--jira")
-    s = sub.add_parser("set", help="set title, size, jira or pr_repo")
+    s.add_argument("--needs-human-spec-review", action="store_true",
+                   help="a human approves the spec and plan before baking (spec_review: human)")
+    s = sub.add_parser("set", help="set title, size, jira, pr_repo or spec_review (agent|human)")
     s.add_argument("id")
     s.add_argument("field")
     s.add_argument("value")

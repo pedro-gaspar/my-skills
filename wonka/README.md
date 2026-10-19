@@ -86,7 +86,7 @@ push.
 
 | | |
 |---|---|
-| `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`) |
+| `/wonka add "idea"` | drop a ticket in the Inbox (run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`, `--needs-human-spec-review` to approve the spec yourself before baking) |
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
@@ -101,7 +101,7 @@ push.
 | Column | What happens |
 |---|---|
 | ✉️-Inbox | 📏 **oompa-loompa-triage** (Sonnet) sizes it. xs/s with a clear idea → 🌟 Ready. m/l/xl or unclear → 🙋, tick **Approve** and answer the questions. A duplicate of an open ticket → 🗑️ Wont-Do (`## 🗑️ Duplicate`) |
-| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Inbox tickets (`## 🗑️ Too big`, then Wont-Do); an idea that spans several repos is split into one Inbox ticket per repo (`## 🗑️ Split by repo`, then Wont-Do): a ticket always builds in one repo |
+| 🧪-Drafting | 🧪 **oompa-loompa-analyst** (Opus) writes `## 📜 Spec` and a detailed plan in `wonka/plans/`, asks `## ❓ Questions` if needed; answered rounds move to `## ✅ Answers`, splits l/xl into new Inbox tickets (`## 🗑️ Too big`, then Wont-Do); an idea that spans several repos is split into one Inbox ticket per repo (`## 🗑️ Split by repo`, then Wont-Do): a ticket always builds in one repo. A ticket with `spec_review: human` (set with `--needs-human-spec-review`, `wonka set <id> spec_review human`, or the note's property) waits in 🧪-Drafting 🙋 once the analyst is done: **Approve** sends it to 🎫-Planned, **Re-draft** back to the analyst with your notes, **Close** to Wont-Do. Children inherit it; anything but `agent` or empty counts as human; it only matters while the ticket is in Drafting |
 | 🎫-Planned | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Sonnet) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
 | 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (architect on Opus, the rest on Sonnet; picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets (not for a ticket already `max_followup_depth`, default 2, parents deep: those are only logged on the ticket, so follow-ups can't breed forever); decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); the answers are logged in the plan as `### Decisions` under that `## 🐿️ Review round N` (the log holds only squirrels that raised issues; a clean round with no answered questions logs nothing); a clean round ships once every answer is the recommended one, otherwise rebakes. Max `max_review_rounds` (default 3) rounds with issues, then Wont-Do; a clean round that rebakes adds an extra round |
@@ -175,7 +175,7 @@ also send an urgent desktop notification, so a `/loop` running in the background
 
 **The state machine** (`wonka/machine.py`) is the only way a ticket moves. Drag a card anywhere other than Wont-Do
 and the next tick puts it back, with a note on the ticket. Notes keep only `id, title, status, phase, size,
-jira`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
+jira, spec_review`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
 `~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It and the notes
 are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
 giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status` and `wonka show` only read, so they never wait for it: an agent

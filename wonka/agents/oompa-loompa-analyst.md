@@ -25,7 +25,9 @@ not the absolute `code` path: the builder works in a different worktree.
    `## 🐿️ Earlier review round N` from earlier re-drafts, and `## 🔁 Change request N` /
    `## 🔁 Earlier change request N` (changes the human asked for on an open PR). A review round may hold a
    `### Decisions` list: the human's answers to the squirrels' questions, which the new plan must respect. `wonka plan`
-   keeps them at the bottom automatically, so do not copy them into the new plan.
+   keeps them at the bottom automatically, so do not copy them into the new plan. If `## ❓ Questions` holds a ticked
+   "📜 Approve the spec and plan?" with **Re-draft**, the human sent your spec back: revise the plan and spec following
+   the text under that question, then run `wonka drafted` again.
 2. Study the code in `code` until you know exactly what to build: files, functions, data, tests, edge cases.
 3. **One repo per ticket.** A ticket builds, is reviewed and ships in one repo: `code`'s. If the idea also
    needs changes in another repository (an API and its client, a library and the app using it, a shared

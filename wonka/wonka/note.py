@@ -5,7 +5,8 @@ import re
 
 from . import store
 
-FIELDS = ("id", "title", "status", "phase", "size", "jira")
+FIELDS = ("id", "title", "status", "phase", "size", "jira", "spec_review")
+OPTIONAL = ("spec_review",)  # owned fields written only when set: old notes get no blank line
 
 HEADINGS = {
     "idea": "💡 Idea",
@@ -24,6 +25,12 @@ HEADINGS = {
 
 CLOSE_Q = "🗑️ Close this ticket?"
 DRAFT_Q = "🧪 Send it back to Drafting?"
+SPEC_Q = "📜 Approve the spec and plan?"
+SPEC_OPTIONS = (
+    "Approve: send it to baking",
+    "Re-draft: back to the analyst (write what to change under this question)",
+    "Close: drop the ticket (Wont-Do)",
+)
 CHANGES_BOX = "- [ ] 🔁 Request changes"
 
 _Q = re.compile(r"^- \*\*(.+?)\*\*")
@@ -90,7 +97,7 @@ def _scalar(head, lines):
 
 
 def write(path, meta, body):
-    lines = [f"{k}: {_quote(meta.get(k))}".rstrip() for k in FIELDS]
+    lines = [f"{k}: {_quote(meta.get(k))}".rstrip() for k in FIELDS if k not in OPTIONAL or meta.get(k)]
     lines += [v if isinstance(v, Raw) else f"{k}: {_quote(v)}".rstrip() for k, v in meta.items() if k not in FIELDS]
     store.write_atomic(path, "---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n")
 
@@ -282,6 +289,19 @@ def decisions(section, skip_no=()):
 def all_answered(section):
     qs = questions(section)
     return bool(qs) and all(any(c for c, _ in q["options"]) for q in qs)
+
+
+def picked(section, question):
+    """The ticked option texts of the first question whose text contains `question`."""
+    for q in questions(section):
+        if question in q["q"]:
+            return [text for c, text in q["options"] if c]
+    return []
+
+
+def needs_human_review(meta):
+    """Fail-safe: only an empty value or "agent" means agent review; anything else (even a typo) means human."""
+    return (meta.get("spec_review") or "").strip().lower() not in ("", "agent")
 
 
 def picked_yes(section, question):

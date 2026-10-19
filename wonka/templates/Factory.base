@@ -52,6 +52,7 @@ views:
       - phase
       - size
       - jira
+      - spec_review
     sort:
       - property: file.name
         direction: ASC
