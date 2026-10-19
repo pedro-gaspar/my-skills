@@ -201,8 +201,21 @@ class MdlintTest(unittest.TestCase):
         os.environ.pop("WONKA_MDLINT", None)
         self.assertEqual(
             mdlint.command(),
-            ["npx", "--yes", "markdownlint-cli@0.49.1", "--stdin", "--disable", "MD013", "MD041"],
+            ["npx", "--yes", "markdownlint-cli@0.49.1", "--stdin", "--disable", *mdlint.RELAXED],
         )
+
+    def test_cosmetic_rules_are_relaxed(self):
+        for rule in ("MD038", "MD040", "MD034", "MD018", "MD060", "MD013", "MD041", "MD009"):
+            self.assertIn(rule, mdlint.RELAXED)
+
+    def test_structural_rules_stay_checked(self):
+        for rule in ("MD005", "MD022", "MD023", "MD025", "MD028", "MD031", "MD032", "MD033", "MD056", "MD058"):
+            self.assertNotIn(rule, mdlint.RELAXED)
+
+    def test_relaxed_has_no_duplicates(self):
+        self.assertEqual(len(set(mdlint.RELAXED)), len(mdlint.RELAXED))
+        for rule in mdlint.RELAXED:
+            self.assertRegex(rule, r"^MD\d{3}$")
 
     def test_override_command_is_used_as_is(self):
         os.environ["WONKA_MDLINT"] = "mylint --stdin"
