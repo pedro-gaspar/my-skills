@@ -2436,6 +2436,29 @@ class FactoryTest(unittest.TestCase):
             self.assertIn("moved on", f.finished(tid, "wonka:oompa-loompa-fixer"))
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
 
+    def test_resolved_after_a_failed_start_resets_retries(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.upstream_change("other.txt", "upstream\n")  # no real conflict: the merge is clean
+        sh("git", "remote", "set-url", "origin", str(self.tmp / "gone.git"), cwd=self.repo)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        self.tick()
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
+        self.assertIn("conflict_error", self.f_ticket(tid))
+        sh("git", "remote", "set-url", "origin", str(self.tmp / "origin.git"), cwd=self.repo)
+        jobs = [j for j in self.tick()["jobs"] if j["id"] == tid]
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
+        sh("git", "merge", "-q", "--no-edit", jobs[0]["base_ref"], cwd=wt)
+        with self.f() as f:
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        t = self.f_ticket(tid)
+        self.assertNotIn("retries", t)
+        self.assertNotIn("conflict_error", t)
+        self.assertEqual(t["conflict_fixes"], 1)
+
     def test_failed_fetch_keeps_the_ticket_awaiting(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
