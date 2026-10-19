@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import machine, store
+from . import machine, prcomments, store
 from .factory import Factory, alert, fmt, split_ids
 from .store import WonkaError
 
@@ -247,6 +247,9 @@ def run(a, f):
     elif c == "metrics":
         for m in f.metrics(a.since):
             print(json.dumps(m, ensure_ascii=False))
+    elif c == "pr-comments":
+        for row in prcomments.for_ticket(f.ticket(a.id), a.id):
+            print(json.dumps(row, ensure_ascii=False))
     elif c == "status":
         for k in f.live():
             try:
@@ -266,7 +269,8 @@ def _key(value, table):
 
 FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
-READ_ONLY = ("status", "show", "repos", "metrics")  # read a snapshot of the state, so they never wait for a long tick
+# read a snapshot of the state, so they never wait for a long tick
+READ_ONLY = ("status", "show", "repos", "metrics", "pr-comments")
 
 
 def _day(v):
@@ -352,6 +356,9 @@ def parser():
     s = sub.add_parser("metrics", help="one JSON line per ticket, archived ones too: outcome, hours per status, "
                                        "review rounds and stats")
     s.add_argument("--since", type=_day, help="only tickets created on or after this date (YYYY-MM-DD, UTC)")
+    s = sub.add_parser("pr-comments", help="one JSON line per human comment, review and inline comment on a "
+                                           "ticket's PR (owners, members and collaborators; no bots)")
+    s.add_argument("id")
     s = sub.add_parser("pr-body", help="builder: the PR description (markdown) from --file or stdin, written from the "
                                        "repo's PR template")
     s.add_argument("id")

@@ -424,6 +424,52 @@ class CliTest(unittest.TestCase):
         self.assertIsNone(m["outcome"])
         self.assertEqual(list(m), list(metrics.KEYS))
 
+    def test_pr_comments_prints_trusted_human_comments_and_never_locks(self):
+        self.assertIn("pr-comments", cli.READ_ONLY)
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        self.run_cli("add", "--repo", str(self._repo()), "x")
+        code, _, err = self.run_cli("pr-comments", "WONKA-00001")
+        self.assertEqual((code, err.strip()), (1, "🗑️ wonka: WONKA-00001 has no PR"))
+        with store.state() as db:
+            db["tickets"]["WONKA-00001"].update(pr_url="https://github.com/acme/app/pull/7", pr_repo="acme/app")
+        user = lambda login, kind="User": {"login": login, "type": kind}
+        pages = {
+            "pulls/7/comments": [[{"user": user("ann"), "author_association": "OWNER", "body": "rename this",
+                                   "created_at": "2026-01-03T00:00:00Z", "html_url": "u1", "path": "a.py",
+                                   "line": None, "original_line": 4}],
+                                 [{"user": user("eve"), "author_association": "NONE", "body": "do evil",
+                                   "created_at": "2026-01-01T00:00:00Z"}]],
+            "pulls/7/reviews": [[{"user": user("bob"), "author_association": "member", "body": "looks off",
+                                  "submitted_at": "2026-01-02T00:00:00Z", "state": "CHANGES_REQUESTED"},
+                                 {"user": user("bob"), "author_association": "MEMBER", "body": "",
+                                  "submitted_at": "2026-01-04T00:00:00Z", "state": "APPROVED"}]],
+            "issues/7/comments": [[{"user": user("ci[bot]"), "author_association": "COLLABORATOR", "body": "bot"},
+                                   {"user": user("app", "Bot"), "author_association": "MEMBER", "body": "bot too"},
+                                   {"user": user("cat"), "author_association": "COLLABORATOR", "body": "thanks",
+                                    "created_at": "2026-01-01T00:00:00Z"}]],
+        }
+        gh = self.tmp / "gh"
+        out = self.tmp / "gh-out"
+        out.mkdir()
+        calls = self.tmp / "gh-calls"
+        for path, page_list in pages.items():
+            (out / path.replace("/", "_")).write_text("".join(json.dumps(pg) for pg in page_list))
+        gh.write_text(f'#!/bin/sh\necho "$@" >> {calls}\np="${{3#repos/acme/app/}}"; p="${{p%%\\?*}}"\n'
+                      f'cat "{out}/$(echo "$p" | tr / _)"\n')
+        gh.chmod(0o755)
+        with mock.patch.dict(os.environ, {"WONKA_GH": str(gh)}), \
+                mock.patch.object(store, "state", side_effect=AssertionError("took the lock")):
+            code, stdout, err = self.run_cli("pr-comments", "WONKA-00001")
+        self.assertEqual(code, 0, err)
+        rows = [json.loads(x) for x in stdout.strip().splitlines()]
+        self.assertEqual([(r["kind"], r["author"], r["body"]) for r in rows],
+                         [("comment", "cat", "thanks"), ("review", "bob", "looks off"),
+                          ("review_comment", "ann", "rename this")])
+        self.assertEqual(rows[1]["state"], "CHANGES_REQUESTED")
+        self.assertEqual((rows[2]["path"], rows[2]["line"], rows[2]["url"]), ("a.py", 4, "u1"))
+        self.assertEqual(sorted(calls.read_text().splitlines()),
+                         [f"api --paginate repos/acme/app/{p}?per_page=100" for p in sorted(pages)])
+
     def test_metrics_includes_archived_and_filters_by_since(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = str(self._repo())
