@@ -607,7 +607,8 @@ class Factory:
 
     def _pr_feedback(self, tid, since=None):
         """The PR's comments, reviews and inline comments by trusted authors newer than `since`, as markdown
-        bullets, plus how many were skipped because their author is not an owner, member or collaborator."""
+        bullets, plus how many were skipped because their author is not an owner, member or collaborator, plus
+        the newest GitHub timestamp among everything fetched (filtered or not), or None when nothing has one."""
         t = self.ticket(tid)
         num = t["pr_url"].rstrip("/").rsplit("/", 1)[-1]
         view = json.loads(gh("pr", "view", t["pr_url"], "--json", "comments,reviews") or "{}")
@@ -626,11 +627,13 @@ class Factory:
             items.append(((c.get("user") or {}).get("login"), c.get("author_association"), c.get("body"),
                           c.get("created_at"), f" on `{where}`"))
         cutoff = dt.datetime.fromisoformat(since) if since else None
-        kept, skipped = [], 0
+        kept, skipped, newest = [], 0, None
         for who, assoc, text, stamp, kind in items:
+            at = dt.datetime.fromisoformat(stamp) if stamp else None
+            if at and (newest is None or at > newest):
+                newest = at
             if not (text or "").strip():
                 continue
-            at = dt.datetime.fromisoformat(stamp) if stamp else None
             if cutoff and (at is None or at <= cutoff):
                 continue
             if (assoc or "").upper() not in TRUSTED:
@@ -640,19 +643,22 @@ class Factory:
             bullet = "\n".join([f"- **@{who}**{kind}: {first}", *(f"    > {line}".rstrip() for line in rest)])
             kept.append((at or dt.datetime.min.replace(tzinfo=dt.timezone.utc), note.demote(bullet)))
         kept.sort(key=lambda k: k[0])
-        return [b for _, b in kept], skipped
+        return [b for _, b in kept], skipped, newest
 
     def _request_changes(self, tid, notes):
         """The human ticked 🔁 Request changes: write their notes and the PR feedback into the plan, back to baking."""
         t = self.ticket(tid)
-        pr, skipped = self._pr_feedback(tid, t.get("changes_cutoff"))  # fetch first: a gh failure changes nothing
+        pr, skipped, newest = self._pr_feedback(tid, t.get("changes_cutoff"))  # fetch first: a gh failure changes nothing
         if not notes.strip() and not pr:
             self.set_section(tid, "changes", note.CHANGES_BOX)
             self.log_event(tid, "Request changes was ticked, but there were no notes under it and no new PR comments: "
                                 "write what to change, then tick it again")
             return f"{tid}: request changes ticked with nothing to change"
         n = t.get("change_requests", 0) + 1
-        t["change_requests"], t["changes_cutoff"] = n, _iso(now())
+        # GitHub's clock, not ours: the newest stamp this fetch saw, never moving back past the previous cutoff
+        prev = t.get("changes_cutoff")
+        stamps = [s for s in (newest, dt.datetime.fromisoformat(prev) if prev else None) if s]
+        t["change_requests"], t["changes_cutoff"] = n, (_iso(max(stamps)) if stamps else None)
         plan = Path(t["plan"]) if t.get("plan") else None
         if plan and plan.exists():
             head, log = _split_reviews(plan.read_text())

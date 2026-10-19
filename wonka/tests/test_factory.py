@@ -1514,7 +1514,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("baking", "progress"))
         t = self.f_ticket(tid)
         self.assertEqual((t["review_round"], t["change_requests"]), (0, 1))
-        self.assertTrue(t["changes_cutoff"])
+        self.assertEqual(t["changes_cutoff"], "2026-01-01T00:02:00+00:00")  # newest stamp fetched, untrusted or not
         api = Path(f"{self.pr_state}.api").read_text()
         self.assertIn("repos/acme/app/pulls/7/comments", api)
         self.assertIn("--paginate", api)
@@ -1609,6 +1609,53 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("## 🔁 Earlier change request 1", plan)
         self.assertNotRegex(plan, r"(?m)^## 🔁 Change request 1")
         self.assertEqual(self.f_ticket(tid)["change_requests"], 2)
+
+    def test_change_request_cutoff_follows_github_clock_not_local(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        old = {"author": {"login": "alice"}, "authorAssociation": "MEMBER", "body": "old remark",
+               "createdAt": "2026-01-01T00:00:00Z"}
+        self.pr_feedback(comments=[old])
+        ahead = dt.datetime(2099, 1, 1, tzinfo=dt.timezone.utc)  # local clock far ahead of GitHub's
+        with mock.patch.object(factory, "now", lambda: ahead):
+            job = [j for j in self.request_changes(tid)["jobs"] if j["id"] == tid][0]
+        self.assertEqual(self.f_ticket(tid)["changes_cutoff"], "2026-01-01T00:00:00+00:00")
+        self.commit_and_bake(Path(job["worktree"]), "fix.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+        new = {**old, "body": "new remark", "createdAt": "2026-01-01T00:05:00Z"}  # after the fetch, before local now
+        self.pr_feedback(comments=[old, new])
+        self.request_changes(tid)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        second = plan[plan.index("## 🔁 Change request 2"):]
+        self.assertIn("new remark", second)
+        self.assertNotIn("old remark", second)
+        self.assertEqual(self.f_ticket(tid)["changes_cutoff"], "2026-01-01T00:05:00+00:00")
+
+    def test_notes_only_change_request_leaves_no_cutoff(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_feedback()
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertIsNone(self.f_ticket(tid)["changes_cutoff"])
+
+    def test_change_request_cutoff_never_moves_backwards(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f:
+            f.ticket(tid)["changes_cutoff"] = "2026-06-01T00:00:00+00:00"  # an older local-clock cutoff
+        self.pr_feedback(comments=[{"author": {"login": "alice"}, "authorAssociation": "MEMBER",
+                                    "body": "seen long ago", "createdAt": "2026-01-01T00:00:00Z"}])
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertNotIn("seen long ago", self.plan_text(tid))
+        self.assertEqual(self.f_ticket(tid)["changes_cutoff"], "2026-06-01T00:00:00+00:00")
 
     def test_change_request_gets_a_fresh_review_budget(self):
         tid = self.add()
