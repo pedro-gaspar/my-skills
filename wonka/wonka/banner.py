@@ -55,7 +55,7 @@ def _last_why(t):
     return next((h["why"] for h in reversed(t["history"]) if h.get("why")), "")
 
 
-def _story(tid, t, meta, cfg):
+def _story(tid, t, meta, cfg, waiting=(), dead=()):
     """(callout type, headline, what is going on / what to do)"""
     s = (t["last_valid"]["status"], t["last_valid"]["phase"])
     size = meta.get("size") or "?"
@@ -64,6 +64,16 @@ def _story(tid, t, meta, cfg):
         return "warning", "🙋 Your turn: the factory is stuck", (
             "The last jobs for this ticket did not finish (details in `~/.wonka/factory.log`). "
             "Fix the cause, then tick **Retry** in 🎩 Stuck below.")
+    s_blocked = s in (("triage", "ready"), ("drafting", "pending"), ("planned", "pending")) \
+        or (s == ("drafting", "progress") and t.get("resume"))
+    if waiting and s_blocked:
+        if dead:
+            return "warning", f"🙋 Your turn: ⛓️ blocked by {', '.join(dead)}, which is Won't do", (
+                f"{', '.join(f'[[{b}]]' for b in dead)} will never merge, so this ticket would wait forever. "
+                f"Run `wonka unblock {tid} {dead[0]}` (or `wonka unblock {tid}` to clear all), or drag this card to Wont-Do.")
+        return "info", f"⛓️ Blocked by {', '.join(waiting)}", (
+            f"Waits until {', '.join(f'[[{b}]]' for b in waiting)} merge{'s' if len(waiting) == 1 else ''}, "
+            "then moves on as usual. It uses no WIP slot meanwhile.")
     if t.get("conflicts") and s == ("shipped", "progress"):
         return "info", "A fixer Oompa-Loompa is fixing merge conflicts", (
             f"🔧 Rebasing `{t.get('branch')}` onto {t.get('merge_ref')} in `{t.get('worktree')}`. Nothing to do.")
@@ -125,12 +135,12 @@ def _story(tid, t, meta, cfg):
     }[s]
 
 
-def headline(tid, t, meta, cfg):
-    return _story(tid, t, meta, cfg)[1]
+def headline(tid, t, meta, cfg, waiting=(), dead=()):
+    return _story(tid, t, meta, cfg, waiting, dead)[1]
 
 
-def render(tid, t, meta, cfg):
-    kind, headline, text = _story(tid, t, meta, cfg)
+def render(tid, t, meta, cfg, waiting=(), dead=()):
+    kind, headline, text = _story(tid, t, meta, cfg, waiting, dead)
     s = (t["last_valid"]["status"], t["last_valid"]["phase"])
     facts = [f"{' · '.join(machine.label(s))}", f"size **{meta.get('size') or '?'}**", f"`{t['project']}`"]
     if t.get("parent"):

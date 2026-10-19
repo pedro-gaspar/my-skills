@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import cli, factory, mdlint, note, store
+from wonka import cli, factory, machine, mdlint, note, store
 from wonka.factory import Factory
 from wonka.machine import KILLED
 from wonka.store import WonkaError
@@ -102,6 +102,14 @@ class FactoryTest(unittest.TestCase):
     def state(self, tid):
         with self.f() as f:
             return f.state(tid)
+
+    def merge(self, tid):
+        """Mark a ticket merged (shipped/ready) in state and note, as the merge tick would."""
+        with self.f() as f:
+            f.ticket(tid)["last_valid"] = {"status": "shipped", "phase": "ready"}
+            meta, body = f.read(tid)
+            meta["status"], meta["phase"] = machine.label(("shipped", "ready"))
+            f.write(tid, meta, body)
 
     def note(self, tid):
         with self.f() as f:
@@ -1788,6 +1796,138 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(len(entries), 4)
         self.assertTrue(all(h["by"] == "human" for h in entries))
 
+    def jobs_for(self, result, tid):
+        return [j for j in result["jobs"] if j["id"] == tid]
+
+    def test_blocked_ready_ticket_is_not_drafted_until_blocker_merges(self):
+        a = self.add()
+        b = self.add(blocked_by=[a])
+        self.tick()
+        with self.f() as f:
+            f.triage(a, "m")
+            f.triage(b, "s")
+        r = self.tick()
+        self.assertEqual(self.state(b), ("triage", "ready"))
+        self.assertEqual(self.jobs_for(r, b), [])
+        self.assertIn("⛓️ Blocked by WONKA-00001", self.note(b)[1])
+        self.merge(a)
+        r = self.tick()
+        self.assertEqual(self.state(b), ("drafting", "progress"))
+        self.assertEqual([j["job"] for j in self.jobs_for(r, b)], ["draft"])
+        self.assertTrue([e for e in r["events"] if "⛓️ unblocked" in e])
+        self.tick()
+        unblocked = [h for h in self.f_ticket(b)["history"] if h.get("why") == "Unblocked: WONKA-00001 merged"]
+        self.assertEqual(len(unblocked), 1)
+
+    def test_blocked_planned_ticket_is_not_baked(self):
+        a, t = self.add(), self.add()
+        self.to_planned(t)
+        with self.f() as f:
+            f.block(t, [a])
+        self.tick()
+        self.assertEqual(self.state(t), ("planned", "pending"))
+        self.merge(a)
+        self.tick()
+        self.assertEqual(self.state(t), ("baking", "progress"))
+
+    def test_blocked_drafting_ticket_gets_no_analyst(self):
+        a, t = self.add(), self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(a, "m")
+            f.triage(t, "s")
+        with self.f() as f:
+            f.move(t, ("drafting", "pending"), "wonka")
+            f.block(t, [a])
+        r = self.tick()
+        self.assertEqual(self.jobs_for(r, t), [])
+        self.assertEqual(self.state(t), ("drafting", "pending"))
+        with self.f() as f:
+            tk = f.ticket(t)
+            tk["last_valid"] = {"status": "drafting", "phase": "progress"}
+            tk["resume"] = True
+        r = self.tick()
+        self.assertEqual(self.jobs_for(r, t), [])
+
+    def test_blocked_ticket_uses_no_wip_slot(self):
+        a = self.add()
+        b = self.add(blocked_by=[a])
+        c = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(a, "m")
+            f.triage(b, "s")
+            f.triage(c, "s")
+        r = self.tick()
+        self.assertEqual([j["job"] for j in self.jobs_for(r, c)], ["draft"])
+        self.assertEqual(self.state(b), ("triage", "ready"))
+
+    def test_blocked_drafting_pending_ticket_does_not_count(self):
+        a = self.add()
+        b = self.add(blocked_by=[a])
+        c = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(a, "m")
+            f.triage(b, "s")
+            f.triage(c, "s")
+            f.move(b, ("drafting", "pending"), "wonka")
+        self.tick()
+        self.assertEqual(self.state(b), ("drafting", "pending"))
+        self.assertEqual(self.state(c), ("drafting", "progress"))
+
+    def test_wontdo_blocker_needs_a_human_once(self):
+        a = self.add()
+        b = self.add(blocked_by=[a])
+        self.tick()
+        with self.f() as f:
+            f.triage(b, "s")
+            f.move(a, KILLED, "human")
+        event = f"{b}: ⛓️ blocked by {a}, which is Won't do: needs a human (wonka unblock {b} {a}, or kill it)"
+        with mock.patch.object(factory, "notify") as notify:
+            r1 = self.tick()
+            self.assertIn(event, r1["events"])
+            self.assertIn(b, r1["awaiting_human"])
+            body = self.note(b)[1]
+            self.assertIn("> [!warning]", body)
+            self.assertIn("Won't do", body)
+            self.assertEqual(notify.call_count, 1)
+            self.assertEqual(notify.call_args[0][0], b)
+            r2 = self.tick()
+            self.assertNotIn(event, r2["events"])
+            self.assertEqual(notify.call_count, 1)
+        self.assertIn(b, r2["awaiting_human"])
+        self.assertEqual(self.state(b), ("triage", "ready"))
+        self.assertEqual(len([h for h in self.f_ticket(b)["history"] if h.get("why") == event.split(": ", 1)[1]]), 1)
+        with self.f() as f:
+            f.unblock(b, [a])
+        self.tick()
+        self.assertEqual(self.state(b), ("drafting", "progress"))
+        t = self.f_ticket(b)
+        self.assertNotIn("dead_reported", t)
+        self.assertNotIn("waiting_seen", t)
+
+    def test_triage_still_runs_for_blocked_ticket(self):
+        a = self.add()
+        b = self.add(blocked_by=[a])
+        r = self.tick()
+        self.assertEqual([j["job"] for j in self.jobs_for(r, b)], ["triage"])
+        self.assertEqual([j["job"] for j in self.jobs_for(r, a)], ["triage"])
+
+    def test_banner_follows_unfinished_blockers(self):
+        a, b = self.add(), self.add()
+        c = self.add(blocked_by=[a, b])
+        self.tick()
+        with self.f() as f:
+            f.triage(c, "s")
+        self.tick()
+        self.assertIn("> [!info] ⛓️ Blocked by WONKA-00001, WONKA-00002", self.note(c)[1])
+        self.merge(a)
+        self.tick()
+        self.assertIn("> [!info] ⛓️ Blocked by WONKA-00002\n", self.note(c)[1])
+        self.assertEqual(self.state(c), ("triage", "ready"))
+        self.assertFalse([h for h in self.f_ticket(c)["history"] if h.get("why", "").startswith("Unblocked")])
+
     def test_block_refuses_self_unknown_wontdo_and_cycles(self):
         a, b, c, k = self.add(), self.add(), self.add(), self.add()
         with self.f() as f:
@@ -1812,6 +1952,7 @@ class FactoryTest(unittest.TestCase):
         self.to_planned(t)
         with self.f() as f:
             f.block(t, [a])
+        self.merge(a)
         self.tick()
         self.assertEqual(self.state(t), ("baking", "progress"))
         for fn in ("block", "unblock"):
