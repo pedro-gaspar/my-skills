@@ -1442,6 +1442,40 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((wt / "hello.sh").exists())
         self.assertTrue(any(str(h.get("why", "")).startswith("Worktree folder was gone") for h in self.history(tid)))
 
+    def test_kept_worktree_replaced_by_a_file_frees_the_branch(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        shutil.rmtree(wt)
+        wt.write_text("stray\n")
+        events = self.tick()["events"]
+        self.assertIsNone(self.f_ticket(tid)["worktree"])
+        self.assertNotIn("cleanup", self.f_ticket(tid))
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        self.assertNotIn(str(wt), sh("git", "worktree", "list", cwd=self.repo))
+        self.assertIn(f"{tid}: cleaned up the kept worktree and branch", events)
+        self.assertTrue(wt.is_file())
+
+    def test_live_worktree_replaced_by_a_file_is_not_used(self):
+        tid = self.add()
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        shutil.rmtree(wt)
+        wt.write_text("not a dir\n")
+        out = self.tick()
+        self.assertFalse([j for j in out["jobs"] if j["id"] == tid])
+        self.assertTrue(any(e.startswith(f"{tid}: ⚠️") for e in out["events"]))
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        self.assertFalse(any(str(h.get("why", "")).startswith("Worktree folder was gone") for h in self.history(tid)))
+        wt.unlink()
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        self.assertTrue(Path(job["worktree"]).is_dir())
+        self.assertTrue((wt / "hello.sh").exists())
+        gone = [h for h in self.history(tid) if str(h.get("why", "")).startswith("Worktree folder was gone")]
+        self.assertEqual(len(gone), 1)
+
     def test_killed_ticket_kept_worktree_cleanup_keeps_branch(self):
         tid = self.add()
         wt, branch = self.kept_after(tid, "CLOSED")
