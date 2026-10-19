@@ -128,11 +128,22 @@ def open_prefixes(cfg, project=None):
 
 
 def check(argv, allowed, project):
-    """Only a command that starts with one of the project's configured prefixes (whole tokens) may run."""
+    """Only a command that starts with one of the project's configured prefixes (whole tokens) may run, and never
+    through an open prefix (bash, python3 -c): that would run anything outside the sandbox, so it is refused here
+    as well as warned about by wonka config and the doctor, in case it was set by hand."""
+    refused = None
     for p in allowed:
-        tokens = shlex.split(p)
+        try:
+            tokens = shlex.split(p)
+        except ValueError:
+            continue
         if tokens and argv[:len(tokens)] == tokens:
-            return
+            if not _open(tokens):
+                return
+            refused = p
+    if refused is not None:
+        raise WonkaError(f"test_commands.{project} {refused!r} {OPEN_WARNING}; refusing to run it. "
+                         f"A human pins it with wonka config test_commands.{project} <command>")
     if not allowed:
         raise WonkaError(f"{project} has no test commands: a human adds them with "
                          f"wonka config test_commands.{project} ./test.sh")

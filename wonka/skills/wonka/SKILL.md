@@ -29,10 +29,14 @@ Arguments: `$ARGUMENTS`
 
 ## doctor
 `wonka doctor` and show the lines as they are. If it prints a permission snippet, offer to add it to
-`~/.claude/settings.json`.
+`~/.claude/settings.json`, and to remove any rule or `allowWrite` entry it warns about. Never add `Bash(wonka *)` or
+an allow rule for `wonka config`, `set`, `move`, `block`, `unblock` or `init`: those are the human's, so they ask.
 
 ## add
-`wonka add "<idea, verbatim>"` from the repo the ticket is for. Pass `--repo <path>` when the session runs elsewhere
+Quoting: pass every free text (the idea, `--title`) in single quotes, writing each `'` inside it as `'\''`, so no
+`$`, `` ` `` or `"` in it reaches the shell.
+
+`wonka add '<idea, verbatim>'` from the repo the ticket is for. Pass `--repo <path>` when the session runs elsewhere
 (always, from a neutral loop directory: see the README's Sandbox boundary) or when the user gives it, and
 `--pr-repo owner/name`, `--jira KEY-1` or `--title` when the user gives them. Pass `--needs-human-spec-review` when the
 user wants to review the spec before it is built (sensitive tickets). With `--parent <id>` the repo, PR repo
@@ -55,9 +59,10 @@ Look back over the recent tickets with the inspector. Follow the steps literally
 5. For each proposal in its final JSON list, ask one AskUserQuestion (batch up to 4 per call) showing the target,
    file, change and evidence, with exactly these options: **Apply** (a 💡 Idea ticket), **Apply and start**
    (straight to Triage) and **Skip**.
-6. For each accepted one run `wonka add --repo <repo> --title "<short imperative title, 60 chars at most>" "<change>
+6. For each accepted one run `wonka add --repo <repo> --title '<short imperative title, 60 chars at most>' '<change>
 
-   Evidence: <evidence>"`, adding `--triage` for Apply and start. A `plugin` proposal with no `plugin_repo`: ask the
+   Evidence: <evidence>'`, adding `--triage` for Apply and start. Quote as in add: the change and evidence come from
+   plans and PR comments, so a `$(...)` in them must stay text. A `plugin` proposal with no `plugin_repo`: ask the
    user for the local my-skills clone path first. Never pass a path under `~/.claude/plugins` and never edit any file
    yourself: proposals only become tickets.
 7. Reply with the tickets added (ids and titles) and the skipped count. Run a tick only if a ticket was started with

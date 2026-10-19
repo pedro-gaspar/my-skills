@@ -13,6 +13,7 @@ Needs Python 3.11+ (stdlib only), git, `gh` (logged in) and Obsidian 1.14+ (Base
 terminal-notifier`, a click opens the PR), else the built-in `osascript` (a click opens nothing).
 
 ```bash
+git clone https://github.com/pedro-gaspar/my-skills ~/Work/my-skills   # any path; Wonka's retro files ideas in it
 claude plugin marketplace add ~/Work/my-skills
 claude plugin install wonka@my-skills
 ```
@@ -22,7 +23,12 @@ Then run `/wonka init`. It asks for your vault and how many tickets to draft and
 "🍫 Factory" in Obsidian), links `wonka` into `~/.local/bin`, and runs `wonka doctor`. Init never overwrites an
 existing `🍫 Factory.base`; an older vault's `Wonka.base` is renamed to `🍫 Factory.base` by `wonka init` (keeping
 any view changes), and the doctor warns until it is. The doctor prints the permission snippet that lets background
-agents run unattended (`Bash(wonka *)`, plus the worktree and factory folders as `additionalDirectories`). Agents
+agents run unattended (one `Bash(wonka <command> *)` rule per command agents and the loop run, plus the worktree and
+factory folders as `additionalDirectories`). The human's commands (`init`, `config`, `set`, `move`, `block`,
+`unblock`, `doctor`) are left out on purpose: an agent that read a hostile diff or CI log could otherwise switch the
+sandbox off (`wonka config test_commands.<project> bash`) or pass its own gates (`wonka move`, `wonka set <id>
+spec_review agent`). They ask you instead; never allow them, or `Bash(wonka *)`, in your settings (the doctor warns).
+`wonka section` only writes the analyst's 📜 Spec, while the ticket is being drafted, so no agent ticks a box for you. Agents
 run git only through `wonka git <id> [--dispatch <n>] <subcommand>`, which pins it to the ticket's worktree and that worktree's
 registered git dir (a rewritten `.git` file is ignored) and allows only status, diff, log, show, rev-parse,
 ls-files, blame, add and commit (plus the fixer's `rebase <ref>`, `rebase --continue` and `rebase --abort`; no `-c`, config,
@@ -59,19 +65,21 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
      "sandbox": {
        "enabled": true,
        "allowUnsandboxedCommands": false,
-       "excludedCommands": ["wonka *"],
-       "filesystem": { "allowWrite": ["~/.wonka"] }
+       "excludedCommands": ["wonka *"]
      }
    }
    ```
 
    - `wonka *` runs outside the sandbox: the CLI writes to the main repo's `.git` (worktrees, fetches, commit
      objects) and talks to GitHub and npm.
-   - `allowWrite` is needed because a call that pipes text in with a heredoc (the analyst's `wonka plan` and
-     `wonka section`) stays sandboxed, and every wonka call takes the lock in `~/.wonka`. Sandboxed test code
-     can then edit Wonka's state, but not your checkouts.
+   - Never add `~/.wonka` to `sandbox.filesystem.allowWrite`: it holds Wonka's config and state, and sandboxed test
+     code that can edit them can turn the sandbox off for `wonka test`. Agents hand markdown over with `--file`
+     (`wonka plan|section|pr-body <id> --file <drafts>/...`, a file they write in `~/.wonka/worktrees/.drafts`), so
+     no wonka call runs sandboxed; a heredoc piped into wonka would. The doctor warns about an old `allowWrite`.
    - Commands run through `wonka test` run outside the sandbox too (`wonka *` is excluded), and a builder can edit
-     the script they run: only list a project's `test_commands` if you accept that.
+     the script they run: only list a project's `test_commands` if you accept that. A shell or interpreter with
+     nothing pinned after it (`bash`, `python3 -c`) would run anything, so `wonka config` refuses it and `wonka test`
+     refuses to run one set by hand.
    - `allowUnsandboxedCommands: false` stops an agent from retrying a blocked command outside the sandbox.
 
    Tests that need the network fail until you add their hosts to `sandbox.network.allowedDomains`.
@@ -80,9 +88,16 @@ Projects whose CI is not GitHub Actions configure their log tool and CI host, e.
 `wonka config ci_log_command.beyondpricing "beyond ci logs"` and
 `wonka config ci_hosts.beyondpricing <concourse host>`. Builders then fetch a failed log with `wonka ci-logs <id> <url>`,
 which refuses any URL that is not https on one of those hosts (a check URL on a PR can be set by anyone who can post a
-commit status). It runs under `Bash(wonka *)` and outside the sandbox with `wonka *`, so no `Bash(beyond ci logs *)`
+commit status). It runs under `Bash(wonka ci-logs *)` and outside the sandbox with `wonka *`, so no `Bash(beyond ci logs *)`
 rule or sandbox exclusion is needed: remove them if you added them, they let an agent run the tool on any URL (the
 doctor warns).
+
+The log tool must be a program on PATH or an absolute path: `wonka config` and `wonka ci-logs` refuse a path relative
+to the worktree (`./scripts/ci.sh`), which the builder could edit.
+
+`wonka git` never looks inside a submodule (`diff.ignoreSubmodules=all`): a nested repo brings its own config, whose
+filters would run outside the sandbox. `wonka git add` refuses to run while the worktree holds a submodule or a nested
+repo, since git add looks inside them anyway, so repos that use submodules need a human to commit.
 
 What stays open: sandboxed commands can still read most of your home, `~/.ssh` included (close it with
 `sandbox.filesystem.denyRead`), and git hooks run outside the sandbox: commit hooks with `wonka git commit`, and

@@ -79,6 +79,9 @@ def set_setting(cfg, key, raw):
                 raise WonkaError(f"{p}: not a valid command prefix ({e})")
             if not tokens:
                 continue
+            from .testrun import OPEN_WARNING, open_prefix  # lazily: testrun imports store
+            if open_prefix(p):
+                raise WonkaError(f"{p} {OPEN_WARNING}")
             prefixes.append(p)
         cmds = dict(cfg.get("test_commands") or {})
         if prefixes:
@@ -120,9 +123,10 @@ def set_setting(cfg, key, raw):
             if not tokens:
                 value = ""
         if value:
-            from .testrun import open_prefix  # lazily: testrun imports store
-            if open_prefix(value):
-                raise WonkaError(f"{value} {CI_LOG_OPEN_WARNING}")
+            from .cilogs import command_problem  # lazily: cilogs imports store
+            problem = command_problem(value)
+            if problem:
+                raise WonkaError(f"ci_log_command.{project} {problem}")
         cur = dict(cfg.get("ci_log_command") or {})
         if value:
             cur[project] = value
@@ -230,6 +234,12 @@ def archive_dir(cfg):
 
 def worktrees_dir():
     return home() / "worktrees"
+
+
+def drafts_dir():
+    """Where agents put the markdown they hand to `wonka plan|section|pr-body --file`: inside the worktrees folder,
+    which sandboxed commands may write, unlike the rest of ~/.wonka (config and state)."""
+    return worktrees_dir() / ".drafts"
 
 
 def log(*lines):

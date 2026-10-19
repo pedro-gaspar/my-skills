@@ -105,17 +105,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "/etc/passwd")[0], 1)
         self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "../x")[0], 1)
 
-    def test_config_warns_on_open_test_prefix(self):
+    def test_config_refuses_open_test_prefix(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         cfg_file = self.tmp / "home/config.json"
         code, _, err = self.run_cli("config", "test_commands.app", "python3 -c, ./test.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("python3 -c lets an agent run any program", err)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {})
+        code, _, err = self.run_cli("config", "test_commands.app", "python3 -m pytest, ./test.sh")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"app": ["python3 -c", "./test.sh"]})
-        self.assertIn("test_commands.app: 'python3 -c'", err)
-        self.assertNotIn("'./test.sh'", err)
-        code, _, err = self.run_cli("config", "test_commands.app", "python3 -m pytest")
-        self.assertEqual(code, 0)
-        self.assertNotIn("test_commands", err)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"app": ["python3 -m pytest", "./test.sh"]})
 
     def test_config_ci_hosts_and_log_command(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
@@ -133,7 +132,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("config", "ci_hosts.", "x")[0], 1)
         self.assertEqual(self.run_cli("config", "ci_log_command.app", "beyond ci logs")[0], 0)
         self.assertEqual(json.loads(cfg_file.read_text())["ci_log_command"], {"app": "beyond ci logs"})
-        for bad in ["bash", "python3 -c", "env", '"oops']:
+        for bad in ["bash", "python3 -c", "env", '"oops', "./scripts/ci.sh"]:
             with self.subTest(bad=bad):
                 self.assertEqual(self.run_cli("config", "ci_log_command.app", bad)[0], 1)
         self.assertEqual(self.run_cli("config", "ci_log_command.app", "")[0], 0)
@@ -260,6 +259,33 @@ class CliTest(unittest.TestCase):
             self.assertEqual(cli.parser().parse_args(argv + ["--dispatch", "3"]).dispatch, 3, argv)
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit, msg=argv):
                 cli.parser().parse_args(argv)
+
+    def test_section_takes_only_the_spec(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parser().parse_args(["section", "WONKA-00001", "approval", "--dispatch", "1"])
+        self.assertEqual(cli.parser().parse_args(["section", "WONKA-00001", "spec", "--dispatch", "1"]).key, "spec")
+
+    def test_markdown_comes_from_file_or_stdin(self):
+        path = self.tmp / "spec.md"
+        path.write_text("# from a file\n")
+        a = cli.parser().parse_args(["plan", "WONKA-00001", "--file", str(path), "--dispatch", "1"])
+        self.assertEqual(cli._text(a), "# from a file\n")
+        a = cli.parser().parse_args(["pr-body", "WONKA-00001", "--dispatch", "1"])
+        with mock.patch("sys.stdin", io.StringIO("# from stdin\n")):
+            self.assertEqual(cli._text(a), "# from stdin\n")
+        a = cli.parser().parse_args(["section", "WONKA-00001", "spec", "--file", str(self.tmp / "nope.md"),
+                                     "--dispatch", "1"])
+        with self.assertRaisesRegex(store.WonkaError, "cannot read --file"):
+            cli._text(a)
+
+    def test_agent_docs_hand_markdown_over_with_a_file(self):
+        """A heredoc into wonka keeps the call sandboxed, where it cannot write ~/.wonka: agents use --file."""
+        root = Path(cli.__file__).resolve().parent.parent / "agents"
+        for p in root.glob("*.md"):
+            for ln in p.read_text().splitlines():
+                if re.search(r"wonka (plan|section|pr-body) <id>", ln):
+                    self.assertIn("--file", ln, p.name)
+                    self.assertNotIn("<<", ln, p.name)
 
     def test_agent_docs_pass_the_dispatch(self):
         root = Path(cli.__file__).resolve().parent.parent

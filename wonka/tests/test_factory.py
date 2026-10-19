@@ -1610,6 +1610,27 @@ class FactoryTest(unittest.TestCase):
             self.assertIsNone(f.drafted(tid, "s", ["architect"], d3))
         self.assertEqual(self.state(tid), ("planned", "pending"))
 
+    def test_agents_write_only_the_spec_while_drafting(self):
+        """`wonka section` is the analyst's spec, never a gate: an agent cannot tick Approve for itself."""
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "expected 🧪-Drafting"):
+                f.write_spec(tid, "early spec", 1)
+            f.triage(tid, "m")
+        self.assertEqual(self.state(tid), ("triage", "awaiting"))
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "expected 🧪-Drafting"):
+                f.write_spec(tid, "- [x] Approve", f.ticket(tid)["dispatch"])
+        self.assertNotIn("[x] Approve", self.note(tid)[1])
+        self.edit_note(tid, lambda s: s.replace("- [ ] Approve", "- [x] Approve"))
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(Path(job["drafts"]), store.drafts_dir())
+        self.assertTrue(store.drafts_dir().is_dir())
+        with self.f() as f:
+            self.assertIsNone(f.write_spec(tid, "Add hello.sh", job["dispatch"]))
+        self.assertIn("Add hello.sh", self.note(tid)[1])
+
     def test_late_analyst_writes_from_an_earlier_dispatch_are_ignored(self):
         tid = self.add()
         self.tick()
