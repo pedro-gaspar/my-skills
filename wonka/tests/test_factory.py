@@ -3461,17 +3461,139 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.f_ticket(tid)["stats"]["ci_rounds"], 1)
         self.assertIn("ci_fixes", self.f_ticket(tid))
 
-    def test_ci_fix_rounds_stop_after_max(self):
-        tid = self.add()
+    def ci_stuck(self, tid, head="c" * 40):
+        """Put an awaiting-merge ticket at the CI fix cap and tick once on a red head."""
         self.to_awaiting_merge(tid)
         with self.f() as f:
             f.ticket(tid)["ci_fixes"] = factory.MAX_CI_FIXES
-        self.red_round(tid, head="c" * 40)
+        return self.red_round(tid, head=head)
+
+    def stuck_section(self, tid):
+        return note.get_section(self.note(tid)[1], "stuck")
+
+    def test_ci_fix_rounds_stop_after_max(self):
+        tid = self.add()
+        tick = self.ci_stuck(tid)
+        self.assertIn(f"{tid}: stuck, CI still red after {factory.MAX_CI_FIXES} CI fix rounds", tick["events"])
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
-        self.assertEqual(self.f_ticket(tid)["ci_handled_sha"], "c" * 40)
-        self.assertIn("not starting another", (store.home() / "factory.log").read_text())
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"] and t["ci_stuck"])
+        self.assertEqual(t["ci_handled_sha"], "c" * 40)
+        self.assertFalse([j for j in tick["jobs"] if j["id"] == tid and j["job"] == "bake"])
+        sec = self.stuck_section(tid)
+        self.assertIn("- [ ] Retry", sec)
+        self.assertIn("CI still red after 3 fix rounds: wf / build, fix by hand then tick Retry", sec)
+
+    def test_fourth_red_head_goes_stuck(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        for ch in "abc":
+            job = [j for j in self.red_round(tid, head=ch * 40)["jobs"] if j["id"] == tid][0]
+            self.commit_and_bake(Path(job["worktree"]), f"fix{ch}.sh")
+            with self.f() as f:
+                f.baked(tid)
+            self.review(tid, architect={"verdict": "good nut"})
+            self.tick()
+            self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(self.f_ticket(tid)["ci_fixes"], 3)
+        self.red_round(tid, head="d" * 40)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertTrue(self.f_ticket(tid)["ci_stuck"])
+        self.assertNotIn("## 🔴 CI failure 4", self.plan_text(tid))
+
+    def test_ci_stuck_survives_the_next_tick(self):
+        tid = self.add()
+        self.ci_stuck(tid)
+        for head in ("c" * 40, "e" * 40):
+            tick = self.red_round(tid, head=head)
+            self.assertNotIn(f"{tid}: stuck, CI still red after {factory.MAX_CI_FIXES} CI fix rounds", tick["events"])
+            t = self.f_ticket(tid)
+            self.assertTrue(t["stuck"] and t["ci_stuck"])
+            self.assertIn("- [ ] Retry", self.stuck_section(tid))
+        whys = [h.get("why", "") for h in self.history(tid)]
+        self.assertFalse([w for w in whys if "mergeable again" in w])
+        log = (store.home() / "factory.log").read_text()
+        self.assertEqual(log.count("stuck, needs a human"), 1)
+        self.assertNotIn("mergeable again: unstuck", log)
+
+    def test_green_head_resets_ci_fixes_and_unsticks(self):
+        tid = self.add()
+        self.ci_stuck(tid)
+        self.red_round(tid, head="d" * 40, items=[self.check_run(conclusion="SUCCESS")])
+        t = self.f_ticket(tid)
+        self.assertFalse({"ci_fixes", "ci_stuck", "stuck"} & set(t))
+        self.assertIsNone(self.stuck_section(tid))
+        self.assertIn("CI is green again: unstuck", (store.home() / "factory.log").read_text())
+
+    def test_green_head_drops_a_partial_ci_fixes_count(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f:
+            f.ticket(tid)["ci_fixes"] = 2
         self.red_round(tid, head="d" * 40, items=[self.check_run(conclusion="SUCCESS")])
         self.assertNotIn("ci_fixes", self.f_ticket(tid))
+
+    def test_retry_after_ci_stuck_grants_new_rounds(self):
+        tid = self.add()
+        self.ci_stuck(tid)
+        self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
+        tick = self.tick()
+        self.assertIn(f"{tid}: unstuck by a human", tick["events"])
+        t = self.f_ticket(tid)
+        self.assertFalse({"ci_fixes", "ci_stuck", "ci_handled_sha", "stuck"} & set(t))
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_merge_clears_ci_fixes(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f:
+            f.ticket(tid)["ci_fixes"] = 2
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertFalse({"ci_fixes", "ci_stuck"} & set(self.f_ticket(tid)))
+
+    def test_merge_clears_a_ci_stuck(self):
+        tid = self.add()
+        self.ci_stuck(tid)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertFalse({"ci_fixes", "ci_stuck", "stuck"} & set(self.f_ticket(tid)))
+        self.assertIsNone(self.stuck_section(tid))
+
+    def test_kill_clears_ci_fixes(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        with self.f() as f:
+            f.ticket(tid)["ci_fixes"] = 2
+        self.pr_state.write_text("CLOSED")
+        self.tick()
+        self.assertEqual(self.state(tid), factory.KILLED)
+        self.assertNotIn("ci_fixes", self.f_ticket(tid))
+
+    def test_ci_stuck_reason_fits(self):
+        red = lambda *names: [{"name": n, "result": "FAILURE", "url": ""} for n in names]
+        self.assertEqual(factory._ci_stuck_reason(3, red("wf / build")),
+                         "CI still red after 3 fix rounds: wf / build, fix by hand then tick Retry")
+        many = factory._ci_stuck_reason(3, red(*(f"workflow-{i} / some-long-job-name-{i}" for i in range(30))))
+        self.assertLessEqual(len(many), factory._REASON_MAX)
+        self.assertTrue(many.endswith("fix by hand then tick Retry"))
+        self.assertIn(" more", many)
+        one = factory._ci_stuck_reason(3, red("x" * 300))
+        self.assertLessEqual(len(one), factory._REASON_MAX)
+        self.assertIn("1 checks", one)
+        self.assertTrue(one.endswith("fix by hand then tick Retry"))
+
+    def test_change_request_on_a_ci_stuck_ticket_unsticks(self):
+        tid = self.add()
+        self.ci_stuck(tid)
+        self.request_changes(tid, "fix it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        t = self.f_ticket(tid)
+        self.assertFalse({"stuck", "ci_stuck"} & set(t))
+        self.assertEqual(t["ci_fixes"], 3)
 
     def test_merged_pr_ignores_red_ci(self):
         tid = self.add()
