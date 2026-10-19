@@ -256,6 +256,38 @@ class CliTest(unittest.TestCase):
             "suggest": "draft", "why": "the spec missed the API",
             "followups": [{"title": "Cache lookups", "idea": "memoise the user lookup"}]})
 
+    def test_bad_stdin_json_shapes_are_clean_errors(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        cases = [
+            (("ask", "WONKA-00001", "--stdin"), {"q": "x"}, "stdin must be a JSON list of questions"),
+            (("ask", "WONKA-00001", "--stdin"), [{"options": ["a"]}], 'stdin[1] needs a "q"'),
+            (("ask", "WONKA-00001", "--stdin"), [{"q": "x", "options": "ab"}], "stdin[1].options must be a list"),
+            (("ask", "WONKA-00001", "--stdin"), [{"q": "x", "recommended": "0"}], "stdin[1].recommended"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), ["good nut"],
+             "the report must be a JSON object"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"issues": "a.py: bad"},
+             "issues must be a list of strings"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"followups": [{"title": "T"}]},
+             'followups[1] needs an "idea"'),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"followups": {"idea": "x"}},
+             "followups must be a list"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"questions": [1]},
+             'questions[1] needs a "q"'),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"suggest": "ship"},
+             "suggest must be close or draft"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"why": None}, "why must be a string"),
+        ]
+        for argv, data, msg in cases:
+            with self.subTest(data=data), mock.patch.object(cli.sys, "stdin", io.StringIO(json.dumps(data))):
+                code, _, err = self.run_cli(*argv, "--dispatch", "1")
+                self.assertEqual(code, 1)
+                self.assertIn(msg, err)
+                self.assertNotIn("Traceback", err)
+        code, _, err = self.run_cli("report", "WONKA-00001", "--squirrel", "architect", "--verdict", "bad",
+                                    "--followup", " :: ", "--dispatch", "1")
+        self.assertEqual(code, 1)
+        self.assertIn('followups[1] needs an "idea"', err)
+
     def test_baked_takes_flaky(self):
         a = cli.parser().parse_args(["baked", "WONKA-00001", "--dispatch", "3", "--flaky", "runner lost"])
         self.assertEqual(a.flaky, "runner lost")

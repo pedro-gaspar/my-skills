@@ -2866,6 +2866,15 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!"), body)
         self.assertEqual(body.count("> [!"), 2, "one banner, one log")
 
+    def test_a_report_from_a_squirrel_not_reviewing_the_ticket_is_refused(self):
+        tid = self.add()
+        self.to_planned(tid, reviewers=("architect",))
+        self.bake(tid)
+        with self.assertRaisesRegex(WonkaError, f"squirrel-security is not reviewing {tid}; its squirrels: architect"):
+            self.review(tid, security={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        self.assertEqual(self.f_ticket(tid)["reports"], {})
+
     def test_an_empty_idea_is_refused(self):
         for idea in ("", "  \n\t"):
             with self.subTest(idea=idea), self.assertRaisesRegex(WonkaError, "the idea is empty"):

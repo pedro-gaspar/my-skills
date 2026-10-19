@@ -1369,6 +1369,9 @@ class Factory:
                     f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
         self.expect(tid, ("reviewing", "progress"))
         t = self.ticket(tid)
+        if reviewer not in (t["reviewers"] or ["architect"]):
+            raise WonkaError(f"squirrel-{reviewer} is not reviewing {tid}; its squirrels: "
+                             f"{', '.join(t['reviewers'] or ['architect'])}")
         t.setdefault("reports", {})[reviewer] = rep
         missing = [r for r in t["reviewers"] if r not in t["reports"]]
         if missing:
