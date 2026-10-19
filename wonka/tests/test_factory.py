@@ -2000,8 +2000,8 @@ class FactoryTest(unittest.TestCase):
         sh("git", "commit", "-qm", f"upstream {filename}", cwd=self.repo)
         sh("git", "push", "-q", "origin", "main", cwd=self.repo)
 
-    def fixer_job(self, tid):
-        self.pr_state.write_text("OPEN CONFLICTING")
+    def fixer_job(self, tid, pr_state="OPEN CONFLICTING"):
+        self.pr_state.write_text(pr_state)
         tick = self.tick()
         self.assertIn(f"{tid}: PR has merge conflicts", tick["events"])
         jobs = [j for j in tick["jobs"] if j["id"] == tid]
@@ -2036,6 +2036,7 @@ class FactoryTest(unittest.TestCase):
         t = self.f_ticket(tid)
         self.assertNotIn("conflicts", t)
         self.assertNotIn("merge_ref", t)
+        self.assertEqual(t["conflict_fixes"], 1)
         self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
@@ -2323,6 +2324,93 @@ class FactoryTest(unittest.TestCase):
         (wt / "suggestion.txt").write_text("a local draft\n")
         self.fixer_job(tid)
         self.assertEqual((wt / "suggestion.txt").read_text(), "committed on GitHub\n")
+
+    def fix_cycle(self, tid, wt, n):
+        """One full conflict fix: a fixer is dispatched, merges a clean upstream change and pushes."""
+        self.upstream_change(f"upstream{n}.txt", f"upstream {n}\n")
+        job = self.fixer_job(tid)
+        sh("git", "merge", "-q", "--no-edit", job["base_ref"], cwd=wt)
+        with self.f() as f:
+            f.resolved(tid)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def to_conflict_stuck(self, tid):
+        wt, _ = self.to_awaiting_merge(tid)
+        for n in range(factory.MAX_CONFLICT_FIXES):
+            self.fix_cycle(tid, wt, n)
+        self.assertEqual(self.f_ticket(tid)["conflict_fixes"], factory.MAX_CONFLICT_FIXES)
+        tick = self.tick()  # GitHub still says CONFLICTING
+        self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+        self.assertIn(f"{tid}: stuck, PR still conflicting after {factory.MAX_CONFLICT_FIXES} conflict fixes",
+                      tick["events"])
+        return wt
+
+    def test_pr_still_conflicting_after_max_fixes_goes_stuck(self):
+        tid = self.add()
+        self.to_conflict_stuck(tid)
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"])
+        self.assertNotIn("conflicts", t)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        stuck = note.get_section(self.note(tid)[1], "stuck")
+        self.assertIn("still reports the PR as conflicting with `main`", stuck)
+        self.assertIn("- [ ] Retry", stuck)
+        tick = self.tick()
+        self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+        self.assertFalse(any(e.startswith(f"{tid}: stuck") for e in tick["events"]), tick["events"])
+        events = [h for h in self.history(tid) if "still conflicting" in h.get("why", "")]
+        self.assertEqual(len(events), 1)
+
+    def test_retry_after_conflict_stuck_grants_new_fixes(self):
+        tid = self.add()
+        self.to_conflict_stuck(tid)
+        self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
+        self.assertIn(f"{tid}: unstuck by a human", self.tick()["events"])
+        t = self.f_ticket(tid)
+        self.assertNotIn("stuck", t)
+        self.assertNotIn("conflict_fixes", t)
+        self.assertEqual(self.fixer_job(tid)["job"], "conflicts")
+
+    def test_mergeable_resets_conflict_fixes(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        for n in range(2):
+            self.fix_cycle(tid, wt, n)
+        self.assertEqual(self.f_ticket(tid)["conflict_fixes"], 2)
+        self.pr_state.write_text("OPEN MERGEABLE")
+        self.tick()
+        self.assertNotIn("conflict_fixes", self.f_ticket(tid))
+        for n in range(2, 2 + factory.MAX_CONFLICT_FIXES):
+            self.fix_cycle(tid, wt, n)
+        self.assertNotIn("stuck", self.f_ticket(tid))
+
+    def test_mergeable_unsticks_a_conflict_stuck_ticket(self):
+        tid = self.add()
+        self.to_conflict_stuck(tid)
+        self.pr_state.write_text("OPEN MERGEABLE")
+        self.tick()
+        t = self.f_ticket(tid)
+        self.assertNotIn("stuck", t)
+        self.assertNotIn("conflict_fixes", t)
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+        self.assertTrue(any(h.get("why") == "The PR is mergeable again: unstuck" for h in self.history(tid)))
+
+    def test_change_request_clears_conflict_fixes(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.fix_cycle(tid, wt, 0)
+        with self.f() as f:
+            f.move(tid, ("baking", "pending"), "human", "Changes requested")
+        self.assertNotIn("conflict_fixes", self.f_ticket(tid))
+
+    def test_fixer_merges_the_pr_base_from_github(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        sh("git", "push", "-q", "origin", "main:release", cwd=self.repo)
+        job = self.fixer_job(tid, "OPEN CONFLICTING release")
+        self.assertEqual(job["base_ref"], "origin/release")
+        self.assertEqual(self.f_ticket(tid)["pr_base"], "release")
+        self.assertEqual(self.f_ticket(tid)["base_branch"], "main")
 
 
 if __name__ == "__main__":

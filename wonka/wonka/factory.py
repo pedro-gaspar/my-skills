@@ -16,6 +16,7 @@ REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 # free-text sections, checked with markdownlint; Wonka-rendered sections (approval, questions, stuck, log, ...) never are
 LINTED = ("idea", "spec")
 MAX_RETRIES = 3
+MAX_CONFLICT_FIXES = 3  # fixes in a row that GitHub still calls CONFLICTING
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
@@ -252,6 +253,12 @@ class Factory:
             t.pop("conflicts", None)
             t.pop("merge_ref", None)
         t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
+        if dst[0] != "shipped" or dst[1] == "done":
+            # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
+            # merge starts clean (kept through pending/progress so a failed fixer's retry does not reset it)
+            t.pop("conflict_fixes", None)
+        if dst[1] == "done":
+            t.pop("pr_base", None)
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
@@ -770,7 +777,7 @@ class Factory:
     def _fetch_pr_base(self, tid):
         """Fetch the PR's base branch into the worktree and return the ref it now lives at."""
         t = self.ticket(tid)
-        wt, base = t["worktree"], t["base_branch"]
+        wt, base = t["worktree"], t.get("pr_base") or t["base_branch"]  # the base GitHub compares against now
         try:
             origin = parse_remote(git("remote", "get-url", "origin", cwd=wt))
         except WonkaError:
@@ -835,7 +842,9 @@ class Factory:
         if not merged:
             raise WonkaError(f"{t['merge_ref']} is not merged into {t['branch']} yet")
         git("push", "origin", t["branch"], cwd=wt)
-        self.move(tid, ("shipped", "awaiting"), "fixer", "Merge conflicts fixed and pushed")
+        # move() by the fixer resets retries, so this count is what bounds a PR that GitHub keeps calling conflicting
+        n = t["conflict_fixes"] = t.get("conflict_fixes", 0) + 1
+        self.move(tid, ("shipped", "awaiting"), "fixer", f"Merge conflicts fixed and pushed (fix {n}/{MAX_CONFLICT_FIXES})")
 
     # -- the tick ---------------------------------------------------------
 
@@ -864,7 +873,7 @@ class Factory:
             self.write(tid, meta, body)
             return f"{tid}: reverted illegal {shown}"
         if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
-            t.pop("stuck"), t.pop("retries", None)
+            t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
             self.write(tid, meta, note.drop_section(body, "stuck"))
             return f"{tid}: unstuck by a human"
         if last == ("inbox", "awaiting"):
@@ -900,25 +909,41 @@ class Factory:
                              f"(round {t['review_round']}/{self._budget(t)}, 1 extra round granted)")
                 return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{self._budget(t)})")
         elif last == ("shipped", "awaiting") and t["pr_url"]:
-            out = gh("pr", "view", t["pr_url"], "--json", "state,mergeable", "-q", '.state + " " + .mergeable')
-            pr, _, mergeable = out.partition(" ")
+            out = gh("pr", "view", t["pr_url"], "--json", "state,mergeable,baseRefName",
+                     "-q", '.state + " " + .mergeable + " " + .baseRefName')
+            pr, mergeable, pr_base = (out.split() + ["", "", ""])[:3]
+            if pr == "OPEN" and pr_base:
+                t["pr_base"] = pr_base  # the base may have been changed on GitHub since the ticket was added
             if pr == "MERGED":
                 self.move(tid, ("shipped", "done"), "github", "PR merged 🎉")
                 return f"{tid}: shipped"
             if pr == "CLOSED":
                 self.move(tid, KILLED, "github", "PR closed without merging")
                 return f"{tid}: PR closed"
-            if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts"):
+            if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts") and not t.get("stuck"):
+                fixes = t.get("conflict_fixes", 0)
+                if fixes >= MAX_CONFLICT_FIXES:
+                    base = t.get("pr_base") or t["base_branch"]
+                    t["stuck"] = True
+                    self.set_section(tid, "stuck", f"- [ ] Retry ({fixes} conflict fixes were pushed but GitHub still "
+                                                   f"reports the PR as conflicting with `{base}`: check the PR's base "
+                                                   "branch on GitHub or fix the conflicts by hand. See ~/.wonka/factory.log)")
+                    self.log_event(tid, f"The PR is still conflicting after {fixes} conflict fixes: stuck, needs a human")
+                    notify(tid, "stuck: tick Retry when it's fixed")
+                    return f"{tid}: stuck, PR still conflicting after {fixes} conflict fixes"
                 t["conflicts"] = True
                 self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
                 return f"{tid}: PR has merge conflicts"
             if pr == "OPEN" and mergeable == "MERGEABLE":
                 t.pop("retries", None)  # conflicts gone (by hand or a fixer): the next episode gets the full budget
-                if t.pop("conflicts", None):
-                    # fixed by hand before a fixer ran (or while it could not start): drop the warning and the stuck state
-                    t.pop("conflict_error", None)
-                    if t.pop("stuck", None):
-                        body = note.drop_section(body, "stuck")
+                t.pop("conflict_fixes", None)
+                t.pop("conflict_error", None)
+                # fixed by hand before a fixer ran (or while it could not start): drop the banner's warning
+                dirty = bool(t.pop("conflicts", None))
+                if t.pop("stuck", None):  # a fixer that could not start, or a PR that stayed conflicting
+                    body, dirty = note.drop_section(body, "stuck"), True
+                    self.log_event(tid, "The PR is mergeable again: unstuck")
+                if dirty:
                     self.write(tid, meta, body)
             changes = note.get_section(body, "changes")
             if changes is None:  # a PR opened before change requests existed gets the box too
