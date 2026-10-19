@@ -197,12 +197,47 @@ def _bounds(body, heading):
     return m.start(), m.end() + nxt.start() if nxt else len(body)
 
 
-_HEADING = re.compile(r"^#{1,2}(?= )", re.M)
+_OPENER = re.compile(r"(`{3,}|~{3,})(.*)")
+
+
+def fence_opener(s):
+    """The fence marker (3+ backticks or tildes) when `s`, a line with its indent removed, opens a fenced code
+    block, else None. A backtick fence's info string may not contain backticks (CommonMark), so ```x``` is inline
+    code, not a fence."""
+    m = _OPENER.match(s)
+    if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
+        return None
+    return m.group(1)
+
+
+def closes_fence(fence, s):
+    """True when line `s` closes the block `fence` opened: the same character, at least as many, nothing else
+    but surrounding whitespace."""
+    return re.fullmatch(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*" % len(fence), s) is not None
+
+
+_HEADING = re.compile(r"^#{1,2}(?= )")
+_H2_LINE = re.compile(r"^##(?= )")
 
 
 def demote(content):
-    """Section content can't hold # or ## headings: they would end the section early (see _bounds)."""
-    return _HEADING.sub("###", content)
+    """Section content can't hold # or ## headings: they would end the section early (see _bounds). Inside a
+    closed code fence only a ## line is changed (it would still end the section); `# install deps` in a bash
+    block stays as written. A fence that never closes is not one."""
+    lines = content.split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        fence = fence_opener(lines[i].strip())
+        end = next((j for j in range(i + 1, len(lines)) if closes_fence(fence, lines[j].strip())), None) \
+            if fence else None
+        if end is None:
+            out.append(_HEADING.sub("###", lines[i]))
+            i += 1
+            continue
+        out.append(lines[i])
+        out += [_H2_LINE.sub("###", line) for line in lines[i + 1:end + 1]]
+        i = end + 1
+    return "\n".join(out)
 
 
 def get_section(body, key):

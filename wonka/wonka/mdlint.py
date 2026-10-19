@@ -96,23 +96,8 @@ def _item(line):
     return len(m.group(1)), m.group(2), m.group(3) or ""
 
 
-_OPENER = re.compile(r"(`{3,}|~{3,})(.*)")
-
-
-def fence_opener(s):
-    """The fence marker (3+ backticks or tildes) when `s`, a line with its indent removed, opens a fenced code
-    block, else None. A backtick fence's info string may not contain backticks (CommonMark), so ```x``` is inline
-    code, not a fence."""
-    m = _OPENER.match(s)
-    if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
-        return None
-    return m.group(1)
-
-
-def closes_fence(fence, s):
-    """True when line `s` closes the block `fence` opened: the same character, at least as many, nothing else
-    but surrounding whitespace."""
-    return re.fullmatch(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*" % len(fence), s) is not None
+# fenced code blocks are told apart the same way everywhere a note is read
+fence_opener, closes_fence = note.fence_opener, note.closes_fence
 
 
 def _fence_end(lines, start, fence):

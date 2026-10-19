@@ -255,6 +255,16 @@ class NoteTest(unittest.TestCase):
         self.assertEqual(note.get_section(body, "idea"), "an idea")
         self.assertNotIn("- a", body)
 
+    def test_comments_in_code_fences_are_not_demoted(self):
+        text = "Run:\n```bash\n# install deps\nnpm ci\n```\n~~~\n# also kept\n~~~\n# Top"
+        self.assertEqual(note.demote(text), "Run:\n```bash\n# install deps\nnpm ci\n```\n~~~\n# also kept\n~~~\n### Top")
+        self.assertEqual(note.demote("````\n```\n# x\n````"), "````\n```\n# x\n````")
+        self.assertEqual(note.demote("```\n# open\n## never closed"), "```\n### open\n### never closed")
+        body = note.set_section("", "spec", "a\n```md\n## Kept short of a section\n# h1\n```")
+        body = note.set_section(body, "idea", "an idea")
+        self.assertEqual(note.get_section(body, "spec"), "a\n```md\n### Kept short of a section\n# h1\n```",
+                         "a ## line in a fence would still end the section")
+
     def test_questions_answered_only_when_every_question_has_a_tick(self):
         sec = note.render_questions([
             {"q": "Redis or Postgres?", "options": ["Redis", "Postgres"], "recommended": 1, "why": "in stack"},
