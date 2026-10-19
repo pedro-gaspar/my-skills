@@ -96,6 +96,21 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "/etc/passwd")[0], 1)
         self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "../x")[0], 1)
 
+    def test_config_test_commands_round_trip(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        cfg_file = self.tmp / "home/config.json"
+        code, out, _ = self.run_cli("config", "test_commands.beyondpricing", "./test.sh, make test")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"beyondpricing": ["./test.sh", "make test"]})
+        self.assertIn("beyondpricing: ./test.sh, make test", out)
+        self.assertIn("test lock wait", out)
+        self.assertEqual(self.run_cli("config", "test_commands.beyondpricing", "")[0], 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {})
+        self.assertEqual(self.run_cli("config", "test_commands.beyondpricing", '"oops')[0], 1)
+        self.assertEqual(self.run_cli("config", "test_lock_wait_minutes", "0.5")[0], 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_lock_wait_minutes"], 0.5)
+        self.assertEqual(self.run_cli("config", "test_lock_wait_minutes", "-1")[0], 1)
+
     def test_set_prints_the_summary(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = self.tmp / "app"

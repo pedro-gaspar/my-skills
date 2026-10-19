@@ -55,6 +55,8 @@ def cmd_init(a):
 def show_config(cfg):
     items = sorted((cfg.get("worktree_files") or {}).items())
     files = "; ".join(f"{proj}: {', '.join(paths)}" for proj, paths in items) or "none"
+    cmds = sorted((cfg.get("test_commands") or {}).items())
+    tests = "; ".join(f"{proj}: {', '.join(c)}" for proj, c in cmds) or "none"
     print(f"📏 triage at once   : {cfg['wip']['triage']}\n"
           f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
           f"🍫 baking at once   : {cfg['wip']['baking']}\n"
@@ -62,7 +64,9 @@ def show_config(cfg):
           f"⏳ retry jobs after : {cfg['stale_hours']} hours\n"
           f"🐿️ review rounds    : {cfg['max_review_rounds']}\n"
           f"🌱 follow-up depth  : {cfg['max_followup_depth']}\n"
-          f"📄 worktree files   : {files}")
+          f"📄 worktree files   : {files}\n"
+          f"🧪 test commands    : {tests}\n"
+          f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes")
 
 
 def cmd_config(a):
@@ -272,17 +276,22 @@ def parser():
     sub.add_parser("doctor", help="check the factory's setup")
     sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> [--dispatch <n>] "
                                "status|diff|log|show|rev-parse|ls-files|blame|add|commit|rebase ...")
+    sub.add_parser("test", help="agents: run a project's test command under a per-project lock: "
+                                "wonka test <id> [--dispatch <n>] -- <command> ...")
     return p
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv[:1] == ["git"]:  # by hand: argparse would mangle `--` and the options meant for git
+    if argv[:1] in (["git"], ["test"]):  # by hand: argparse would mangle `--` and the options meant for the command
         try:
-            from .gitwrap import main as git_main
-            return git_main(argv[1:])
+            if argv[0] == "git":
+                from .gitwrap import main as run_main
+            else:
+                from .testrun import main as run_main
+            return run_main(argv[1:])
         except WonkaError as e:
-            store.log(f"git {' '.join(argv[1:3])}: {e}")
+            store.log(f"{argv[0]} {' '.join(argv[1:3])}: {e}")
             print(f"🗑️ wonka: {e}", file=sys.stderr)
             if isinstance(e, store.CriticalError):
                 alert(str(e))

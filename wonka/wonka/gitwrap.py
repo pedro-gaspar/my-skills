@@ -202,11 +202,9 @@ def _on_branch(path, gd):
     return ""
 
 
-def _parse(argv):
-    """argv is everything after `wonka git`: <id> [--dispatch <n> | --dispatch=<n>] <subcommand> [args...].
-    Returns (tid, dispatch or None, sub, args). Only the position right after the id is parsed: later options belong
-    to git."""
-    usage = "usage: wonka git <id> [--dispatch <n>] <subcommand> [args...]"
+def parse_id(argv, usage):
+    """argv is <id> [--dispatch <n> | --dispatch=<n>] <rest...>. Returns (tid, dispatch or None, rest). Only the
+    position right after the id is parsed: later options belong to the wrapped command."""
     if len(argv) < 2:
         raise WonkaError(usage)
     tid, rest, dispatch = argv[0], list(argv[1:]), None
@@ -222,6 +220,14 @@ def _parse(argv):
             dispatch = int(raw)
         except ValueError:
             raise WonkaError(f"--dispatch takes the dispatch number from your job JSON, got '{raw}'")
+    return tid, dispatch, rest
+
+
+def _parse(argv):
+    """argv is everything after `wonka git`: <id> [--dispatch <n> | --dispatch=<n>] <subcommand> [args...].
+    Returns (tid, dispatch or None, sub, args)."""
+    usage = "usage: wonka git <id> [--dispatch <n>] <subcommand> [args...]"
+    tid, dispatch, rest = parse_id(argv, usage)
     if not rest:
         raise WonkaError(usage)
     return tid, dispatch, rest[0], rest[1:]
