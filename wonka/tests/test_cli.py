@@ -330,7 +330,6 @@ class CliTest(unittest.TestCase):
         self.assertEqual((code, err.strip()), (1, "🗑️ wonka: No ticket WONKA-00042"))
         self.assertIn("No ticket WONKA-00042", (self.tmp / "home/factory.log").read_text())
 
-
     def test_blocked_by_and_block_parsers(self):
         p = cli.parser()
         self.assertEqual(p.parse_args(["add", "x", "--blocked-by", "WONKA-00001,WONKA-00002"]).blocked_by,
