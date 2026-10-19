@@ -905,6 +905,31 @@ class FactoryTest(unittest.TestCase):
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid)[0], "shipped")
 
+    def test_fully_disputed_round_ships_when_the_branch_is_already_pushed(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        wt = Path(job["worktree"])
+        self.commit_and_bake(wt, "fix.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["a", "b"]})
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        branch = self.f_ticket(tid)["branch"]
+        # HEAD reaches origin before ship, as a retried ship whose push landed would leave it: ship's push is a no-op
+        sh("git", "push", "-q", "origin", branch, cwd=wt)
+        head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        with self.f() as f:
+            f.baked(tid, disputes=["a :: r1", "b :: r2"])
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(sh("git", "rev-parse", f"refs/heads/{branch}", cwd=self.tmp / "origin.git"), head)
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "the open PR is reused")
+        self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated"))
+        self.assertNotIn("retries", self.f_ticket(tid))
+
     def test_partly_disputed_round_still_needs_a_commit(self):
         tid, wt = self.disputable()
         with self.f() as f:
