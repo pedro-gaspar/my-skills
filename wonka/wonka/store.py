@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "stale_hours": 2,  # a job running longer than this is offered for retry
     "max_review_rounds": 3,  # review rounds with issues before a bad nut is rolled away
     "max_followup_depth": 2,  # a squirrel's follow-up is not filed for a ticket this many follow-ups deep
+    "worktree_files": {},  # project -> repo-relative gitignored files copied into its worktrees
 }
 SETTINGS = {  # wonka config <key> <value>
     "wip.triage": int, "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
@@ -31,9 +32,32 @@ SETTINGS = {  # wonka config <key> <value>
 LOCK_TIMEOUT = 600  # seconds a command waits for the state lock before giving up
 
 
+def safe_relpath(p):
+    """True for a path that is relative and stays inside the repo."""
+    return bool(p) and not os.path.isabs(p) and ".." not in Path(p).parts
+
+
 def set_setting(cfg, key, raw):
+    if key.startswith("worktree_files."):
+        project = key.split(".", 1)[1]
+        if not project:
+            raise WonkaError("usage: wonka config worktree_files.<project> <path>[,<path>...]")
+        paths = []
+        for p in (x.strip() for x in raw.split(",")):
+            if not p:
+                continue
+            if not safe_relpath(p):
+                raise WonkaError(f"{p}: worktree_files takes paths relative to the repo, inside it")
+            paths.append(str(Path(p)))
+        files = dict(cfg.get("worktree_files") or {})
+        if paths:
+            files[project] = paths
+        else:
+            files.pop(project, None)
+        cfg["worktree_files"] = files
+        return
     if key not in SETTINGS:
-        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}")
+        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, worktree_files.<project>")
     try:
         value = SETTINGS[key](raw)
     except ValueError:

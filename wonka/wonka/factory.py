@@ -627,6 +627,36 @@ class Factory:
     # -- baking -----------------------------------------------------------
 
     def ensure_worktree(self, tid):
+        self._ensure_worktree_dir(tid)
+        self._copy_worktree_files(tid, self.ticket(tid)["worktree"])
+
+    def _copy_worktree_files(self, tid, dest):
+        """Copy the project's configured gitignored files (config worktree_files) from the main checkout into dest.
+        Never overwrites, never copies a path git does not ignore there (a builder could commit it), never raises."""
+        t = self.ticket(tid)
+        for rel in (self.cfg.get("worktree_files") or {}).get(t["project"], []):
+            try:
+                if not store.safe_relpath(rel):
+                    self.log_event(tid, f"Worktree file {rel} not copied: it must be relative to the repo, inside it")
+                    continue
+                target = Path(dest) / rel
+                if os.path.lexists(target):
+                    continue
+                src = Path(t["repo"]) / rel
+                if not src.is_file():
+                    self.log_event(tid, f"Worktree file {rel} not copied: not a file in {t['repo']}")
+                    continue
+                if _exec(["git", "check-ignore", "-q", "--", rel], cwd=str(dest))[0] != 0:
+                    self.log_event(tid, f"Worktree file {rel} not copied: git does not ignore it in {dest}, "
+                                        "a builder could commit it")
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, target)
+                store.log(f"{tid} wonka: copied {rel} into {dest}")
+            except (OSError, WonkaError) as e:
+                self.log_event(tid, f"Worktree file {rel} not copied ({e})")
+
+    def _ensure_worktree_dir(self, tid):
         t = self.ticket(tid)
         if t["worktree"] and Path(t["worktree"]).is_dir():
             return
@@ -696,6 +726,7 @@ class Factory:
         path.parent.mkdir(parents=True, exist_ok=True)
         git("worktree", "add", "--detach", "--quiet", str(path), ref, cwd=t["repo"])
         t["scout"], t["scout_ref"] = str(path), ref
+        self._copy_worktree_files(tid, path)
         return str(path), ref
 
     def drop_scout(self, tid):

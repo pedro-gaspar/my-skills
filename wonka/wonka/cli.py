@@ -53,13 +53,16 @@ def cmd_init(a):
 
 
 def show_config(cfg):
+    items = sorted((cfg.get("worktree_files") or {}).items())
+    files = "; ".join(f"{proj}: {', '.join(paths)}" for proj, paths in items) or "none"
     print(f"📏 triage at once   : {cfg['wip']['triage']}\n"
           f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
           f"🍫 baking at once   : {cfg['wip']['baking']}\n"
           f"🗄️ archive after    : {cfg['archive_after_days']} days\n"
           f"⏳ retry jobs after : {cfg['stale_hours']} hours\n"
           f"🐿️ review rounds    : {cfg['max_review_rounds']}\n"
-          f"🌱 follow-up depth  : {cfg['max_followup_depth']}")
+          f"🌱 follow-up depth  : {cfg['max_followup_depth']}\n"
+          f"📄 worktree files   : {files}")
 
 
 def cmd_config(a):

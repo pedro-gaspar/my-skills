@@ -3525,6 +3525,78 @@ class FactoryTest(unittest.TestCase):
             f.ensure_worktree(tid)
             self.assertEqual((t["worktree"], t["branch"]), (job["worktree"], job["branch"]))
 
+    # -- worktree files --
+
+    def ignore_env(self, files=("server/.env",), extra=""):
+        (self.repo / ".gitignore").write_text("server/.env\n" + extra)
+        sh("git", "add", ".gitignore", cwd=self.repo)
+        sh("git", "commit", "-qm", "ignore", cwd=self.repo)
+        sh("git", "push", "-q", "origin", "main", cwd=self.repo)
+        (self.repo / "server").mkdir(exist_ok=True)
+        env = self.repo / "server/.env"
+        env.write_text("SECRET=1\n")
+        env.chmod(0o600)
+        self.cfg["worktree_files"] = {"app": list(files)}
+
+    def test_ignored_file_is_copied_into_a_new_worktree(self):
+        self.ignore_env()
+        tid = self.add()
+        self.to_planned(tid)
+        job = self.tick()["jobs"][0]
+        copy = Path(job["worktree"]) / "server/.env"
+        self.assertEqual(copy.read_text(), "SECRET=1\n")
+        self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
+
+    def test_ignored_file_is_copied_into_the_scout(self):
+        self.ignore_env()
+        self.add()
+        job = self.tick()["jobs"][0]
+        self.assertEqual(job["job"], "triage")
+        copy = Path(job["code"]) / "server/.env"
+        self.assertEqual(copy.read_text(), "SECRET=1\n")
+        self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
+
+    def test_not_ignored_file_is_not_copied_and_logged(self):
+        self.ignore_env(files=("notes.txt",))
+        (self.repo / "notes.txt").write_text("hi\n")
+        tid = self.add()
+        self.to_planned(tid)
+        job = self.tick()["jobs"][0]
+        self.assertFalse((Path(job["worktree"]) / "notes.txt").exists())
+        self.assertTrue(any("notes.txt" in str(h) and "does not ignore" in str(h) for h in self.history(tid)))
+
+    def test_missing_source_is_logged_and_does_not_block(self):
+        self.ignore_env(files=("server/missing.env",), extra="*.env\n")
+        tid = self.add()
+        self.to_planned(tid)
+        jobs = self.tick()["jobs"]
+        self.assertEqual(jobs[0]["job"], "bake")
+        self.assertTrue(any("server/missing.env" in str(h) for h in self.history(tid)))
+
+    def test_existing_file_is_not_overwritten(self):
+        self.ignore_env()
+        tid = self.add()
+        self.to_planned(tid)
+        job = self.tick()["jobs"][0]
+        copy = Path(job["worktree"]) / "server/.env"
+        copy.write_text("mine")
+        with self.f() as f:
+            f.ensure_worktree(tid)
+        self.assertEqual(copy.read_text(), "mine")
+
+    def test_existing_worktree_gets_a_newly_configured_file(self):
+        self.ignore_env()
+        self.cfg["worktree_files"] = {}
+        tid = self.add()
+        self.to_planned(tid)
+        job = self.tick()["jobs"][0]
+        copy = Path(job["worktree"]) / "server/.env"
+        self.assertFalse(copy.exists())
+        self.cfg["worktree_files"] = {"app": ["server/.env"]}
+        with self.f() as f:
+            f.ensure_worktree(tid)
+        self.assertEqual(copy.read_text(), "SECRET=1\n")
+
     def test_failed_archive_keeps_the_ticket_live(self):
         tid = self.add()
         with self.f() as f:
