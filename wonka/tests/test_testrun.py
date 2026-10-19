@@ -12,9 +12,6 @@ from wonka import cli, store, testrun
 from wonka.store import WonkaError
 
 from . import test_gitwrap
-from .test_gitwrap import WrapperTest
-
-W = WrapperTest
 
 
 class ParseTest(unittest.TestCase):
@@ -36,15 +33,15 @@ class ParseTest(unittest.TestCase):
 
 
 class RunTest(unittest.TestCase):
-    f = W.f
-    add = W.add
-    tick = W.tick
-    state = W.state
-    to_planned = W.to_planned
-    to_baking = W.to_baking
+    f = test_gitwrap.WrapperTest.f
+    add = test_gitwrap.WrapperTest.add
+    tick = test_gitwrap.WrapperTest.tick
+    state = test_gitwrap.WrapperTest.state
+    to_planned = test_gitwrap.WrapperTest.to_planned
+    to_baking = test_gitwrap.WrapperTest.to_baking
 
     def setUp(self):
-        W.setUp(self)
+        test_gitwrap.WrapperTest.setUp(self)
         self.cfg = {**self.cfg, "test_commands": {"app": ["./t.sh", "python3 -c"]}, "test_lock_wait_minutes": 0.01}
         store.save_config(self.cfg)
 
@@ -141,6 +138,3 @@ class RunTest(unittest.TestCase):
         self.to_baking(tid)
         with mock.patch.object(testrun.subprocess, "run", return_value=mock.Mock(returncode=-9)):
             self.assertEqual(self.wtest(tid, "--", "./t.sh")[0], 137)
-
-
-del test_gitwrap
