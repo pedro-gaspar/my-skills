@@ -20,16 +20,28 @@ def _ok(cmd):
 
 
 def _permissions(paths=None):
-    """Merged allow rules and additional directories from every settings file that exists."""
+    """Merged allow rules and additional directories from every settings file that exists.
+
+    Odd shapes are skipped rather than trusted: a file whose permissions is not an object,
+    an allow/additionalDirectories that is not a list, and non-string items.
+    """
     allow, dirs = [], []
     for path in paths or SETTINGS:
         try:
-            perms = json.loads(path.read_text()).get("permissions", {})
-        except (OSError, ValueError, AttributeError):
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
             continue
-        allow += perms.get("allow", [])
-        dirs += [str(Path(d).expanduser()) for d in perms.get("additionalDirectories", [])]
+        perms = data.get("permissions") if isinstance(data, dict) else None
+        if not isinstance(perms, dict):
+            continue
+        allow += _strings(perms.get("allow"))
+        dirs += [str(Path(d).expanduser()) for d in _strings(perms.get("additionalDirectories"))]
     return allow, dirs
+
+
+def _strings(value):
+    """The string items of value when it is a list, else nothing."""
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
 
 
 def _orphans(cfg):

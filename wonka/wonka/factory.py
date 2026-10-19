@@ -68,6 +68,19 @@ def gh(*args, cwd=None):
     return _run([os.environ.get("WONKA_GH", "gh"), *args], cwd=cwd)
 
 
+def _json_pages(text):
+    """Every item from `gh api --paginate` output, which is one JSON array or several concatenated ones."""
+    dec, items, i = json.JSONDecoder(), [], 0
+    text = text or ""
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return items
+        page, i = dec.raw_decode(text, i)
+        items.extend(page if isinstance(page, list) else [page])
+
+
 def slug(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].rstrip("-") or "ticket"
 
@@ -207,6 +220,7 @@ class Factory:
         if by != "wonka":
             t.pop("retries", None)
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
+            t.pop("cleanup", None)  # the flag reflects only this attempt
             self.drop_worktree(tid)
             if dst == ("shipped", "done"):
                 self.drop_branch(tid)
@@ -227,7 +241,7 @@ class Factory:
             # carries over when the child builds in the parent's repo; elsewhere it means nothing.
             if pr_repo is None and top == parent_t["repo"]:
                 pr_repo = parent_t["pr_repo"]
-            if jira is None:
+            if jira is None and self.path(parent).exists():  # a deleted parent note just means no key to inherit
                 jira = self.read(parent)[0].get("jira") or None
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
@@ -409,29 +423,64 @@ class Factory:
         t = self.ticket(tid)
         return t.get("base_ref") or t["base_branch"]
 
-    def drop_worktree(self, tid):
+    def drop_worktree(self, tid, quiet=False):
+        """Remove the ticket's worktree; never forced. Returns whether it is gone. A kept worktree (it has local
+        changes) flags the ticket for cleanup, which tick() retries."""
         t = self.ticket(tid)
         if not t.get("worktree"):
-            return
+            return True
         if Path(t["worktree"]).exists():
             try:
                 git("worktree", "remove", t["worktree"], cwd=t["repo"])
             except WonkaError as e:
-                self.log_event(tid, f"Worktree kept, it has local changes: {t['worktree']} ({e})")
-                return
+                t["cleanup"] = True
+                if not quiet:
+                    self.log_event(tid, f"Worktree kept, it has local changes: {t['worktree']} ({e}). "
+                                        "Wonka retries each tick until it is clean or gone")
+                return False
         t["worktree"] = None
+        return True
 
-    def drop_branch(self, tid):
-        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone."""
+    def drop_branch(self, tid, quiet=False):
+        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone.
+        Returns whether the branch is gone; a kept one flags the ticket for cleanup."""
         t = self.ticket(tid)
-        if not t.get("branch") or t.get("worktree"):
-            return  # no branch, or the worktree was kept (it still has the branch checked out)
+        if not t.get("branch"):
+            return True
+        if t.get("worktree"):
+            t["cleanup"] = True  # the worktree was kept (it still has the branch checked out)
+            return False
         if not Path(t["repo"]).is_dir() or not _ref_exists(t["repo"], f"refs/heads/{t['branch']}"):
-            return
+            return True
         try:
             git("branch", "-D", t["branch"], cwd=t["repo"])
         except WonkaError as e:
-            self.log_event(tid, f"Branch kept, could not delete {t['branch']} ({e})")
+            t["cleanup"] = True
+            if not quiet:
+                self.log_event(tid, f"Branch kept, could not delete {t['branch']} ({e})")
+            return False
+        return True
+
+    def cleanup(self, tid):
+        """Retry what a done ticket kept: its worktree (it had local changes) and, after a merge, its branch.
+        Quiet on failure (it runs every tick); never forces, so local changes are never lost."""
+        t, s = self.ticket(tid), self.state(tid)
+        if s not in (("shipped", "done"), KILLED):
+            t.pop("cleanup", None)
+            return None
+        had_wt = bool(t.get("worktree"))
+        if not self.drop_worktree(tid, quiet=True):
+            return None
+        had_branch = (s == ("shipped", "done") and bool(t.get("branch")) and Path(t["repo"]).is_dir()
+                      and _ref_exists(t["repo"], f"refs/heads/{t['branch']}"))
+        if s == ("shipped", "done") and not self.drop_branch(tid, quiet=True):
+            return None
+        t.pop("cleanup", None)
+        if not had_wt and not had_branch:
+            return None  # nothing was left after all
+        what = " and ".join(w for w, kept in (("worktree", had_wt), ("branch", had_branch)) if kept)
+        self.log_event(tid, f"Cleaned up the kept {what}")
+        return f"{tid}: cleaned up the kept {what}"
 
     def baked(self, tid):
         self.expect(tid, ("baking", "progress"))
@@ -562,8 +611,7 @@ class Factory:
         t = self.ticket(tid)
         num = t["pr_url"].rstrip("/").rsplit("/", 1)[-1]
         view = json.loads(gh("pr", "view", t["pr_url"], "--json", "comments,reviews") or "{}")
-        # one page of 100 inline comments is plenty for a change request
-        inline = json.loads(gh("api", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100") or "[]")
+        inline = _json_pages(gh("api", "--paginate", f"repos/{t['pr_repo']}/pulls/{num}/comments?per_page=100"))
         items = []
         for c in view.get("comments") or []:
             items.append(((c.get("author") or {}).get("login"), c.get("authorAssociation"), c.get("body"),
@@ -892,6 +940,10 @@ class Factory:
 
     def tick(self):
         events = [m for k in self.live() for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
+        # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
+        events += [m for k, t in sorted(self.db["tickets"].items())
+                   if (t.get("cleanup") or t.get("worktree")) and self.state(k) in (("shipped", "done"), KILLED)
+                   for m in [self._safe(k, self.cleanup)] if m]
         folder = store.tickets_dir(self.cfg)
         foreign = sorted(p.name for p in folder.glob("*.md") if p.stem not in self.db["tickets"]) if folder.exists() else []
         seen = set(self.db.get("foreign_notes", []))

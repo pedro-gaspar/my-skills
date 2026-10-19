@@ -117,6 +117,12 @@ class CliTest(unittest.TestCase):
         for doc in sorted((root / "agents").glob("*.md")) + [root / "skills/wonka/SKILL.md"]:
             self.assertNotIn('{"', doc.read_text(), doc.name)
 
+    def test_suite_is_discoverable_by_path(self):
+        """Squirrels run tests path-only (no cd), so discovery from the package dir must find them."""
+        root = Path(cli.__file__).resolve().parent.parent
+        suite = unittest.TestLoader().discover(start_dir=str(root), top_level_dir=str(root), pattern="test_banner.py")
+        self.assertGreater(suite.countTestCases(), 0)
+
     def test_squirrel_docs_differ_only_in_name_emoji_and_focus(self):
         """The squirrel agents share one body; only who they are and what they look at may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"
@@ -126,6 +132,7 @@ class CliTest(unittest.TestCase):
         for name, text in docs.items():
             self.assertIn(f"--squirrel {name} ", text, name)  # the normalisation below is not vacuous
             self.assertNotIn("cd <worktree>", text, name)  # tests take the worktree as a path
+            self.assertNotIn("discover -s <worktree>`", text, name)  # bare repo root finds no nested tests
             # Focus first: the architect focus says "architecture", which the name replacement would touch.
             text, focus = re.subn(r"^\*\*Your focus:\*\* .+$", "**Your focus:** FOCUS", text, flags=re.M)
             text, emoji = re.subn(r"🐿️ \S+, the \*\*", "🐿️ EMOJI, the **", text)
