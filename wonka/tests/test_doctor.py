@@ -186,6 +186,37 @@ class OrphansTest(unittest.TestCase):
         self.assertEqual(self.factory_lines(), [("fail", f"🍫 factory {self.board / '🍫 Factory.base'}")])
 
 
+class TestCommandChecksTest(unittest.TestCase):
+    def test_open_prefix_warns(self):
+        cfg = {"test_commands": {"app": ["sh -c", "make test"]}}
+        result = list(doctor._test_command_checks(cfg))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "warn")
+        self.assertIn("  app: sh -c", result[0][1])
+        self.assertNotIn("make test", result[0][1])
+
+    def test_safe_prefixes_ok(self):
+        result = list(doctor._test_command_checks({"test_commands": {"app": ["./test.sh"]}}))
+        self.assertEqual(result, [("ok", "test_commands: no shell or interpreter prefixes")])
+
+    def test_nothing_without_test_commands(self):
+        self.assertEqual(list(doctor._test_command_checks({"test_commands": {}})), [])
+        self.assertEqual(list(doctor._test_command_checks({})), [])
+
+    def test_wired_into_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = {"test_commands": {"app": ["bash"]}, "vault": tmp, "board": "b"}
+            with mock.patch.dict(doctor.os.environ, {"WONKA_HOME": tmp}), \
+                    mock.patch.object(doctor.store, "load_config", return_value=cfg), \
+                    mock.patch.object(doctor.store, "board", return_value=Path(tmp)), \
+                    mock.patch.object(doctor, "_orphans", return_value=iter([])), \
+                    mock.patch.object(doctor, "_ok", return_value=True), \
+                    mock.patch.object(doctor, "_permissions", return_value=([], [])):
+                lines = [c for c in doctor.checks() if "test_commands" in c[1]]
+        self.assertEqual([lv for lv, _ in lines], ["warn"])
+        self.assertIn("app: bash", lines[0][1])
+
+
 class NpxCheckTest(unittest.TestCase):
     def npx_lines(self):
         with mock.patch.object(doctor.store, "load_config", side_effect=doctor.store.WonkaError("no config")):

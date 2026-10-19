@@ -14,6 +14,32 @@ from wonka.store import WonkaError
 from . import test_gitwrap
 
 
+class OpenPrefixTest(unittest.TestCase):
+    def test_open(self):
+        for p in ["python3", "python3 -c", "python3 -m", "/bin/sh -c", "bash", "bash -x", "node -e", "env", "npx",
+                  "uv run", "poetry run", "python3.12 -c"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+
+    def test_pinned(self):
+        for p in ["python3 -m unittest", "python3 -m pytest", "bash ./test.sh", "sh -c pytest", "./test.sh",
+                  "make test", "pytest", "uv run pytest", "npm test", "npm run test"]:
+            with self.subTest(p):
+                self.assertFalse(testrun.open_prefix(p))
+
+    def test_unparsable_or_empty(self):
+        self.assertFalse(testrun.open_prefix('"oops'))
+        self.assertFalse(testrun.open_prefix(""))
+
+    def test_open_prefixes(self):
+        cfg = {"test_commands": {"b": ["sh -c", "make test"], "a": ["./t.sh", "env", "bash"]}}
+        self.assertEqual(testrun.open_prefixes(cfg), [("a", "env"), ("a", "bash"), ("b", "sh -c")])
+        self.assertEqual(testrun.open_prefixes(cfg, "b"), [("b", "sh -c")])
+        self.assertEqual(testrun.open_prefixes(cfg, "zzz"), [])
+        self.assertEqual(testrun.open_prefixes({}), [])
+        self.assertEqual(testrun.open_prefixes({"test_commands": None}), [])
+
+
 class ParseTest(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(testrun._parse(["T", "--", "x"]), ("T", None, ["x"]))

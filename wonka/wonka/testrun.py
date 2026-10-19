@@ -4,6 +4,8 @@ import contextlib
 import datetime
 import fcntl
 import json
+import os
+import re
 import shlex
 import subprocess
 import sys
@@ -29,6 +31,52 @@ def _parse(argv):
 
 def prefixes(cfg, project):
     return (cfg.get("test_commands") or {}).get(project, [])
+
+
+# Programs that run whatever code or program they are given.
+RUNNERS = frozenset(
+    "sh bash zsh dash ksh fish csh tcsh "
+    "python pypy ruby perl node deno bun php lua Rscript osascript pwsh powershell tclsh "
+    "env exec command xargs nice nohup timeout time sudo doas npx pnpx bunx uvx".split())
+# Launchers whose subcommand runs any command.
+RUNNER_SUBCOMMANDS = frozenset({
+    ("uv", "run"), ("poetry", "run"), ("pipenv", "run"), ("npm", "exec"), ("pnpm", "exec"), ("pnpm", "dlx"),
+    ("yarn", "exec"), ("yarn", "dlx"), ("bundle", "exec"), ("hatch", "run"), ("pdm", "run")})
+OPEN_WARNING = ("lets an agent run any program or inline code outside the sandbox through wonka test; "
+                "pin it to a script or module (e.g. ./test.sh, python3 -m pytest)")
+
+
+def _program(token):
+    """The program name of a token: basename without a trailing version (python3.12 -> python)."""
+    name = os.path.basename(token)
+    return re.sub(r"[\d.]+$", "", name) or name
+
+
+def open_prefix(prefix):
+    """True when prefix is a shell, interpreter or launcher with nothing pinned after it (python3 -c, bash, env)."""
+    try:
+        tokens = shlex.split(prefix)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    if len(tokens) >= 2 and (_program(tokens[0]), tokens[1]) in RUNNER_SUBCOMMANDS:
+        n = 2
+    elif _program(tokens[0]) in RUNNERS:
+        n = 1
+    else:
+        return False
+    return not any(not t.startswith("-") for t in tokens[n:])
+
+
+def open_prefixes(cfg, project=None):
+    """(project, prefix) for each open test_commands prefix, sorted by project."""
+    found = []
+    for proj, plist in sorted((cfg.get("test_commands") or {}).items()):
+        if project is not None and proj != project:
+            continue
+        found += [(proj, p) for p in plist if open_prefix(p)]
+    return found
 
 
 def check(argv, allowed, project):
