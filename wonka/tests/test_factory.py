@@ -21,7 +21,8 @@ S="$WONKA_FAKE_PR_STATE"
 case "$1 $2" in
   "pr create") printf '%s\\n' "$@" > "$S.args"; echo x >> "$S.creates"; touch "$S.open"
                echo "https://github.com/acme/app/pull/7" ;;
-  "pr list") if [ -f "$S.open" ]; then echo "https://github.com/acme/app/pull/7"; fi ;;
+  "pr list") if [ -f "$S.list" ]; then cat "$S.list"
+             elif [ -f "$S.open" ]; then echo '[{ "url": "https://github.com/acme/app/pull/7", "body": "" }]'; fi ;;
   "pr view") case "$*" in
                *comments*) if [ -f "$S.comments" ]; then cat "$S.comments"; else echo '{ "comments": [], "reviews": [] }'; fi ;;
                *) cat "$S" ;;
@@ -227,11 +228,33 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"🎫 **Golden ticket:** {tid}\n\nAdd hello.sh", args)
         self.assertNotIn("Jira", args)
 
-    def test_first_ship_reuses_an_open_pr_without_claiming_requested_changes(self):
+    def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
+        tid = self.add()
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        Path(f"{self.pr_state}.open").touch()  # a PR already opened by hand on the branch
+        self.review(tid, architect={"verdict": "good nut"})
+        events = self.tick()["events"]
+        self.assertTrue(any(e.startswith(f"{tid}: PR failed: an open PR on") and "stuck, needs a human" in e
+                            for e in events), events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
+        self.assertIsNone(self.f_ticket(tid)["pr_url"])
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists(), "no PR is created")
+        branch = self.f_ticket(tid)["branch"]
+        pushed = subprocess.run(["git", "rev-parse", "--verify", "--quiet", branch], cwd=self.tmp / "origin.git",
+                                capture_output=True)
+        self.assertNotEqual(pushed.returncode, 0, "the branch was never pushed")
+        self.assertIn("was not opened by Wonka", note.get_section(self.note(tid)[1], "stuck"))
+        self.assertTrue(wt.exists())
+
+    def test_first_ship_reuses_an_open_pr_wonka_opened_without_claiming_requested_changes(self):
         tid = self.add()
         self.to_ready(tid)
         self.bake(tid)
-        Path(f"{self.pr_state}.open").touch()  # a PR already opened by hand
+        # Wonka opened it, but the URL was lost (a crashed tick): its description starts with the ticket's line
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/7", "body": "🎫 **Golden ticket:** %s\\n\\nAdd" }]\n' % tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
@@ -2399,6 +2422,22 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
+
+    def test_resolved_never_pushes_to_a_pr_someone_else_opened_on_the_branch(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(wt, job["base_ref"])
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/7", "body": "" },'
+            ' { "url": "https://github.com/acme/app/pull/9", "body": "my own PR" }]\n')
+        origin = self.tmp / "origin.git"
+        before = sh("git", "rev-parse", branch, cwd=origin)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "open PR https://github.com/acme/app/pull/9 on"):
+            f.resolved(tid)
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=origin), before)
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
 
     def test_resolved_never_pushes_the_base_branch(self):
         tid = self.add()

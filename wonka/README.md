@@ -26,7 +26,9 @@ registered git dir (a rewritten `.git` file is ignored) and allows only status, 
 ls-files, blame, add and commit (plus the fixer's `rebase <ref>`, `rebase --continue` and `rebase --abort`; no `-c`, config,
 push or options that run programs), so no git permission rule is needed; the doctor warns if an old `Bash(git *)`
 rule is still there. Wonka only ever commits and pushes the ticket's own `wonka/` branch: `wonka git` writes, the PR
-push and `wonka resolved` refuse main, master, the base branch, or a worktree that is no longer on its branch.
+push and `wonka resolved` refuse main, master, the base branch, or a worktree that is no longer on its branch. On
+GitHub it only changes PRs it opened itself: before every push it checks the open PRs on the branch, and one opened
+by anyone else (by hand, or another tool) makes the ticket 🎩 Stuck instead of being pushed to or taken over.
 
 ## Use
 

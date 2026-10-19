@@ -171,6 +171,10 @@ class _Diverged(WonkaError):
     """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must rebase."""
 
 
+class _NotOurs(WonkaError):
+    """An open PR on the ticket's branch was not opened by Wonka for it: retrying cannot help, a human must look."""
+
+
 def check_branch(t):
     """Wonka only commits and pushes the ticket's own wonka/ branch: never main, master or the PR's base branch."""
     branch = t.get("branch") or ""
@@ -179,8 +183,13 @@ def check_branch(t):
                          "wonka/ branches, never main, master or the base branch")
 
 
+def _pr_mark(tid):
+    """The line every PR Wonka opens starts its description with."""
+    return f"🎫 **Golden ticket:** {tid}"
+
+
 def pr_body(tid, meta, spec):
-    ids = [f"🎫 **Golden ticket:** {tid}"]
+    ids = [_pr_mark(tid)]
     if meta.get("jira"):
         ids.append(f"🎟️ **Jira:** {meta['jira']}")
     return "  \n".join(ids) + f"\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory"
@@ -785,6 +794,7 @@ class Factory:
                     self.move(tid, KILLED, "github", "PR closed without merging")
                     return f"{tid}: PR closed"
             check_branch(t)
+            ours = self._own_prs(tid)  # before the push: pushing the branch changes every PR opened from it
             try:
                 git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
             except WonkaError as e:
@@ -795,8 +805,7 @@ class Factory:
             head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
             meta, body = self.read(tid)
             spec = (note.get_section(body, "spec") or note.get_section(body, "idea") or "").replace(f"📋 Plan: [[{tid}-plan]]", "")
-            out = gh("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
-                     "--json", "url", "-q", ".[0].url")
+            out = ours[0] if ours else ""
             reused = bool(out)
             if not reused:
                 out = gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
@@ -804,6 +813,12 @@ class Factory:
                          "--body", pr_body(tid, meta, spec))
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
+            if isinstance(e, _NotOurs):  # someone else's PR is on the branch: never touch it, a human decides
+                why = (f"an open PR on {t['branch']} was not opened by Wonka, so Wonka will not push to it: close it "
+                       "or move it off the branch, then tick Retry")
+                outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
+                self.log_event(tid, err)
+                return f"{tid}: PR failed: {why}; {outcome}"
             if isinstance(e, _PushRejected):  # the human pushed to the PR: retrying cannot help, say what to do
                 why = _push_rejected_reason(t["branch"])
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
@@ -819,6 +834,23 @@ class Factory:
             return f"{tid}: PR updated {t['pr_url']}"
         self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
+
+    def _own_prs(self, tid):
+        """The URLs of the open PRs on the ticket's branch, which must all be Wonka's own for this ticket: the PR it
+        recorded, or one whose description starts with its golden ticket line (opened by Wonka, e.g. before a crash
+        lost the URL). Raises _NotOurs for any other PR: Wonka never pushes to a PR it did not open."""
+        t = self.ticket(tid)
+        prs = gh_json("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
+                      "--json", "url,body", default=[])
+        ours, others = [], []
+        for pr in prs:
+            pr = pr if isinstance(pr, dict) else {}
+            mine = pr.get("url") and (pr["url"] == t.get("pr_url") or (pr.get("body") or "").startswith(_pr_mark(tid)))
+            (ours if mine else others).append(pr.get("url") or "?")
+        if others:
+            raise _NotOurs(f"open PR {', '.join(others)} on {t['branch']} was not opened by Wonka for {tid}: "
+                           "Wonka never pushes to it")
+        return ours
 
     def _pr_feedback(self, tid, since=None):
         """The PR's comments, reviews and inline comments by trusted authors newer than `since`, as markdown
@@ -976,6 +1008,7 @@ class Factory:
         if not rebased:
             raise WonkaError(f"{t['branch']} is not rebased onto {t['merge_ref']} yet")
         check_branch(t)
+        self._own_prs(tid)
         # a fixer started before rebasing existed has no lease; its merge is a fast-forward, pushed without force
         lease = [f"--force-with-lease={t['branch']}:{t['lease']}"] if t.get("lease") else []
         git("push", *lease, "origin", t["branch"], cwd=wt)
