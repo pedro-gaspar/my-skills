@@ -3221,6 +3221,40 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(red[0], {"name": "wf / build", "result": "FAILURE", "url": self.RUN_URL})
         self.assertEqual(checks("nope"), ([], False, 0))
 
+    def test_run_id_only_for_the_pr_repo(self):
+        g = "https://github.com/"
+        for url, repo in [
+            (g + "acme/app/actions/runs/123/job/9", "acme/app"),
+            (g + "acme/app/actions/runs/123/job/9", "Acme/App"),
+            (g + "Acme/App/actions/runs/123", "acme/app"),
+            (g + "acme/app/actions/runs/123?pr=7", "acme/app"),
+        ]:
+            self.assertEqual(factory._run_id(url, repo), "123", (url, repo))
+        for url, repo in [
+            (g + "other/app/actions/runs/123", "acme/app"),
+            (g + "acme/app-fork/actions/runs/123", "acme/app"),
+            ("https://evil.example/acme/app/actions/runs/123", "acme/app"),
+            ("https://github.com.evil.example/acme/app/actions/runs/123", "acme/app"),
+            ("https://evil.example/?u=" + g + "acme/app/actions/runs/123", "acme/app"),
+            (g + "acme/app/actions/runs/123abc", "acme/app"),
+            ("", "acme/app"),
+            (None, "acme/app"),
+            (g + "acme/app/actions/runs/123", None),
+        ]:
+            self.assertIsNone(factory._run_id(url, repo), (url, repo))
+
+    def test_foreign_run_url_fetches_no_log(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        foreign = "https://github.com/other/repo/actions/runs/456/job/1"
+        self.red_round(tid, items=[self.check_run(url=foreign)])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        sec = plan[plan.index("## 🔴 CI failure 1"):]
+        self.assertIn(foreign, sec)
+        self.assertNotIn("### Failed log of run", sec)
+        self.assertFalse(Path(f"{self.pr_state}.runs").exists())
+
     def test_red_ci_with_nothing_pending_goes_back_to_baking(self):
         tid = self.add()
         self.to_awaiting_merge(tid)

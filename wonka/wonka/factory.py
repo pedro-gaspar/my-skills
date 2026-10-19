@@ -80,9 +80,12 @@ def _parse_rollup(text):
     return data if isinstance(data, list) else []
 
 
-def _run_id(url):
-    m = re.search(r"/actions/runs/(\d+)", url or "")
-    return m.group(1) if m else None
+def _run_id(url, repo):
+    """The Actions run id in url, only when url is a github.com run of repo (owner/name); else None."""
+    m = re.match(r"https://github\.com/([^/?#]+)/([^/?#]+)/actions/runs/(\d+)(?:[/?#]|$)", url or "")
+    if not m or not repo or f"{m.group(1)}/{m.group(2)}".lower() != repo.lower():
+        return None
+    return m.group(3)
 
 
 def now():
@@ -1471,7 +1474,7 @@ class Factory:
             lines.append(note.demote(" ".join(x for x in (f"- {c['name']}: {c['result']}", c["url"]) if x)))
         runs = []
         for c in red:
-            rid = _run_id(c["url"])
+            rid = _run_id(c["url"], t["pr_repo"])
             if rid and rid not in runs:
                 runs.append(rid)
         for rid in runs[:CI_LOG_RUNS]:
