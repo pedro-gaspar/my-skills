@@ -94,7 +94,7 @@ push.
 | `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `test_lock_wait_minutes` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
-| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
+| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions, open test_commands prefixes and notes with stray ## sections |
 
 ## The floor
 
@@ -124,7 +124,9 @@ Agents run a project's tests with `wonka test <id> -- <command>`. List the allow
 runs only a command that starts with one of them, with no shell, in the ticket's scout or worktree (never your
 checkout). One run per project holds `~/.wonka/locks/<project>-tests.lock`; the others wait up to
 `test_lock_wait_minutes` (default 3, so wait plus run fit the agents' 10-minute Bash timeout), then exit 75 naming
-the holder. The exit code is the command's.
+the holder. The exit code is the command's. `wonka config` and `wonka doctor` warn about a prefix that leaves the
+program or code to the caller (a shell, interpreter or launcher with nothing pinned after it, like `python3 -c`,
+`sh -c`, `bash`, `env`, `npx`), since it allows any command outside the sandbox.
 
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Ready. Finished tickets (Shipped or Wont-Do) and their plans move to
 `wonka/archive/` after 7 days. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) are

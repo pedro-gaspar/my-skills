@@ -96,11 +96,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "/etc/passwd")[0], 1)
         self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "../x")[0], 1)
 
+    def test_config_warns_on_open_test_prefix(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        cfg_file = self.tmp / "home/config.json"
+        code, _, err = self.run_cli("config", "test_commands.app", "python3 -c, ./test.sh")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"app": ["python3 -c", "./test.sh"]})
+        self.assertIn("test_commands.app: 'python3 -c'", err)
+        self.assertNotIn("'./test.sh'", err)
+        code, _, err = self.run_cli("config", "test_commands.app", "python3 -m pytest")
+        self.assertEqual(code, 0)
+        self.assertNotIn("test_commands", err)
+
     def test_config_test_commands_round_trip(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         cfg_file = self.tmp / "home/config.json"
-        code, out, _ = self.run_cli("config", "test_commands.beyondpricing", "./test.sh, make test")
+        code, out, err = self.run_cli("config", "test_commands.beyondpricing", "./test.sh, make test")
         self.assertEqual(code, 0)
+        self.assertEqual(err, "")
         self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"beyondpricing": ["./test.sh", "make test"]})
         self.assertIn("beyondpricing: ./test.sh, make test", out)
         self.assertIn("test lock wait", out)

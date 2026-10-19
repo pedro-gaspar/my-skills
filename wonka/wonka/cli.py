@@ -76,6 +76,10 @@ def cmd_config(a):
             raise WonkaError("usage: wonka config <key> <value>")
         store.set_setting(cfg, a.key, a.value)
         store.save_config(cfg)
+        if a.key.startswith("test_commands."):
+            from .testrun import OPEN_WARNING, open_prefixes
+            for proj, p in open_prefixes(cfg, a.key.split(".", 1)[1]):
+                print(f"⚠️ test_commands.{proj}: '{p}' {OPEN_WARNING}", file=sys.stderr)
     show_config(cfg)
 
 

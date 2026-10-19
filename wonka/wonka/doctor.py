@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import note, store
+from . import note, store, testrun
 from .factory import notifier
 
 SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
@@ -70,6 +70,16 @@ def _orphans(cfg):
                    + "\n".join(f"  {line}" for line in found))
 
 
+def _test_command_checks(cfg):
+    """A warn for test_commands prefixes that leave the program or code to the caller, else ok (or nothing)."""
+    found = testrun.open_prefixes(cfg)
+    if found:
+        yield "warn", ("test_commands prefixes that " + testrun.OPEN_WARNING + ":\n"
+                       + "\n".join(f"  {proj}: {p}" for proj, p in found))
+    elif cfg.get("test_commands"):
+        yield "ok", "test_commands: no shell or interpreter prefixes"
+
+
 def permission_checks(allow, dirs, want_dirs):
     """Yield (level, message) for Claude Code permissions (allow rules and additional directories)."""
     missing = [] if "Bash(wonka *)" in allow or "Bash(wonka:*)" in allow else ["Bash(wonka *)"]
@@ -127,6 +137,7 @@ def checks():
     else:
         yield "fail", f"🍫 factory {base}"
     yield from _orphans(cfg)
+    yield from _test_command_checks(cfg)
     path = store.home() / store.STATE_FILE
     try:
         n = len(json.loads(path.read_text())["tickets"]) if path.exists() else 0
