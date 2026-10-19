@@ -108,7 +108,7 @@ def run(a, f):
         f.set_field(a.id, a.field, a.value)
         print(f.summary(a.id))
     elif c == "triage":
-        f.triage(a.id, a.size, a.title, _questions(a) or None)
+        f.triage(a.id, a.size, a.title, _questions(a) or None, duplicate_of=a.duplicate_of)
         print(f.summary(a.id))
     elif c == "ask":
         qs = _questions(a)
@@ -195,6 +195,7 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
     s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
+    s.add_argument("--duplicate-of", help="an existing ticket this one duplicates: closes it as Wont-Do")
     s = sub.add_parser("ask", help="analyst: ask a human, one --question per question")
     s.add_argument("id")
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')

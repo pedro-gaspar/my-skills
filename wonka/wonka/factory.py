@@ -344,14 +344,34 @@ class Factory:
         else:
             raise WonkaError("settable fields: title, size, jira, pr_repo")
 
-    def triage(self, tid, size, title=None, questions=None):
+    def triage(self, tid, size, title=None, questions=None, duplicate_of=None):
         self.expect(tid, ("inbox", "pending"))
         if size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        if duplicate_of:
+            if questions:
+                raise WonkaError("triage takes --duplicate-of or --question, not both")
+            if duplicate_of == tid:
+                raise WonkaError(f"{tid} cannot be a duplicate of itself")
+            other = self.ticket(duplicate_of)
+            if other["repo"] != self.ticket(tid)["repo"]:
+                raise WonkaError(f"{duplicate_of} builds in another repo, not a duplicate")
+            if self.state(duplicate_of) == KILLED:
+                raise WonkaError(f"{duplicate_of} is Wont-Do: triage {tid} on its own")
         meta, body = self.read(tid)
         meta["size"] = size
         if title:
             meta["title"] = title
+        if duplicate_of:
+            try:
+                other_title = self.read(duplicate_of)[0].get("title", "")
+            except OSError:
+                other_title = ""
+            body = note.set_section(body, "duplicate", f"- Duplicate of [[{duplicate_of}]] {other_title}".rstrip())
+            self.write(tid, meta, body)
+            self.move(tid, KILLED, "triage", f"Duplicate of {duplicate_of}")
+            self.log_event(duplicate_of, f"{tid} was closed as a duplicate of this ticket", by="triage")
+            return
         if size not in machine.AUTO_DONE:
             body = note.set_section(body, "approval", f"- [ ] Approve (size **{size}**: tick to send it to Drafting)")
         if questions:

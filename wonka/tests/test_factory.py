@@ -250,6 +250,45 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("Reverted", self.note(a)[1])
         self.assertEqual(self.state(b), ("wontdo", "done"))
 
+    def test_triage_closes_a_duplicate(self):
+        a = self.add("Add a hello script")
+        b = self.add("Add a hello script, please")
+        self.tick()
+        with self.f() as f:
+            f.triage(b, "s", duplicate_of=a)
+        self.assertEqual(self.state(b), ("wontdo", "done"))
+        body = self.note(b)[1]
+        self.assertIn("## 🫐 Duplicate", body)
+        self.assertIn(f"[[{a}]]", body)
+        self.assertNotIn("🎫 Approval", body)
+        with self.f() as f:
+            self.assertEqual(f.ticket(b)["history"][-1]["why"], f"Duplicate of {a}")
+            self.assertTrue(any(b in h.get("why", "") for h in f.ticket(a)["history"]))
+        self.assertEqual(self.state(a), ("inbox", "pending"))
+        self.assertNotIn(b, [j["id"] for j in self.tick()["jobs"]])
+
+    def test_triage_duplicate_is_checked_before_anything_is_written(self):
+        a = self.add("Add a hello script")
+        b = self.add("Add a hello script, please")
+        other = self.tmp / "other"
+        other.mkdir()
+        sh("git", "init", "-q", "-b", "main", cwd=other)
+        sh("git", "commit", "-q", "--allow-empty", "-m", "init", cwd=other)
+        with self.f() as f:
+            c = f.add("Something else", repo=str(other), pr_repo="acme/other")
+        self.tick()
+        killed = self.add("Dead idea")
+        with self.f() as f:
+            f.move(killed, ("wontdo", "done"), "human")
+        cases = [dict(duplicate_of=b), dict(duplicate_of="WONKA-99999"), dict(duplicate_of=c), dict(duplicate_of=killed),
+                 dict(duplicate_of=a, questions=[{"q": "Why?", "options": ["x", "y"], "recommended": 0}])]
+        for kw in cases:
+            with self.subTest(kw=kw):
+                with self.assertRaises(WonkaError), self.f() as f:
+                    f.triage(b, "s", **kw)
+                self.assertEqual(self.state(b), ("inbox", "pending"))
+                self.assertNotIn("## 🫐 Duplicate", self.note(b)[1])
+
     def test_medium_ticket_waits_for_approval_and_answers(self):
         tid = self.add()
         self.tick()
