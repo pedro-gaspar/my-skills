@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ MD041 = "stdin:1 error MD041/first-line-heading/first-line-h1 First line in a fi
 class MdlintTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         patcher = mock.patch.dict(os.environ, {"WONKA_HOME": str(self.tmp / "home")})
         patcher.start()
         self.addCleanup(patcher.stop)

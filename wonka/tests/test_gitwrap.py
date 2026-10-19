@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -99,6 +100,7 @@ class CheckTest(unittest.TestCase):
 
     def test_target(self):
         tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         wt, scout, repo = tmp / "wt", tmp / "scout", tmp / "repo"
         wt.mkdir()
         scout.mkdir()
@@ -142,6 +144,7 @@ class WrapperTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.repo = self.tmp / "app"
         env_ = {"WONKA_HOME": str(self.tmp / "home"), "WONKA_NO_NOTIFY": "1", "WONKA_MDLINT": "off",
                 "WONKA_GH": "false",

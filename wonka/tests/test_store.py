@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from wonka import store
 class StateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         patcher = mock.patch.dict(os.environ, {"WONKA_HOME": str(self.tmp)})
         patcher.start()
         self.addCleanup(patcher.stop)
