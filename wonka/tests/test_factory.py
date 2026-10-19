@@ -219,6 +219,14 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"🎫 **Golden ticket:** {tid}  \n🎟️ **Jira:** CALC-42\n\nAdd hello.sh", args)
         self.assertIn(f"{tid}: Add a hello script", args)
 
+    def test_pr_opens_as_a_draft(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertIn("--draft\n", Path(f"{self.pr_state}.args").read_text())
+
     def test_pr_description_without_jira_has_only_the_wonka_id(self):
         tid = self.add()
         self.to_planned(tid)

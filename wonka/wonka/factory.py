@@ -971,7 +971,7 @@ class Factory:
             out = ours[0] if ours else ""
             reused = bool(out)
             if not reused:
-                out = gh("pr", "create", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
+                out = gh("pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
                          "--title", f"{tid}: {meta.get('title', '')}",
                          "--body", pr_body(tid, meta, spec))
         except (WonkaError, OSError) as e:
@@ -1001,7 +1001,7 @@ class Factory:
             what = "PR updated with the requested changes" if t.get("change_requests") else "PR updated"
             self.move(tid, ("shipped", "awaiting"), "wonka", f"{what}, review and merge it: {t['pr_url']}")
             return f"{tid}: PR updated {t['pr_url']}"
-        self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
+        self.move(tid, ("shipped", "awaiting"), "wonka", f"Draft PR opened, mark it ready, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
 
     def _own_prs(self, tid):
