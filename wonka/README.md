@@ -210,8 +210,9 @@ exits 1 as well and counts as the linter failing. A line that continues a list i
 continuation) is left in its list. Headings in any section's text (`#`, `##`) become `###`, so they cannot end the
 section early; inside a code fence only `##` lines do, so `# install deps` in a bash block stays as written.
 
-Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian is renamed back on the
-next tick (found by the `id` in its frontmatter); a deleted note drops its ticket to Wont-Do. Since that is final, a
+Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian, or moved into a subfolder
+of the tickets folder, is put back on the next tick (found by the `id` in its frontmatter); a deleted note drops its
+ticket to Wont-Do. A finished ticket (merged or Wont-Do) whose note is deleted is only archived early, as it ended. Since that is final, a
 tick refuses to run when the tickets folder is missing (an unmounted or moved vault, a changed `vault` setting) or
 when every live ticket's note is gone at once; if you really deleted them all, run `wonka tick --drop-missing`.
 Frontmatter is read as YAML (Obsidian's own escapes and `# comments` included), and bytes that are not UTF-8 read as

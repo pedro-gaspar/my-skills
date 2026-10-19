@@ -5032,6 +5032,38 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("triage", "pending"))
         self.assertFalse([e for e in events if "not a Wonka ticket" in e])
 
+    def test_deleted_note_of_a_merged_ticket_archives_it_as_merged(self):
+        tid = self.add()
+        blocked = self.add("needs the first one", blocked_by=[tid])
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        with self.f() as f:
+            f.path(tid).unlink()
+            plan = f.plan_path(tid)
+        self.assertIn(f"{tid}: note was deleted, archived as merged", self.tick()["events"])
+        t = self.f_ticket(tid)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertTrue(t["archived"])
+        self.assertNotIn("lost", t)
+        self.assertFalse(plan.exists())
+        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive" / plan.name).exists())
+        with self.f() as f:
+            self.assertEqual(f.waiting_on(blocked), [])
+        self.assertEqual(self.tick()["events"], [], "nothing more to do")
+
+    def test_note_moved_into_a_subfolder_is_moved_back(self):
+        tid = self.add()
+        with self.f() as f:
+            path = f.path(tid)
+        sub = path.parent / "later" / "deeper"
+        sub.mkdir(parents=True)
+        path.rename(sub / path.name)
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: note was moved to later/deeper/{path.name}, moved back", events)
+        self.assertTrue(path.exists())
+        self.assertEqual(self.state(tid), ("triage", "pending"))
+
     def test_note_writes_leave_no_temp_file(self):
         tid = self.add()
         with self.f() as f:

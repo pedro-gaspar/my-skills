@@ -1942,10 +1942,15 @@ class Factory:
 
     def _find_renamed(self, foreign):
         """Notes renamed in Obsidian (their frontmatter id is a live ticket whose note is gone) get their name back,
-        so a rename is never taken for a deletion. Returns the events."""
+        so a rename is never taken for a deletion. Notes moved into a subfolder of the tickets folder are moved back
+        the same way. Returns the events."""
         events = []
         folder = store.tickets_dir(self.cfg)
-        for name in foreign:
+        names = list(foreign)
+        if folder.is_dir() and any(not self.path(k).exists() for k in self.live()):  # only look deeper when one is gone
+            names += sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*.md") if p.parent != folder
+                            and not any(part.startswith(".") for part in p.relative_to(folder).parts))
+        for name in names:
             try:
                 tid = str(note.read(folder / name)[0].get("id") or "")
             except (OSError, WonkaError):
@@ -1954,9 +1959,10 @@ class Factory:
             if not t or t.get("archived") or self.path(tid).exists():
                 continue
             (folder / name).rename(self.path(tid))
-            self.log_event(tid, f"The note was renamed to {name}: renamed it back to {self.path(tid).name} "
+            what = "renamed" if "/" not in name else "moved"
+            self.log_event(tid, f"The note was {what} to {name}: {what} it back to {self.path(tid).name} "
                                 "(Wonka finds tickets by file name)")
-            events.append(f"{tid}: note was renamed to {name}, renamed back")
+            events.append(f"{tid}: note was {what} to {name}, {what} back")
         return events
 
     def _check_notes(self, drop_missing):
@@ -1977,6 +1983,11 @@ class Factory:
         t = self.ticket(tid)
         if not self.path(tid).exists():
             src = self.state(tid)
+            if src in (machine.MERGED, KILLED):  # finished already: the note only went before the archive
+                self._archive_files(tid)
+                t["archived"] = True
+                self.log_event(tid, "The note was deleted: archived early, as it ended")
+                return f"{tid}: note was deleted, archived as {'merged' if src == machine.MERGED else 'Wont-Do'}"
             self._hold_for_live_job(tid, src)
             t.pop("job_started_at", None)  # the ticket is archived: its job is no longer tracked
             t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "ready"}, True, True
@@ -2139,18 +2150,23 @@ class Factory:
             return None
         if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
             return None
-        src, plan = self.path(tid), self.plan_path(tid)
-        pr_body_file = self.pr_body_path(tid)
+        src = self.path(tid)
+        self._archive_files(tid)  # first: if the note's move fails, the ticket is still live and retried next tick
+        shutil.move(src, store.archive_dir(self.cfg) / src.name)
+        t["archived"] = True
+        return f"{tid}: archived"
+
+    def _archive_files(self, tid):
+        """Move a finished ticket's plan and PR body into the archive folder (the caller moves the note)."""
+        t = self.ticket(tid)
+        plan, pr_body_file = self.plan_path(tid), self.pr_body_path(tid)
         folder = store.archive_dir(self.cfg)
         folder.mkdir(parents=True, exist_ok=True)
         if pr_body_file.exists():
             shutil.move(pr_body_file, folder / pr_body_file.name)
-        if plan.exists():  # the plan first: if the note's move fails, the ticket is still live and retried next tick
+        if plan.exists():
             shutil.move(plan, folder / plan.name)
             t["plan"] = str(folder / plan.name)
-        shutil.move(src, folder / src.name)
-        t["archived"] = True
-        return f"{tid}: archived"
 
     def start(self, tid):
         """Claim a job for an agent and return what it needs to know."""
