@@ -553,9 +553,9 @@ class Factory:
 
     def _check_editable(self, tid):
         s = self.state(tid)
-        if s[0] in ("triage", "drafting") or s == ("planned", "pending"):
+        if s[0] in ("idea", "triage", "drafting") or s == ("planned", "pending"):
             return
-        raise WonkaError(f"{tid} is {fmt(s)}: blockers can only change before baking starts (Triage, Drafting or Planned)")
+        raise WonkaError(f"{tid} is {fmt(s)}: blockers can only change before baking starts (Idea, Triage, Drafting or Planned)")
 
     def block(self, tid, blockers):
         blockers = split_ids(blockers)
@@ -647,7 +647,9 @@ class Factory:
     # -- intake -----------------------------------------------------------
 
     def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None,
-            spec_review=None, blocked_by=None):
+            spec_review=None, blocked_by=None, start="triage"):
+        if start not in machine.START:
+            raise WonkaError(f"start must be {' or '.join(machine.START)}")
         if size and size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
         if spec_review is not None and spec_review not in machine.SPEC_REVIEWS:
@@ -672,18 +674,21 @@ class Factory:
         title = title or _default_title(idea)
         meta = {"id": tid, "title": title, "size": size or "", "jira": jira or "",
                 "spec_review": spec_review or "agent"}
-        meta["status"], meta["phase"] = machine.label(("triage", "pending"))
+        meta["status"], meta["phase"] = machine.label((start, "pending"))
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
             "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
             "review_round": 0, "parent": parent, "children": [], "blocked_by": blocked_by,
-            "last_valid": {"status": "triage", "phase": "pending"},
+            "last_valid": {"status": start, "phase": "pending"},
             "created_at": _iso(now()), "history": [],
         }
         if parent_t:
             parent_t["children"].append(tid)
-        self.write(tid, meta, note.set_section("", "idea", mdlint.guard(idea)))
+        body = note.set_section("", "idea", mdlint.guard(idea))
+        if start == "idea":
+            body = note.set_section(body, "start", note.START_BOX)
+        self.write(tid, meta, body)
         return tid
 
     def set_field(self, tid, field, value):
@@ -1210,7 +1215,7 @@ class Factory:
                                         f"{max_depth}); add it by hand if you want it: {title}: {idea}")
                     seen.add(title.casefold())
                     continue
-                self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid)
+                self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid, start="idea")
                 seen.add(title.casefold())
         issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
         if issues and t["plan"] and Path(t["plan"]).exists():
@@ -1685,6 +1690,8 @@ class Factory:
             if seen[0] == "wontdo" and last != KILLED:
                 self.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
                 return f"{tid}: killed by a human"
+            if last == ("idea", "pending") and seen == ("triage", "pending"):
+                return self._start_idea(tid, "Dragged to Triage by a human")
             shown = f"{meta.get('status')}/{meta.get('phase')}"
             meta["status"], meta["phase"] = machine.label(last)
             why = f"Reverted {shown}: not a legal move, back to {fmt(last)}"
@@ -1700,7 +1707,13 @@ class Factory:
             t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
             self.write(tid, meta, note.drop_section(body, "stuck"))
             return f"{tid}: unstuck by a human"
-        if last == ("triage", "awaiting"):
+        if last == ("idea", "pending"):
+            sec = note.get_section(body, "start")
+            if sec is None:
+                self.write(tid, meta, note.set_section(body, "start", note.START_BOX))  # a deleted box comes back
+            elif note.started(sec):
+                return self._start_idea(tid, "Started")
+        elif last == ("triage", "awaiting"):
             appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
             if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
                 self.move(tid, ("triage", "ready"), "human", "Approved")
@@ -1786,6 +1799,13 @@ class Factory:
                 return self._ci_failed(tid, *ci)
         return None
 
+    def _start_idea(self, tid, why):
+        """A human started an Idea (ticked Start or dragged it to Triage): drop the box, on to triage."""
+        meta, body = self.read(tid)
+        self.write(tid, meta, note.drop_section(body, "start"))
+        self.move(tid, ("triage", "pending"), "human", why)
+        return f"{tid}: started, off to triage"
+
     def archive(self, tid):
         t = self.ticket(tid)
         stamp = t.get("entered_done_at")
@@ -1809,6 +1829,8 @@ class Factory:
     def start(self, tid):
         """Claim a job for an agent and return what it needs to know."""
         t, s = self.ticket(tid), self.state(tid)
+        if s[0] == "idea":
+            raise WonkaError(f"{tid} is an Idea: tick Start or drag it to 📏-Triage first")
         job = {"triage": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
                "shipped": "conflicts"}[s[0]]
         base_ref = None
@@ -1898,6 +1920,8 @@ class Factory:
     def retry(self, tid, why="the last job did not finish", final=False):
         """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help)."""
         t, s = self.ticket(tid), self.state(tid)
+        if s[0] == "idea":
+            raise WonkaError(f"{tid} is an Idea: no job runs for it")
         if s[1] not in ("pending", "progress"):
             raise WonkaError(f"{tid} is {fmt(s)}: no job is running or queued, nothing to retry")
         retries = t.get("retries", 0) + 1
@@ -2009,7 +2033,8 @@ class Factory:
             events = self._find_renamed(self._foreign())
             self._check_notes(drop_missing)
             for old, new in store.migrate_base(self.cfg):
-                events.append(f"🍫 Factory.base: column {old} renamed to {new}")
+                events.append(f"🍫 Factory.base: column {new} added" if old is None
+                              else f"🍫 Factory.base: column {old} renamed to {new}")
             events += [m for k in self.live()
                        for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works

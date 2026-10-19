@@ -36,7 +36,7 @@ Arguments: `$ARGUMENTS`
 (always, from a neutral loop directory: see the README's Sandbox boundary) or when the user gives it, and
 `--pr-repo owner/name`, `--jira KEY-1` or `--title` when the user gives them. Pass `--needs-human-spec-review` when the
 user wants to review the spec before it is built (sensitive tickets). With `--parent <id>` the repo, PR repo
-and Jira key default to the parent's (the PR repo only when the child builds in the parent's repo). Pass `--blocked-by <id>[,<id>]` when the user says the ticket depends on (must wait for) other tickets. To change dependencies later, use `wonka block <id> <blocker>` / `wonka unblock <id> [<blocker>]` (only before baking). Then run a tick.
+and Jira key default to the parent's (the PR repo only when the child builds in the parent's repo). Pass `--blocked-by <id>[,<id>]` when the user says the ticket depends on (must wait for) other tickets. To change dependencies later, use `wonka block <id> <blocker>` / `wonka unblock <id> [<blocker>]` (only before baking). Pass `--triage` when the user asks to build or start the ticket now; otherwise leave it out and the ticket is a 💡 Idea that waits until the user ticks Start or drags it to 📏 Triage. Say which one in the reply. Then run a tick.
 
 ## status
 `wonka status` and show the lines as they are.

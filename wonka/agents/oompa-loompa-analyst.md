@@ -44,9 +44,10 @@ not the absolute `code` path: the builder works in a different worktree.
    (this repo's part too, when it has one), each a self-contained idea that names its sibling tickets and
    any order between them (which must merge first), then close this one:
    ```bash
-   wonka add --repo <that repo's path> --parent <id> --title "<title>" "<self-contained idea for that repo>"   # repeat
+   wonka add --triage --repo <that repo's path> --parent <id> --title "<title>" "<self-contained idea for that repo>"   # repeat
    wonka drafted <id> --size <size> --split --dispatch <dispatch>
    ```
+   Pass `--triage`: the parent was already approved, so its children skip the 💡 Idea column.
    Never write a plan step that edits files outside `code`'s repo.
 4. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash
@@ -57,7 +58,7 @@ not the absolute `code` path: the builder works in a different worktree.
 5. Re-size if the work turned out bigger or smaller.
 6. **l or xl**: split it into xs/s/m tickets, each building in one repo and standing alone, then close this one:
    ```bash
-   wonka add --repo <repo> --parent <id> --title "<title>" "<self-contained idea for the child>"   # repeat
+   wonka add --triage --repo <repo> --parent <id> --title "<title>" "<self-contained idea for the child>"   # repeat
    wonka drafted <id> --size l --dispatch <dispatch>
    ```
 7. **xs, s or m**:

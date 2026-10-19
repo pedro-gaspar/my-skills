@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import json
 import os
+import re
 import shlex
 import shutil
 import time
@@ -152,7 +153,8 @@ def plans_dir(cfg):
 
 
 def migrate_base(cfg):
-    """Rename the old columns (🎫-Ready, ✉️-Inbox) in an existing Factory.base; returns the (old, new) pairs renamed."""
+    """Rename the old columns and add new ones (💡-Idea before 📏-Triage); returns (old, new) pairs, old is None for an
+    added column."""
     path = board(cfg) / BASE_FILE
     if not path.exists():
         return []
@@ -162,6 +164,11 @@ def migrate_base(cfg):
         if old in text:
             text = text.replace(old, new)
             done.append((old, new))
+    if "💡-Idea" not in text:
+        found = re.search(r"^([ \t]*- )📏-Triage[ \t]*$", text, re.M)
+        if found:
+            text = text[:found.start()] + f"{found.group(1)}💡-Idea\n" + text[found.start():]
+            done.append((None, "💡-Idea"))
     if done:
         write_atomic(path, text)
     return done

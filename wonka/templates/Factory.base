@@ -16,6 +16,7 @@ views:
       property: status
       direction: ASC
     groupOrder:
+      - 💡-Idea
       - 📏-Triage
       - 🧪-Drafting
       - 🎫-Planned

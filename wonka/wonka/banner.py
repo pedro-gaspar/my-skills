@@ -9,6 +9,7 @@ MAX_ROUNDS_KEY = "max_review_rounds"
 
 
 QUIPS = {
+    ("idea", "pending"): "🍭 “There is no life I know to compare with pure imagination.”",
     ("triage", "pending"): "🎫 “I've got a golden ticket!”",
     ("triage", "awaiting"): "🎩 “The suspense is terrible. I hope it'll last.”",
     ("triage", "ready"): "🎶 “We are the music makers, and we are the dreamers of dreams.”",
@@ -77,6 +78,9 @@ def _story(tid, t, meta, cfg):
             f"Read the 📜 Spec and the plan [[{tid}-plan]], then tick one option in ❓ Questions: **Approve** sends it "
             "to baking, **Re-draft** sends it back to the analyst with what you write under the question, **Close** drops it.")
     return {
+        ("idea", "pending"): ("tip", "💡 Just an idea: start it when it's ready",
+                              "No agent touches it yet. Refine the 💡 Idea, then tick **Start** in 💡 Start or drag the "
+                              "card to 📏-Triage. Not worth doing? Drag it to 🗑️-Wont-Do."),
         ("triage", "pending"): ("abstract", "Waiting for triage",
                                "📏 An Oompa-Loompa sizes this ticket as soon as triage has room "
                                f"({wip.get('triage', 2)} at a time)."),

@@ -21,6 +21,15 @@ class MachineTest(unittest.TestCase):
     def test_open_pr_can_go_back_in_progress_to_fix_conflicts(self):
         self.assertTrue(machine.allowed(("shipped", "awaiting"), ("shipped", "progress")))
 
+    def test_idea_only_goes_to_triage_or_wont_do(self):
+        idea = ("idea", "pending")
+        self.assertTrue(machine.allowed(idea, ("triage", "pending")))
+        for dst in (("baking", "pending"), ("triage", "ready"), ("drafting", "pending")):
+            self.assertFalse(machine.allowed(idea, dst), dst)
+        self.assertTrue(machine.allowed(idea, machine.KILLED))
+        self.assertEqual(machine.parse("💡-Idea", machine.STATUSES), "idea")
+        self.assertEqual(machine.parse("Idea", machine.STATUSES), "idea")
+
     def test_parse_accepts_labels_with_or_without_emoji(self):
         self.assertEqual(machine.parse("🐿️-Reviewing", machine.STATUSES), "reviewing")
         self.assertEqual(machine.parse("🐿-Reviewing", machine.STATUSES), "reviewing")
