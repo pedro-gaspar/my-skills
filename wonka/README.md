@@ -128,7 +128,8 @@ checkout). One run per project holds `~/.wonka/locks/<project>-tests.lock`; the 
 `test_lock_wait_minutes` (default 3, so wait plus run fit the agents' 10-minute Bash timeout), then exit 75 naming
 the holder. The exit code is the command's. `wonka config` and `wonka doctor` warn about a prefix that leaves the
 program or code to the caller (a shell, interpreter or launcher with nothing pinned after it, like `python3 -c`,
-`sh -c`, `bash`, `env`, `npx`), since it allows any command outside the sandbox.
+`sh -c`, `bash`, `env`, `npx`; option values like `python3 -W ignore`, env assignments like `env FOO=1` and a
+wrapped runner like `env FOO=1 bash` do not count as pinned), since it allows any command outside the sandbox.
 
 Every job JSON carries the project's `test_commands` (`[]` when none). The analyst, builder, fixer and squirrels run a
 test command that starts with one of them through `wonka test <id> --dispatch <n> -- <command>` with a 10-minute Bash
