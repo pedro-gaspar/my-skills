@@ -1559,6 +1559,28 @@ class FactoryTest(unittest.TestCase):
         gone = [h for h in self.history(tid) if str(h.get("why", "")).startswith("Worktree folder was gone")]
         self.assertEqual(len(gone), 1)
 
+    def test_recreate_worktree_logs_once_after_add_succeeds(self):
+        tid = self.add()
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
+        shutil.rmtree(wt)
+        real = factory.git
+
+        def failing(*args, cwd):
+            if args[:2] == ("worktree", "add"):
+                raise WonkaError("fatal: could not create the worktree")
+            return real(*args, cwd=cwd)
+
+        with mock.patch.object(factory, "git", failing):
+            self.tick()
+            self.tick()
+        self.assertEqual(self.whys(tid, "Worktree folder was gone"), 0)
+        self.tick()
+        self.assertEqual(self.whys(tid, "Worktree folder was gone"), 1)
+        self.assertTrue((wt / "hello.sh").exists())
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
     def test_killed_ticket_kept_worktree_cleanup_keeps_branch(self):
         tid = self.add()
         wt, branch = self.kept_after(tid, "CLOSED")
