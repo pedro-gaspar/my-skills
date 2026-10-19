@@ -1546,6 +1546,17 @@ class FactoryTest(unittest.TestCase):
         with mock.patch.object(factory, "git", return_value=""):
             self.assertIsNone(factory._main_worktree("."))
 
+    def test_repo_info_from_worktree_of_bare_repo_returns_that_worktree(self):
+        self._new_repo("bw", "main")
+        bare, wt = self.tmp / "bw.git", self.tmp / "bwt"
+        sh("git", "worktree", "add", "-q", str(wt), "main", cwd=bare)
+        top, base, origin = factory.repo_info(str(wt))
+        self.assertEqual(Path(top).resolve(), wt.resolve())
+        self.assertEqual(base, "main")
+        self.assertIsNone(origin)
+        (wt / "sub").mkdir()
+        self.assertEqual(Path(factory.repo_info(str(wt / "sub"))[0]).resolve(), wt.resolve())
+
     def test_child_of_parent_with_deleted_note_gets_no_jira(self):
         tid = self.add(jira="CALC-42")
         with self.f() as f:
