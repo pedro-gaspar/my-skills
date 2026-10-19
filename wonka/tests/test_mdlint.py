@@ -74,6 +74,23 @@ class SpaceListsTest(unittest.TestCase):
         self.assertEqual(mdlint.space_lists(t), t)
 
 
+class FenceTest(unittest.TestCase):
+    def test_fence_opener(self):
+        for s, want in (("```", "```"), ("````python", "````"), ("~~~ x `y`", "~~~"), ("```x```", None),
+                        ("``` a`b", None), ("``", None), ("text", None), (" ```", None)):
+            self.assertEqual(mdlint.fence_opener(s), want, s)
+
+    def test_closes_fence(self):
+        self.assertTrue(mdlint.closes_fence("```", "```"))
+        self.assertTrue(mdlint.closes_fence("```", "  ````  "))
+        self.assertFalse(mdlint.closes_fence("````", "```"))
+        self.assertFalse(mdlint.closes_fence("```", "~~~"))
+        self.assertFalse(mdlint.closes_fence("```", "``` x"))
+
+    def test_space_lists_inline_triple_backticks_is_text(self):
+        self.assertEqual(mdlint.space_lists("Intro:\n```x```\n- a"), "Intro:\n```x```\n\n- a")
+
+
 class MdlintTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
