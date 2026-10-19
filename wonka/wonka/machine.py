@@ -97,9 +97,10 @@ EDGES = {tuple(tuple(side.split("/")) for side in edge) for edge in _EDGES}
 
 
 def allowed(src, dst):
-    """Any live ticket may be killed; everything else must be an edge in the table."""
+    """Any ticket may be killed except a finished one (killed or merged: a merged PR can't be undone); everything
+    else must be an edge in the table."""
     if dst == KILLED:
-        return src != KILLED
+        return tuple(src) not in (KILLED, MERGED)
     return (tuple(src), tuple(dst)) in EDGES
 
 

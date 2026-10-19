@@ -19,6 +19,15 @@ class MachineTest(unittest.TestCase):
         self.assertTrue(machine.allowed(("baking", "progress"), machine.KILLED))
         self.assertFalse(machine.allowed(machine.KILLED, machine.KILLED))
 
+    def test_a_merged_ticket_cannot_be_killed(self):
+        self.assertFalse(machine.allowed(machine.MERGED, machine.KILLED))
+
+    def test_a_pr_merged_during_a_fix_round_can_be_recorded(self):
+        for src in (("baking", "pending"), ("baking", "progress"), ("reviewing", "awaiting"), ("shipped", "pending"),
+                    ("shipped", "progress")):
+            self.assertTrue(machine.allowed(src, machine.MERGED), src)
+        self.assertFalse(machine.allowed(("drafting", "progress"), machine.MERGED))
+
     def test_flaky_ci_edge(self):
         self.assertTrue(machine.allowed(("baking", "progress"), ("shipped", "awaiting")))
         self.assertFalse(machine.allowed(("baking", "pending"), ("shipped", "awaiting")))

@@ -2562,6 +2562,21 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(job["job"], "bake")
         return job, Path(job["worktree"])
 
+    def test_a_merged_ticket_dragged_to_wont_do_is_put_back(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        done_at = self.f_ticket(tid)["entered_done_at"]
+        self.edit_note(tid, lambda t: t.replace("status: 🚢-Shipped", "status: 🗑️-Wont-Do", 1))
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: reverted illegal 🗑️-Wont-Do/🌟-Ready", events)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertEqual(self.note(tid)[0]["status"], "🚢-Shipped")
+        self.assertEqual(self.f_ticket(tid)["entered_done_at"], done_at)
+        with self.f() as f:
+            self.assertEqual(f.metrics()[0]["outcome"], "merged")
+
     def test_killed_while_baking_keeps_clean_worktree_until_builder_ends(self):
         tid = self.add()
         job, wt = self.bake_job(tid)

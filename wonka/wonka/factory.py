@@ -1989,7 +1989,7 @@ class Factory:
         seen = machine.current(seen)  # an old Idea note reads 🕰️-Pending: relabelled silently below
         last = self.state(tid)
         if seen != last:
-            if seen[0] == "wontdo" and last != KILLED:
+            if seen[0] == "wontdo" and machine.allowed(last, KILLED):  # a merged ticket is put back below
                 self.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
                 return f"{tid}: killed by a human"
             if last == machine.IDEA and seen in (("triage", "pending"), ("triage", "awaiting")):
