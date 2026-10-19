@@ -390,6 +390,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("wontdo", "done"))
         toobig = note.get_section(self.note(tid)[1], "toobig")
         self.assertEqual(toobig, "- [[WONKA-00002]] Pages\n- [[WONKA-00003]] Users")
+        self.assertIn("Too big (l): split into 2 tickets", self.f_ticket(tid)["history"][-1]["why"])
 
     def make_lib(self):
         lib = self.tmp / "lib"
