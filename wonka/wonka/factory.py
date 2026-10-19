@@ -457,6 +457,8 @@ class Factory:
         path = self.scout_path(tid)
         if path.exists():
             self._remove_scout_dir(t["repo"], path)
+        else:
+            git("worktree", "prune", cwd=t["repo"])  # the dir was deleted from outside: forget its stale registration
         path.parent.mkdir(parents=True, exist_ok=True)
         git("worktree", "add", "--detach", "--quiet", str(path), ref, cwd=t["repo"])
         t["scout"], t["scout_ref"] = str(path), ref
@@ -473,6 +475,11 @@ class Factory:
                 self._remove_scout_dir(t["repo"], path)
             except (WonkaError, OSError) as e:
                 store.log(f"{tid} wonka: could not remove the scout {path} ({e})")
+        else:
+            try:
+                git("worktree", "prune", cwd=t["repo"])  # the dir is gone: do not leave its registration behind
+            except (WonkaError, OSError) as e:
+                store.log(f"{tid} wonka: could not prune the scout registration {path} ({e})")
         t.pop("scout", None)
         t.pop("scout_ref", None)
 

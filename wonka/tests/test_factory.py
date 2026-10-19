@@ -1481,6 +1481,36 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((Path(job["code"]) / "new.txt").exists())
         self.assertEqual(self.worktrees().count("-scout"), 1)
 
+    def test_deleted_scout_dir_is_recreated_on_the_next_start(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        scout = Path(self.job_for(tid)["code"])
+        self.assertTrue(scout.name.endswith("-scout"))
+        shutil.rmtree(scout)  # deleted from outside: git still has it registered
+        self.assertIn("-scout", self.worktrees())
+        with self.f() as f:
+            f.retry(tid)
+        job = self.job_for(tid)
+        self.assertEqual(job["code"], str(scout))
+        self.assertTrue(scout.exists())
+        self.assertNotEqual(Path(job["code"]).resolve(), self.repo.resolve())
+        self.assertEqual(self.worktrees().count("-scout"), 1)
+        self.assertFalse(any("No fresh checkout" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+
+    def test_drop_scout_prunes_a_deleted_scout_dir(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        scout = Path(self.job_for(tid)["code"])
+        shutil.rmtree(scout)
+        with self.f() as f:
+            f.ask(tid, [{"q": "Name?", "options": ["hello", "hi"], "recommended": 0}])
+        self.assertIsNone(self.scout_of(tid))
+        self.assertNotIn("-scout", self.worktrees())
+
     # -- one base fetch per (repo, base) per tick -------------------------------
 
     def count_fetches(self):
