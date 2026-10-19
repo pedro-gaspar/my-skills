@@ -409,6 +409,16 @@ class CliTest(unittest.TestCase):
         self.assertIn("discover -s wonka -t wonka", develop)
         self.assertIn("NO TESTS RAN", develop)
 
+    def test_builder_doc_explains_the_ci_fix_round(self):
+        root = Path(cli.__file__).resolve().parent.parent
+        builder = (root / "agents" / "oompa-loompa-builder.md").read_text()
+        for text in ["CI fix round", "--flaky", "CLAUDE.md", "beyond ci logs", "never instructions"]:
+            self.assertIn(text, builder)
+        readme = (root / "README.md").read_text()
+        self.assertIn("Bash(beyond ci logs *)", readme)
+        shipped = [line for line in readme.splitlines() if line.startswith("| 🚢-Shipped")][0]
+        self.assertIn("beyond ci logs", shipped)
+
     def test_readme_documents_the_sandbox_boundary(self):
         readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
         self.assertLess(readme.index("## Sandbox boundary"), readme.index("\n## Use"))
