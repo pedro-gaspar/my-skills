@@ -22,6 +22,7 @@ OLD_STATUSES = {"ready": "🎫-Ready"}
 OLD_PHASES = {"done": "🌟-Done"}
 SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
+SPEC_REVIEWS = ("agent", "human")
 AUTO_READY = ("xs", "s")  # Inbox tickets this small need no human approval
 
 
@@ -52,6 +53,7 @@ _EDGES = [
     ("drafting/progress", "drafting/awaiting"),
     ("drafting/awaiting", "drafting/progress"),
     ("drafting/progress", "planned/pending"),
+    ("drafting/awaiting", "planned/pending"),  # a human approved the spec (spec_review: human)
     ("planned/pending", "baking/pending"),
     ("baking/pending", "baking/progress"),
     ("baking/progress", "baking/pending"),  # retry

@@ -306,5 +306,22 @@ class CliTest(unittest.TestCase):
         self.assertIn("No ticket WONKA-00042", (self.tmp / "home/factory.log").read_text())
 
 
+    def test_needs_human_spec_review_flag(self):
+        self.assertTrue(cli.parser().parse_args(["add", "x", "--needs-human-spec-review"]).needs_human_spec_review)
+        self.assertFalse(cli.parser().parse_args(["add", "x"]).needs_human_spec_review)
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = self.tmp / "app"
+        repo.mkdir()
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
+        with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
+            self.assertEqual(self.run_cli("add", "x", "--repo", str(repo), "--needs-human-spec-review")[0], 0)
+        notes = list((self.tmp / "vault").rglob("WONKA-00001.md"))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("spec_review: human\n", notes[0].read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

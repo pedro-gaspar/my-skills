@@ -56,5 +56,10 @@ class MachineTest(unittest.TestCase):
         self.assertTrue(machine.allowed(("shipped", "awaiting"), ("baking", "pending")))
         self.assertFalse(machine.allowed(("shipped", "pending"), ("baking", "pending")))
 
+    def test_spec_approval_edge(self):
+        self.assertTrue(machine.allowed(("drafting", "awaiting"), ("planned", "pending")))
+        self.assertFalse(machine.allowed(("inbox", "awaiting"), ("planned", "pending")))
+
+
 if __name__ == "__main__":
     unittest.main()

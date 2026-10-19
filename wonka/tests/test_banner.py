@@ -75,5 +75,16 @@ class BannerTest(unittest.TestCase):
         t.pop("conflicts")
         self.assertIn("merge the PR", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
+    def test_spec_review_story(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "drafting", "phase": "awaiting"}, "project": "app", "history": [],
+             "review_round": 0, "reviewers": [], "spec_review_pending": True}
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("review the spec", text)
+        self.assertIn("[[WONKA-00001-plan]]", text)
+        del t["spec_review_pending"]
+        self.assertIn("the analyst has questions", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
+
 if __name__ == "__main__":
     unittest.main()

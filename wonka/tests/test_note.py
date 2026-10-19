@@ -301,5 +301,37 @@ class UnknownSectionsTest(unittest.TestCase):
         self.assertEqual(note.unknown_sections("## 📜 Spec  \nx\n## 🎩 Factory log\t\n"), [])
 
 
+
+class SpecReviewTest(unittest.TestCase):
+    def _write(self, meta):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = d / "n.md"
+        note.write(p, meta, "body")
+        return p
+
+    def test_empty_spec_review_writes_no_line(self):
+        for meta in ({"id": "W-1"}, {"id": "W-1", "spec_review": ""}):
+            self.assertNotIn("spec_review", self._write(meta).read_text())
+
+    def test_spec_review_round_trips(self):
+        p = self._write({"id": "W-1", "spec_review": "human"})
+        self.assertIn("spec_review: human\n", p.read_text())
+        self.assertEqual(note.read(p)[0]["spec_review"], "human")
+
+    def test_needs_human_review_fails_safe(self):
+        for v in ({}, {"spec_review": ""}, {"spec_review": "agent"}, {"spec_review": " Agent "}):
+            self.assertFalse(note.needs_human_review(v), v)
+        for v in ("human", "humna", "Human"):
+            self.assertTrue(note.needs_human_review({"spec_review": v}), v)
+
+    def test_picked(self):
+        sec = note.render_questions([{"q": note.SPEC_Q, "options": list(note.SPEC_OPTIONS), "other": False}])
+        self.assertEqual(note.picked(sec, note.SPEC_Q), [])
+        sec = sec.replace("- [ ] Re-draft", "- [x] Re-draft")
+        self.assertEqual([t.split(":")[0] for t in note.picked(sec, note.SPEC_Q)], ["Re-draft"])
+        self.assertEqual(note.picked(sec, "nope"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

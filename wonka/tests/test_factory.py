@@ -3622,5 +3622,137 @@ class FactoryTest(unittest.TestCase):
             self.assertTrue(f.path(tid).exists())
 
 
+    # -- spec_review ------------------------------------------------------
+
+    def draft_human(self, tid, size="s"):
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, size)
+        self.tick()
+        with self.f() as f:
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "Add hello.sh")
+            f.drafted(tid, size, ["architect"])
+
+    def tick_box(self, tid, label):
+        self.edit_note(tid, lambda text: text.replace(f"- [ ] {label}", f"- [x] {label}"))
+
+    def write_under_question(self, tid, line):
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Close: drop the ticket (Wont-Do)",
+                                                f"  - [ ] Close: drop the ticket (Wont-Do)\n  {line}", 1))
+
+    def test_default_ticket_is_agent_review(self):
+        tid = self.add()
+        self.assertEqual(self.note(tid)[0]["spec_review"], "agent")
+        self.to_planned(tid)
+
+    def test_human_review_waits_for_a_human(self):
+        tid = self.add(spec_review="human")
+        self.draft_human(tid)
+        self.assertEqual(self.state(tid), ("drafting", "awaiting"))
+        self.assertIn(note.SPEC_Q, self.note(tid)[1])
+        self.assertIn("review the spec", self.note(tid)[1])
+        self.assertEqual(self.tick()["jobs"], [])
+
+    def test_approve_bakes_in_the_same_tick(self):
+        tid = self.add(spec_review="human")
+        self.draft_human(tid)
+        self.tick_box(tid, "Approve")
+        jobs = self.tick()["jobs"]
+        self.assertIn((tid, "bake"), [(j["id"], j["job"]) for j in jobs])
+        self.assertTrue(any(h.get("why") == "Spec approved" and h["by"] == "human"
+                            for h in self.f_ticket(tid)["history"]))
+        self.assertNotIn("spec_review_pending", self.f_ticket(tid))
+        self.assertNotIn("## 🙋 Spec review", Path(self.f_ticket(tid)["plan"]).read_text())
+
+    def test_approve_with_notes_adds_them_to_the_plan(self):
+        tid = self.add(spec_review="human")
+        self.draft_human(tid)
+        self.tick_box(tid, "Approve")
+        self.write_under_question(tid, "Use bash, not zsh")
+        self.tick()
+        plan = Path(self.f_ticket(tid)["plan"]).read_text()
+        self.assertIn("## 🙋 Spec review", plan)
+        self.assertIn("Use bash, not zsh", plan)
+
+    def test_redraft_goes_back_to_the_analyst(self):
+        tid = self.add(spec_review="human")
+        self.draft_human(tid)
+        self.tick_box(tid, "Re-draft")
+        self.write_under_question(tid, "Cover the edge case")
+        jobs = self.tick()["jobs"]
+        self.assertIn((tid, "draft"), [(j["id"], j["job"]) for j in jobs])
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        with self.f() as f:
+            f.drafted(tid, "s", ["architect"])
+        self.assertEqual(self.state(tid), ("drafting", "awaiting"))
+        body = self.note(tid)[1]
+        answers = note.get_section(body, "answers")
+        self.assertIn("Cover the edge case", answers)
+        self.assertIn("[x] Re-draft", answers)
+        self.assertIn(note.SPEC_Q, note.get_section(body, "questions"))
+        self.assertEqual(note.picked(note.get_section(body, "questions"), note.SPEC_Q), [])
+
+    def test_close_and_mixed_ticks(self):
+        for ticks in (("Close",), ("Approve", "Close")):
+            tid = self.add(spec_review="human")
+            self.draft_human(tid)
+            for label in ticks:
+                self.tick_box(tid, label)
+            self.tick()
+            self.assertEqual(self.state(tid), KILLED)
+
+    def test_set_field_and_typo_fail_safe(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        with self.f() as f:
+            f.set_field(tid, "spec_review", "human")
+            f.write_plan(tid, "# plan\n")
+            f.set_section(tid, "spec", "x")
+            f.drafted(tid, "s", ["architect"])
+        self.assertEqual(self.state(tid), ("drafting", "awaiting"))
+        tid2 = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid2, "s")
+        self.tick()
+        self.edit_note(tid2, lambda t: t.replace("spec_review: agent", "spec_review: humna"))
+        with self.f() as f:
+            f.write_plan(tid2, "# plan\n")
+            f.set_section(tid2, "spec", "x")
+            f.drafted(tid2, "s", ["architect"])
+        self.assertEqual(self.state(tid2), ("drafting", "awaiting"))
+
+    def test_invalid_spec_review_is_refused(self):
+        tid = self.add()
+        with self.f() as f:
+            with self.assertRaises(WonkaError):
+                f.set_field(tid, "spec_review", "maybe")
+        with self.f() as f:
+            before = f.db["next_id"]
+            with self.assertRaises(WonkaError):
+                f.add("x", repo=str(self.repo), spec_review="maybe")
+            self.assertEqual(f.db["next_id"], before)
+
+    def test_children_inherit_spec_review(self):
+        tid = self.add(spec_review="human")
+        with self.f() as f:
+            kid = f.add("Part", parent=tid)
+            other = f.add("Part 2", parent=tid, spec_review="agent")
+        self.assertEqual(self.note(kid)[0]["spec_review"], "human")
+        self.assertEqual(self.note(other)[0]["spec_review"], "agent")
+
+    def test_killing_a_spec_review_ticket_drops_the_flag(self):
+        tid = self.add(spec_review="human")
+        self.draft_human(tid)
+        self.assertTrue(self.f_ticket(tid).get("spec_review_pending"))
+        with self.f() as f:
+            f.move(tid, KILLED, "human")
+        self.assertNotIn("spec_review_pending", self.f_ticket(tid))
+
+
 if __name__ == "__main__":
     unittest.main()

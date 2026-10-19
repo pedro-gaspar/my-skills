@@ -72,6 +72,10 @@ def _story(tid, t, meta, cfg):
                 f"⚠️ The fixer Oompa-Loompa could not start ({t['conflict_error']}). Wonka tries again on the next "
                 "tick; after 3 failed tries it stops and asks you to tick Retry.")
         return "info", "The PR has merge conflicts", "🔧 A fixer Oompa-Loompa picks it up on this tick."
+    if s == ("drafting", "awaiting") and t.get("spec_review_pending"):
+        return "question", "🙋 Your turn: review the spec", (
+            f"Read the 📜 Spec and the plan [[{tid}-plan]], then tick one option in ❓ Questions: **Approve** sends it "
+            "to baking, **Re-draft** sends it back to the analyst with what you write under the question, **Close** drops it.")
     return {
         ("inbox", "pending"): ("abstract", "Waiting for triage",
                                "📏 An Oompa-Loompa sizes this ticket as soon as triage has room "

@@ -414,6 +414,8 @@ class Factory:
             t.pop("conflicts", None)
             t.pop("merge_ref", None)
             t.pop("lease", None)
+        if dst != ("drafting", "awaiting"):
+            t.pop("spec_review_pending", None)  # only a drafting/awaiting ticket can wait on the spec review
         t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
         if dst[0] != "shipped" or dst[1] == "ready":
             # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
@@ -445,9 +447,12 @@ class Factory:
 
     # -- intake -----------------------------------------------------------
 
-    def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None):
+    def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None,
+            spec_review=None):
         if size and size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        if spec_review is not None and spec_review not in machine.SPEC_REVIEWS:
+            raise WonkaError("spec_review must be agent or human")
         parent_t = self.ticket(parent) if parent else None  # fail before touching anything
         top, base, origin = repo_info(repo or (parent_t and parent_t["repo"]) or os.getcwd())
         if parent_t:
@@ -455,12 +460,17 @@ class Factory:
             # carries over when the child builds in the parent's repo; elsewhere it means nothing.
             if pr_repo is None and top == parent_t["repo"]:
                 pr_repo = parent_t["pr_repo"]
-            if jira is None and self.path(parent).exists():  # a deleted parent note just means no key to inherit
-                jira = self.read(parent)[0].get("jira") or None
+            if self.path(parent).exists() and (jira is None or spec_review is None):  # a deleted parent note: nothing to inherit
+                parent_meta = self.read(parent)[0]
+                if jira is None:
+                    jira = parent_meta.get("jira") or None
+                if spec_review is None:
+                    spec_review = "human" if note.needs_human_review(parent_meta) else "agent"
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
         title = title or _default_title(idea)
-        meta = {"id": tid, "title": title, "size": size or "", "jira": jira or ""}
+        meta = {"id": tid, "title": title, "size": size or "", "jira": jira or "",
+                "spec_review": spec_review or "agent"}
         meta["status"], meta["phase"] = machine.label(("inbox", "pending"))
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
@@ -478,14 +488,16 @@ class Factory:
     def set_field(self, tid, field, value):
         if field == "size" and value not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
-        if field in ("title", "size", "jira"):
+        if field == "spec_review" and value not in machine.SPEC_REVIEWS:
+            raise WonkaError("spec_review must be agent or human")
+        if field in ("title", "size", "jira", "spec_review"):
             meta, body = self.read(tid)
             meta[field] = value
             self.write(tid, meta, body)
         elif field == "pr_repo":
             self.ticket(tid)["pr_repo"] = value
         else:
-            raise WonkaError("settable fields: title, size, jira, pr_repo")
+            raise WonkaError("settable fields: title, size, jira, pr_repo, spec_review")
 
     def triage(self, tid, size, title=None, questions=None, duplicate_of=None, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
@@ -620,9 +632,38 @@ class Factory:
             raise WonkaError(f"add the Spec first: wonka section {tid} spec < spec.md")
         if f"[[{tid}-plan]]" not in spec:
             body = note.set_section(body, "spec", f"{spec}\n\n📋 Plan: [[{tid}-plan]]")
-        self.write(tid, meta, body)
         t["plan"], t["reviewers"] = str(plan), list(reviewers) or ["architect"]
+        if note.needs_human_review(meta):
+            rendered = note.render_questions(
+                [{"q": note.SPEC_Q, "options": list(note.SPEC_OPTIONS), "recommended": None, "other": False}])
+            self.write(tid, meta, note.new_questions(body, rendered))
+            t["spec_review_pending"] = True  # after the write, before the move: move() keeps it for drafting/awaiting
+            self.move(tid, ("drafting", "awaiting"), "analyst",
+                      "Spec ready: spec_review is human, a human approves it before baking")
+            return
+        self.write(tid, meta, body)
         self.move(tid, ("planned", "pending"), "analyst")
+
+    def _spec_reviewed(self, tid, section):
+        """Act on the human's pick for the 📜 spec review question; None while nothing matching is ticked."""
+        picks = note.picked(section, note.SPEC_Q)
+        has = lambda word: any(p.startswith(word) for p in picks)
+        if has("Close"):
+            self.move(tid, KILLED, "human", "Closed at spec review")
+            return f"{tid}: closed at spec review"
+        if has("Re-draft"):
+            self.move(tid, ("drafting", "progress"), "human", "Spec sent back to the analyst")
+            self.ticket(tid)["resume"] = True
+            return f"{tid}: spec sent back to drafting"
+        if not has("Approve"):
+            return None
+        notes = note.decisions(section)
+        plan = self.ticket(tid).get("plan")
+        if plan and "  > " in notes and Path(plan).exists():
+            text = Path(plan).read_text()
+            Path(plan).write_text(text.rstrip("\n") + "\n\n## 🙋 Spec review\n" + notes + "\n")
+        self.move(tid, ("planned", "pending"), "human", "Spec approved")
+        return f"{tid}: spec approved"
 
     # -- baking -----------------------------------------------------------
 
@@ -1324,6 +1365,8 @@ class Factory:
             if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
                 self.move(tid, ("inbox", "ready"), "human", "Approved")
                 return f"{tid}: approved"
+        elif last == ("drafting", "awaiting") and t.get("spec_review_pending"):
+            return self._spec_reviewed(tid, note.get_section(body, "questions"))
         elif last == ("drafting", "awaiting") and note.all_answered(note.get_section(body, "questions")):
             self.move(tid, ("drafting", "progress"), "human", "Questions answered, the analyst resumes")
             t["resume"] = True
