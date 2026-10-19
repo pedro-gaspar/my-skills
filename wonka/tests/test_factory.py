@@ -2808,8 +2808,11 @@ class FactoryTest(unittest.TestCase):
 
     def test_dismissing_the_notification_opens_nothing(self):
         opened = self.fake_notify("#!/bin/sh\nexit 0\n")
-        factory.notify("WONKA-00001", "Hi", "https://github.com/acme/app/pull/7")
-        time.sleep(0.5)
+        procs, popen = [], factory.subprocess.Popen
+        with mock.patch.object(factory.subprocess, "Popen", lambda *a, **kw: procs.append(popen(*a, **kw)) or procs[-1]):
+            factory.notify("WONKA-00001", "Hi", "https://github.com/acme/app/pull/7")
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].wait(5), 1, "the click handler ends without exec'ing the opener")
         self.assertFalse(opened.exists())
 
     def test_pr_notification_carries_the_pr_url(self):

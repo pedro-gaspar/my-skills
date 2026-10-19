@@ -206,3 +206,46 @@ class RunTest(RepoFixture, unittest.TestCase):
         self.to_baking(tid)
         with mock.patch.object(testrun.subprocess, "run", return_value=mock.Mock(returncode=-9)):
             self.assertEqual(self.wtest(tid, "--", "./t.sh")[0], 137)
+
+
+class RunnerTablesTest(unittest.TestCase):
+    """Each runner, launcher subcommand and option value in testrun's tables, spelled out, so none is dropped."""
+
+    def test_every_runner_is_open(self):
+        for p in ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "python3", "pypy3", "ruby", "perl",
+                  "node", "deno", "bun", "php", "lua", "Rscript", "osascript", "pwsh", "powershell", "tclsh",
+                  "env", "exec", "command", "xargs", "nice", "nohup", "timeout 60", "time", "sudo", "doas",
+                  "npx", "pnpx", "bunx", "uvx", "Rscript -e", "osascript -e", "pwsh -Command",
+                  "powershell -Command"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+
+    def test_every_launcher_subcommand_is_open(self):
+        for p in ["uv run", "poetry run", "pipenv run", "npm exec", "pnpm exec", "pnpm dlx", "yarn exec", "yarn dlx",
+                  "bundle exec", "hatch run", "pdm run", "pnpm dlx python3 -c", "hatch run bash", "pdm run sh -c"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+        for p in ["pnpm dlx vitest", "hatch run pytest", "pdm run pytest", "hatch test", "pdm test"]:
+            with self.subTest(p):
+                self.assertFalse(testrun.open_prefix(p))
+
+    def test_env_long_options_take_a_value(self):
+        for p in ["env --unset HOME", "env --unset HOME FOO=1", "env --chdir /tmp", "env --chdir /tmp FOO=1",
+                  "env --unset HOME python3 -c", "env --chdir /tmp bash"]:
+            with self.subTest(p):
+                self.assertTrue(testrun.open_prefix(p))
+        for p in ["env --unset HOME pytest", "env --chdir /tmp ./test.sh"]:
+            with self.subTest(p):
+                self.assertFalse(testrun.open_prefix(p))
+
+
+class RunStdinTest(RepoFixture, unittest.TestCase):
+    def test_the_command_gets_no_stdin(self):
+        """An agent's terminal or pipe never reaches the test command: it reads EOF."""
+        store.save_config({**self.cfg, "test_commands": {"app": ["./t.sh"]}})
+        tid = self.add()
+        self.to_baking(tid)
+        with mock.patch.object(testrun.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["test", tid, "--", "./t.sh"]), 0)
+        self.assertIs(run.call_args.kwargs["stdin"], testrun.subprocess.DEVNULL)

@@ -137,3 +137,15 @@ class RunTest(RepoFixture, unittest.TestCase):
         code, err = self.run_logs(tid, self.URL)
         self.assertEqual(code, 1)
         self.assertIn("command not found", err)
+
+
+class RunStdinTest(RepoFixture, unittest.TestCase):
+    def test_the_log_tool_gets_no_stdin(self):
+        store.save_config({**self.cfg, "ci_hosts": {"app": HOSTS}, "ci_log_command": {"app": "beyond ci logs"}})
+        tid = self.add()
+        self.to_baking(tid)
+        with mock.patch("wonka.cilogs.subprocess.run", return_value=mock.Mock(returncode=0)) as run, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["ci-logs", tid, "https://ci.example.com/x/1"]), 0)
+        self.assertEqual(run.call_args.args[0], ["beyond", "ci", "logs", "https://ci.example.com/x/1"])
+        self.assertIs(run.call_args.kwargs["stdin"], cilogs.subprocess.DEVNULL)

@@ -13,6 +13,8 @@ from unittest import mock
 
 from wonka import cli, factory, metrics, store
 
+from .fixtures import RepoFixture
+
 
 class CliTest(unittest.TestCase):
     def setUp(self):
@@ -676,6 +678,138 @@ class PassthroughTest(unittest.TestCase):
             code, _, err = self.run_cli("git", "X", "status")
         self.assertEqual(code, 1)
         self.assertIn("🗑️ wonka: boom", err)
+
+
+class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
+    """The agent commands through cli.main against a real factory: each forwards --dispatch, so a call from an
+    earlier dispatch is ignored and changes nothing."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(cli, "LINK", self.tmp / "bin" / "wonka")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def cli(self, *argv, stdin=""):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(cli.sys, "stdin", io.StringIO(stdin)):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def stale(self, tid):
+        """Hand the ticket's job to a new dispatch; returns the old, now stale, dispatch number."""
+        with self.f() as f:
+            t = f.ticket(tid)
+            self.assertIsNotNone(t.get("dispatch"))
+            t["dispatch"] += 1
+            return t["dispatch"] - 1
+
+    def snapshot(self, tid):
+        with self.f() as f:
+            t = f.ticket(tid)
+            plan = f.plan_path(tid)
+            return (f.state(tid), f.path(tid).read_text(), plan.exists() and plan.read_text(), t.get("reports"),
+                    t.get("dispatch"), f.pr_body_path(tid).exists())
+
+    def assert_ignored(self, tid, calls):
+        before = self.snapshot(tid)
+        for argv, stdin in calls:
+            with self.subTest(cmd=argv[0]):
+                code, out, err = self.cli(*argv, stdin=stdin)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("from an earlier dispatch", out)
+                self.assertIn("ignored", out)
+                self.assertEqual(self.snapshot(tid), before)
+
+    def drafting(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        return tid
+
+    def test_triage_forwards_the_dispatch(self):
+        tid = self.add()
+        self.tick()
+        old = self.stale(tid)
+        self.assert_ignored(tid, [(["triage", tid, "--size", "s", "--dispatch", str(old)], "")])
+        code, _, err = self.cli("triage", tid, "--size", "s", "--dispatch", str(old + 1))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.state(tid), ("triage", "ready"))
+
+    def test_analyst_commands_forward_the_dispatch(self):
+        tid = self.drafting()
+        d = str(self.stale(tid))
+        self.assert_ignored(tid, [
+            (["ask", tid, "--question", "Bash or Python? | Bash | *Python", "--dispatch", d], ""),
+            (["section", tid, "spec", "--dispatch", d], "Add hello.sh\n"),
+            (["plan", tid, "--dispatch", d], "# plan\n"),
+            (["drafted", tid, "--size", "s", "--reviewers", "architect", "--dispatch", d], ""),
+        ])
+
+    def test_builder_and_fixer_commands_forward_the_dispatch(self):
+        tid = self.add()
+        self.to_baking(tid)
+        d = str(self.stale(tid))
+        self.assert_ignored(tid, [
+            (["pr-body", tid, "--dispatch", d], "## Summary\nAdds hello.sh\n"),
+            (["baked", tid, "--dispatch", d], ""),
+            (["resolved", tid, "--dispatch", d], ""),
+            (["finished", tid, "--agent", "wonka:oompa-loompa-builder", "--dispatch", d], ""),
+        ])
+
+    def test_report_forwards_the_dispatch(self):
+        tid = self.add()
+        wt = self.to_baking(tid)
+        (wt / "hello.sh").write_text("echo hi\n")
+        for cmd in (["add", "hello.sh"], ["commit", "-qm", "bake"]):
+            subprocess.run(["git", *cmd], cwd=wt, check=True, capture_output=True)
+        self.assertEqual(self.cli("baked", tid, "--dispatch", str(self.dispatch))[0], 0)
+        self.tick()
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        d = str(self.stale(tid))
+        self.assert_ignored(tid, [
+            (["report", tid, "--squirrel", "architect", "--verdict", "good", "--dispatch", d], ""),
+            (["finished", tid, "--agent", "wonka:squirrel-architect", "--dispatch", d], ""),
+        ])
+
+    def test_tick_hands_out_jobs_as_json(self):
+        tid = self.add()
+        code, out, _ = self.cli("tick")
+        self.assertEqual(code, 0)
+        jobs = [j for j in json.loads(out)["jobs"] if j["id"] == tid]
+        self.assertEqual([j["job"] for j in jobs], ["triage"])
+        with self.f() as f:
+            self.assertEqual(jobs[0]["dispatch"], f.ticket(tid)["dispatch"])
+
+    def test_retry_puts_the_job_back(self):
+        tid = self.add()
+        self.tick()
+        code, out, _ = self.cli("retry", tid)
+        self.assertEqual(code, 0)
+        self.assertIn(f"{tid}: back in the queue", out)
+        with self.f() as f:
+            self.assertEqual(f.ticket(tid)["retries"], 1)
+
+    def test_move_is_checked_by_the_state_machine(self):
+        tid = self.add()
+        self.tick()
+        before = self.state(tid)
+        code, _, err = self.cli("move", tid, "shipped", "ready", "--why", "skip ahead")
+        self.assertEqual(code, 1)
+        self.assertIn("is not a legal move", err)
+        self.assertEqual(self.state(tid), before)
+        code, _, err = self.cli("move", tid, "bogus", "ready")
+        self.assertEqual(code, 1)
+        self.assertIn("unknown value 'bogus'", err)
+        code, out, _ = self.cli("move", tid, "triage", "awaiting", "--why", "needs a look")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.state(tid), ("triage", "awaiting"))
+        with self.f() as f:
+            self.assertEqual(f.ticket(tid)["history"][-1]["by"], "human")
 
 
 if __name__ == "__main__":
