@@ -2373,6 +2373,9 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertEqual(self.f_ticket(tid)["retries"], 1)
+        job = self.fixer_job(tid)  # OPEN CONFLICTING: a fixer is called, the failed try still counts
+        self.assertEqual(job["job"], "conflicts")
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
 
     def close_pr(self):
         """The human closes the PR on GitHub: `pr view` says CLOSED and `pr list --state open` finds nothing."""
