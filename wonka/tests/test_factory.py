@@ -4351,6 +4351,56 @@ class FactoryTest(unittest.TestCase):
         self.assertNotRegex(plan, r"(?m)^## 🔴 CI failure")
         self.assertNotIn("pasted", plan)
 
+    # -- plan writes: atomic, and never twice -------------------------------
+
+    def test_review_round_is_logged_once_when_the_report_is_rerun(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.tick()
+        rep = {"verdict": "bad nut", "issues": ["no shebang"]}
+        with mock.patch.object(Factory, "_back_to_baking", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError), self.f() as f:  # the command fails: its state is not saved
+                f.report(tid, "architect", rep)
+        self.assertEqual(self.plan_text(tid).count("## 🐿️ Review round 1"), 1)
+        with self.f() as f:
+            f.report(tid, "architect", rep)
+        self.assertEqual(self.plan_text(tid).count("## 🐿️ Review round 1"), 1)
+        self.assertEqual(self.plan_text(tid).count("- no shebang"), 1)
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+
+    def test_ci_failure_is_logged_once_after_a_failed_tick(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        with mock.patch.object(Factory, "_mark_ci_round", side_effect=OSError("disk full")):
+            self.tick()
+        self.assertEqual(self.plan_text(tid).count("## 🔴 CI failure 1"), 1)
+        self.tick()
+        plan = self.plan_text(tid)
+        self.assertEqual(plan.count("CI failure 1"), 1, plan)
+        self.assertNotIn("Earlier CI failure", plan)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_decisions_are_logged_once(self):
+        tid = self.add()
+        self.to_planned(tid)
+        with self.f() as f:
+            f.ticket(tid)["review_round"] = 1
+            f._append_to_round(tid, "### Decisions\n- Rename? → Yes\n")
+            f._append_to_round(tid, "### Decisions\n- Rename? → Yes\n")
+        self.assertEqual(self.plan_text(tid).count("### Decisions"), 1)
+
+    def test_plan_files_are_written_atomically(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        with mock.patch.object(store, "write_atomic", wraps=store.write_atomic) as w, self.f() as f:
+            f.write_plan(tid, "# plan\n")
+        self.assertIn(f"{tid}-plan.md", [Path(c.args[0]).name for c in w.call_args_list])
+
     # -- merge conflicts on an open PR ------------------------------------
 
     def upstream_change(self, filename="hello.sh", text="echo upstream\n"):

@@ -913,7 +913,7 @@ class Factory:
             raise WonkaError(f"the PR body does not follow {rel}: " + "; ".join(problems))
         path = self.pr_body_path(tid)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text.strip() + "\n")
+        store.write_atomic(path, text.strip() + "\n")
         t["pr_body_dispatch"] = t["dispatch"]
 
     def write_plan(self, tid, text, dispatch=None):
@@ -930,7 +930,7 @@ class Factory:
         out = new.rstrip("\n") + "\n"
         if log.strip("\n"):
             out += "\n" + log.strip("\n") + "\n"
-        path.write_text(out)
+        store.write_atomic(path, out)
 
     def repos(self):
         """The distinct repos of all known tickets: sorted (project, repo, pr_repo) tuples."""
@@ -1028,8 +1028,10 @@ class Factory:
         notes = note.decisions(section)
         plan = self.ticket(tid).get("plan")
         if plan and "  > " in notes and Path(plan).exists():
-            text = Path(plan).read_text()
-            Path(plan).write_text(text.rstrip("\n") + "\n\n## 🙋 Spec review\n" + notes + "\n")
+            text = Path(plan).read_text().rstrip("\n") + "\n"
+            block = "\n## 🙋 Spec review\n" + notes + "\n"
+            if not text.endswith(block):  # already there: a rerun after a rolled-back tick
+                store.write_atomic(plan, text + block)
         self.move(tid, ("planned", "pending"), "human", "Spec approved")
         return f"{tid}: spec approved"
 
@@ -1443,13 +1445,12 @@ class Factory:
                 seen.add(title.casefold())
         issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
         if issues and t["plan"] and Path(t["plan"]).exists():
-            log = [f"\n## 🐿️ Review round {rnd}"]  # only squirrels with issues: a clean verdict is noise to the builder
+            log = [f"## 🐿️ Review round {rnd}"]  # only squirrels with issues: a clean verdict is noise to the builder
             for name, rep in reps.items():
                 if rep.get("issues"):
                     log.append(f"### squirrel-{name}: {rep.get('verdict', '?')}")
                     log += [f"- {i}" for i in rep["issues"]]
-            with open(t["plan"], "a") as fh:
-                fh.write("\n".join(log) + "\n")
+            self._write_log(tid, ["\n".join(log)], age=False)
         qs = [q for rep in reps.values() for q in rep.get("questions", [])]
         why = {s: [r.get("why", "") for r in reps.values() if r.get("suggest") == s] for s in ("close", "draft")}
         if why["close"]:
@@ -1485,10 +1486,12 @@ class Factory:
         rounds = list(REVIEW_LOG.finditer(text))
         sep = "" if not text or text.endswith("\n") else "\n"
         if rounds and rounds[-1].group(0) == head:
+            if block in text[rounds[-1].start():]:
+                return  # already logged: a rerun after a rolled-back tick or command
             add = block
         else:  # a clean round with questions logged no heading yet
             add = f"\n{head}\n{block}"
-        plan.write_text(text + sep + add)
+        store.write_atomic(plan, text + sep + add)
 
     def _back_to_baking(self, tid, why):
         t = self.ticket(tid)
@@ -1786,23 +1789,33 @@ class Factory:
         t["review_round"], t["fixing_ci"] = 0, True
         t.pop("extra_rounds", None)
 
-    def _append_log(self, tid, sections):
-        """Age the plan's review log and append the new sections, which stay current."""
+    def _write_log(self, tid, sections, age=True):
+        """Append sections to the plan's review log; with `age`, the log is aged first so only the new ones are
+        current. When the log already ends with these sections (a rerun after a rolled-back tick or command, whose
+        counters went back with it), they are replaced, not repeated."""
         t = self.ticket(tid)
         plan = Path(t["plan"]) if t.get("plan") else None
         if not (plan and plan.exists()):
             return
         head, log = _split_reviews(plan.read_text())
-        text = (head + _age_log(log)).rstrip("\n") + "\n"
+        starts = [m.start() for m in REVIEW_LOG.finditer(log)]
+        parts = [log[a:b] for a, b in zip(starts, starts[1:] + [len(log)])]
+        # CI failure and change request numbers never repeat, so the heading tells a rerun; review round numbers
+        # start over after a redraft, so a review round must match in full
+        key = lambda s: s.strip() if s.startswith("## 🐿️ Review round") else s.split("\n", 1)[0].strip()
+        n = len(sections)
+        if len(parts) >= n and [key(p) for p in parts[len(parts) - n:]] == [key(s) for s in sections]:
+            log = "".join(parts[:len(parts) - n])
+        text = (head + (_age_log(log) if age else log)).rstrip("\n") + "\n"
         for s in sections:
             text += "\n" + s.rstrip("\n") + "\n"
-        plan.write_text(text)
+        store.write_atomic(plan, text)
 
     def _ci_failed(self, tid, head, red):
         """The open PR's checks are red: write the failure into the plan, back to baking."""
         t = self.ticket(tid)
         section = self._ci_section(tid, t.get("ci_failures", 0) + 1, head, red)  # gh calls first: a failure changes nothing
-        self._append_log(tid, [section])
+        self._write_log(tid, [section])
         self._mark_ci_round(tid, head, red)
         meta, body = self.read(tid)
         self.write(tid, meta, note.drop_section(body, "changes"))
@@ -1836,7 +1849,7 @@ class Factory:
             "### From the note", note.demote(notes.strip()) if notes.strip() else "(none)",
             "### PR comments", "\n".join(pr) if pr else "(none)",
         ])
-        self._append_log(tid, [ci_section, change_section] if ci else [change_section])
+        self._write_log(tid, [ci_section, change_section] if ci else [change_section])
         t["review_round"], t["fixing_changes"] = 0, True
         t.pop("extra_rounds", None)
         if ci:
