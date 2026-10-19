@@ -104,7 +104,7 @@ class FactoryTest(unittest.TestCase):
             path = f.path(tid)
         path.write_text(fn(path.read_text()))
 
-    def to_ready(self, tid, size="s", reviewers=("architect",)):
+    def to_planned(self, tid, size="s", reviewers=("architect",)):
         """Walk a fresh ticket through triage and drafting."""
         self.tick()
         with self.f() as f:
@@ -140,7 +140,7 @@ class FactoryTest(unittest.TestCase):
         tid = self.add()
         self.assertEqual(tid, "WONKA-00001")
         self.assertEqual(self.tick()["jobs"][0]["agents"], ["wonka:oompa-loompa-triage"])
-        self.to_ready(tid, reviewers=("architect", "security"))
+        self.to_planned(tid, reviewers=("architect", "security"))
         self.assertIn("[[WONKA-00001-plan]]", note.get_section(self.note(tid)[1], "spec"))
 
         wt = self.bake(tid)
@@ -186,7 +186,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_repeated_followup_across_rounds_is_not_duplicated(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "security"))
+        self.to_planned(tid, reviewers=("architect", "security"))
         children = lambda: self.f_ticket(tid)["children"]
 
         self.bake(tid)
@@ -211,7 +211,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_pr_description_carries_the_wonka_and_jira_ids(self):
         tid = self.add(jira="CALC-42")
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
@@ -221,7 +221,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_pr_description_without_jira_has_only_the_wonka_id(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
@@ -231,7 +231,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         wt = self.bake(tid)
         Path(f"{self.pr_state}.open").touch()  # a PR already opened by hand on the branch
         self.review(tid, architect={"verdict": "good nut"})
@@ -251,7 +251,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_first_ship_reuses_an_open_pr_wonka_opened_without_claiming_requested_changes(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         # Wonka opened it, but the URL was lost (a crashed tick): its description starts with the ticket's line
         Path(f"{self.pr_state}.list").write_text(
@@ -293,7 +293,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_old_ready_status_in_a_note_is_migrated_silently(self):
         b = self.add()
-        self.to_ready(b)
+        self.to_planned(b)
         self.check_old_label(b, ("planned", "pending"), "status", "🎫-Ready", "🎫-Planned")
 
     def test_triage_closes_a_duplicate(self):
@@ -474,7 +474,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_spark_and_airflow_squirrels_review_data_tickets(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("spark", "airflow"))
+        self.to_planned(tid, reviewers=("spark", "airflow"))
         self.bake(tid)
         job = self.review(tid, spark={"verdict": "good nut"}, airflow={"verdict": "good nut"})
         self.assertEqual(job["agents"], ["wonka:squirrel-spark", "wonka:squirrel-airflow"])
@@ -482,7 +482,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_three_bad_review_rounds_kill_the_ticket(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         for n in range(3):
             self.bake(tid, f"f{n}.sh")
             self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
@@ -492,7 +492,7 @@ class FactoryTest(unittest.TestCase):
     def test_max_review_rounds_setting_controls_the_kill(self):
         self.cfg["max_review_rounds"] = 2
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid, "f0.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
         self.assertEqual(self.state(tid), ("baking", "pending"))
@@ -503,7 +503,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_fix_round_needs_a_new_commit_before_baked(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
         self.assertEqual(self.state(tid), ("baking", "pending"))
@@ -524,7 +524,7 @@ class FactoryTest(unittest.TestCase):
     def test_review_questions_can_close_or_redraft(self):
         a, b = self.add(), self.add("Other")
         for tid, suggest in ((a, "close"), (b, "draft")):
-            self.to_ready(tid)
+            self.to_planned(tid)
             self.bake(tid)
             self.review(tid, architect={"verdict": "bad nut", "suggest": suggest, "why": "because"})
         self.assertEqual(self.state(a), ("reviewing", "awaiting"))
@@ -537,7 +537,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_redraft_keeps_earlier_review_rounds(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         with self.f() as f:
             plan = f.plan_path(tid)
         self.assertEqual(plan.read_text(), "# plan\n", "a plan without reviews is written as given")
@@ -587,7 +587,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_review_with_questions_ships_when_answers_match(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
         self.assertEqual(self.state(tid), ("reviewing", "awaiting"))
@@ -600,7 +600,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_review_answer_off_recommendation_rebakes_without_kill(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bad_rounds(tid)
         self.bake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
@@ -621,7 +621,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_review_rebake_grants_an_extra_round(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bad_rounds(tid)
         self.clean_rebake(tid, "f2.sh")
         self.assertEqual(self.f_ticket(tid)["extra_rounds"], 1)
@@ -643,7 +643,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_rebake_grants_one_more_round_with_issues(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bad_rounds(tid)
         self.clean_rebake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
@@ -652,7 +652,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_early_clean_rebake_does_not_shorten_the_budget(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.clean_rebake(tid, "f0.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
         self.assertEqual(self.state(tid), ("baking", "pending"))
@@ -665,7 +665,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_redraft_resets_the_extra_rounds(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.clean_rebake(tid, "f0.sh")
         self.review(tid, architect={"verdict": "bad nut", "suggest": "draft", "why": "because"})
         self.edit_note(tid, lambda t: t.replace("  - [ ] Yes ⭐", "  - [x] Yes ⭐"))
@@ -677,7 +677,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_round_three_clean_review_with_questions_is_not_killed(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bad_rounds(tid)
         self.bake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
@@ -687,7 +687,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_review_with_issues_and_questions_still_rebakes(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
         self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
@@ -696,7 +696,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_review_logs_nothing_in_the_plan(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("spark", "airflow"))
+        self.to_planned(tid, reviewers=("spark", "airflow"))
         self.bake(tid)
         self.review(tid, spark={"verdict": "good nut"}, airflow={"verdict": "good nut"})
         text = self.plan_text(tid)
@@ -705,7 +705,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_review_log_holds_only_squirrels_with_issues(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "security"))
+        self.to_planned(tid, reviewers=("architect", "security"))
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"}, security={"verdict": "bad nut", "issues": ["no shebang"]})
         text = self.plan_text(tid)
@@ -714,7 +714,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_review_answered_off_recommendation_logs_the_decision(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
         self.assertNotIn("Review round", self.plan_text(tid))
@@ -727,7 +727,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_review_with_issues_and_questions_logs_decisions_under_the_round(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
         self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
@@ -739,7 +739,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_clean_review_answered_as_recommended_ships_with_the_decision(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut", "questions": [self.QUESTION]})
         self.edit_note(tid, lambda t: t.replace("  - [ ] Keep hello ⭐", "  - [x] Keep hello ⭐"))
@@ -750,7 +750,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_redraft_answer_is_kept_and_close_no_is_not(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "security"))
+        self.to_planned(tid, reviewers=("architect", "security"))
         self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["no shebang"], "suggest": "draft",
                                     "why": "wrong approach"},
@@ -769,7 +769,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_round_three_review_with_issues_and_questions_is_killed(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bad_rounds(tid)
         self.bake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["wrong"], "questions": [self.QUESTION]})
@@ -789,7 +789,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_retry_puts_a_stuck_job_back(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.tick()
         self.assertEqual(self.state(tid), ("baking", "progress"))
         later = factory.now() + dt.timedelta(hours=3)
@@ -953,7 +953,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_parallel_squirrels_do_not_retry_each_other(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "backend"))
+        self.to_planned(tid, reviewers=("architect", "backend"))
         self.bake(tid)
         job = self.review(tid, architect={"verdict": "good nut"})
         msg = self.finished(tid, "wonka:squirrel-architect")
@@ -970,7 +970,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_a_silent_squirrel_is_retried_once_the_others_finish(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "backend"))
+        self.to_planned(tid, reviewers=("architect", "backend"))
         self.bake(tid)
         job = self.review(tid)
         msg = self.finished(tid, "wonka:squirrel-architect")
@@ -1045,7 +1045,7 @@ class FactoryTest(unittest.TestCase):
     def retried_review(self):
         """A review handed out, retried and handed out again: (tid, first dispatch, second job)."""
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "backend"))
+        self.to_planned(tid, reviewers=("architect", "backend"))
         self.bake(tid)
         first = self.review(tid)
         with self.f() as f:
@@ -1173,7 +1173,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_late_baked_from_an_earlier_dispatch_is_ignored(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
         d1, wt = job["dispatch"], Path(job["worktree"])
@@ -1194,7 +1194,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_failed_pr_is_retried_each_tick_then_stuck_until_a_human_ticks_retry(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
@@ -1237,7 +1237,7 @@ class FactoryTest(unittest.TestCase):
         tid = self.add()
         with self.f() as f:
             f.ticket(tid)["pr_repo"] = None
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
@@ -1248,7 +1248,7 @@ class FactoryTest(unittest.TestCase):
 
     def _shipping_ticket(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         wt = self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
@@ -1459,7 +1459,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_deleted_note_with_dirty_worktree_does_not_wedge_the_tick(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
         wt = Path(job["worktree"])
@@ -1479,7 +1479,7 @@ class FactoryTest(unittest.TestCase):
 
     def to_awaiting_merge(self, tid):
         """Bake, review clean and open the PR: shipped/awaiting with the worktree and branch in place."""
-        self.to_ready(tid)
+        self.to_planned(tid)
         wt = self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
@@ -1594,7 +1594,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_live_worktree_folder_deleted_by_hand_is_recreated(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         wt = self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
         self.assertEqual(self.state(tid), ("baking", "pending"))
@@ -1622,7 +1622,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_live_worktree_replaced_by_a_file_is_not_used(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         wt = self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
         self.assertEqual(self.state(tid), ("baking", "pending"))
@@ -1643,7 +1643,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_recreate_worktree_logs_once_after_add_succeeds(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         wt = self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
         shutil.rmtree(wt)
@@ -1698,7 +1698,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_cleanup_covers_archived_tickets(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         wt = Path(job["worktree"])
         (wt / "scratch.txt").write_text("wip\n")
@@ -1727,7 +1727,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("wontdo", "ready"))
 
     def bake_job(self, tid):
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
         return job, Path(job["worktree"])
@@ -1782,7 +1782,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_killed_during_review_waits_for_every_squirrel(self):
         tid = self.add()
-        self.to_ready(tid, reviewers=("architect", "backend", "security"))
+        self.to_planned(tid, reviewers=("architect", "backend", "security"))
         wt = self.bake(tid)
         job = self.review(tid, architect={"verdict": "good nut"})
         self.kill(tid)
@@ -1823,7 +1823,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_bad_nut_kill_does_not_hold(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         for n in range(3):
             wt = self.bake(tid, f"f{n}.sh")
             self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
@@ -2013,7 +2013,7 @@ class FactoryTest(unittest.TestCase):
     def test_baking_starts_from_the_latest_origin_base(self):
         tid = self.add()
         self.push_upstream()
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = self.tick()["jobs"][0]
         self.assertEqual(job["base_ref"], "origin/main")
         self.assertTrue((Path(job["worktree"]) / "new.txt").exists())
@@ -2340,7 +2340,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_request_changes_ages_an_earlier_review_round_before_it(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "bad nut", "issues": ["no shebang"]})
         self.bake(tid, "fix.sh")
@@ -2602,7 +2602,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_change_request_gets_a_fresh_review_budget(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bad_rounds(tid, 2)
         self.bake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "good nut"})
@@ -3393,7 +3393,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.move(parent, KILLED, "human")
         tid = self.add("a follow-up", parent=parent)
-        self.to_ready(tid)
+        self.to_planned(tid)
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut", "followups": [{"title": "Another one", "idea": "more"}]})
         with self.f() as f:
@@ -3406,7 +3406,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_worktree_setup_failure_goes_stuck(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         with mock.patch.object(Factory, "ensure_worktree", side_effect=WonkaError("disk full")):
             events = [e for _ in range(3) for e in self.tick()["events"] if e.startswith(tid)]
         self.assertIn(f"{tid}: ⚠️ could not set up the worktree (try 1/3), retried next tick: disk full", events)
@@ -3417,7 +3417,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_registered_worktree_from_a_lost_update_is_adopted(self):
         tid = self.add()
-        self.to_ready(tid)
+        self.to_planned(tid)
         job = self.tick()["jobs"][0]
         with self.f() as f:
             t = f.ticket(tid)
