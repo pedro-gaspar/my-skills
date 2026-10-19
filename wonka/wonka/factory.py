@@ -254,9 +254,8 @@ def _pr_mark(tid):
 
 
 def pr_title(tid, meta):
-    """`[KEY-1] title` when the ticket has a Jira key, else `WONKA-00001: title`."""
-    title = meta.get("title", "")
-    return f"[{meta['jira']}] {title}" if meta.get("jira") else f"{tid}: {title}"
+    """`[KEY-1] title` when the ticket has a Jira key, else `[WONKA-00001] title`."""
+    return f"[{meta.get('jira') or tid}] {meta.get('title', '')}"
 
 
 def pr_body(tid, meta, spec):
