@@ -2827,6 +2827,79 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(b, [j["id"] for j in tick["jobs"]])
         self.assertFalse(any("not a Wonka ticket" in e for e in tick["events"]))
 
+    def test_yaml_escapes_and_bad_bytes_in_a_note_do_not_stop_the_tick(self):
+        a = self.add("Add a hello script")
+        with self.f() as f:
+            path = f.path(a)
+        text = path.read_text().replace("title: Add a hello script", r'title: "Caf\xe9 \e\ ok" # mine')
+        path.write_bytes(text.encode() + b"\nstray \xff byte\n")
+        tick = self.tick()
+        self.assertFalse(any("⚠️" in e for e in tick["events"]), tick["events"])
+        self.assertIn(a, [j["id"] for j in tick["jobs"]])
+        self.assertEqual(self.note(a)[0]["title"], "Café \x1b ok")
+
+    def test_newlines_in_title_and_jira_are_folded_so_banners_never_pile_up(self):
+        tid = self.add(title="Two\nlines", jira="KEY-1\n")
+        self.assertEqual((self.note(tid)[0]["title"], self.note(tid)[0]["jira"]), ("Two lines", "KEY-1"))
+        with self.f() as f:
+            f.set_field(tid, "title", "New title")
+            f.set_field(tid, "jira", "KEY-2\r\nx")
+            f.set_field(tid, "size", "s")
+        meta, body = self.note(tid)
+        self.assertEqual((meta["title"], meta["jira"]), ("New title", "KEY-2 x"))
+        self.assertTrue(body.startswith("# 🎫 New title\n\n> [!"), body)
+        self.assertEqual(body.count("# 🎫 "), 1)
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s", title="Triaged\ntitle")
+        self.assertEqual(self.note(tid)[0]["title"], "Triaged title")
+
+    def test_a_hand_written_multi_line_title_keeps_one_banner(self):
+        tid = self.add()
+        with self.f() as f:
+            path = f.path(tid)
+        path.write_text(path.read_text().replace("title: Add a hello script", "title: |\n  Add a\n  hello script"))
+        for size in ("s", "m"):
+            with self.f() as f:
+                f.set_field(tid, "size", size)
+        body = self.note(tid)[1]
+        self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!"), body)
+        self.assertEqual(body.count("> [!"), 2, "one banner, one log")
+
+    def test_a_report_from_a_squirrel_not_reviewing_the_ticket_is_refused(self):
+        tid = self.add()
+        self.to_planned(tid, reviewers=("architect",))
+        self.bake(tid)
+        with self.assertRaisesRegex(WonkaError, f"squirrel-security is not reviewing {tid}; its squirrels: architect"):
+            self.review(tid, security={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        self.assertEqual(self.f_ticket(tid)["reports"], {})
+
+    def test_an_empty_idea_is_refused(self):
+        for idea in ("", "  \n\t"):
+            with self.subTest(idea=idea), self.assertRaisesRegex(WonkaError, "the idea is empty"):
+                self.add(idea)
+        with self.f() as f:
+            self.assertEqual((f.db["next_id"], f.db["tickets"]), (1, {}))
+
+    def test_unreadable_frontmatter_is_an_error_on_its_ticket_only(self):
+        a = self.add("Add a hello script")
+        b = self.add("Add a bye script")
+        with self.f() as f:
+            path = f.path(a)
+        path.write_text(path.read_text().replace("title: Add a hello script", "title: BOOM"))
+        real = note._scalar
+
+        def scalar(head, lines):
+            if head == "BOOM":
+                raise ValueError("bad")
+            return real(head, lines)
+
+        with mock.patch.object(note, "_scalar", scalar):
+            tick = self.tick()
+        self.assertIn(f"{a}: ⚠️ {path}: the frontmatter can't be read (bad)", tick["events"])
+        self.assertIn(b, [j["id"] for j in tick["jobs"]])
+
     def push_upstream(self, name="new.txt"):
         """Someone else pushes a commit to origin/main: the user's checkout falls behind."""
         other = self.tmp / "other"

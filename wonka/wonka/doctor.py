@@ -70,7 +70,7 @@ def _orphans(cfg):
             n += 1
             try:
                 body = note.read(path)[1]
-            except (OSError, UnicodeDecodeError) as e:
+            except (OSError, store.WonkaError) as e:
                 found.append(f"{path}: unreadable ({e})")
                 continue
             for heading, above in note.unknown_sections(body):
@@ -268,11 +268,11 @@ def checks():
     path = store.home() / store.STATE_FILE
     tickets = {}
     try:
-        tickets = json.loads(path.read_text())["tickets"] if path.exists() else {}
+        tickets = store.snapshot()["tickets"]  # the same checks every command makes
         yield "ok", f"state {path} ({len(tickets)} tickets)"
-    except (ValueError, KeyError) as e:
+    except (OSError, ValueError, store.WonkaError) as e:
         yield "fail", f"state {path} is unreadable: {e}"
-    yield from _worktree_file_checks(cfg, tickets if isinstance(tickets, dict) else {})
+    yield from _worktree_file_checks(cfg, tickets)
 
     allow, dirs = _permissions()
     yield from _ci_log_checks(cfg, allow)

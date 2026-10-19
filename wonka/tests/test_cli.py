@@ -46,6 +46,17 @@ class CliTest(unittest.TestCase):
         self.assertTrue(cli.LINK.is_symlink())
         self.assertIn("🍫 baking at once   : 3", out)
 
+    def test_init_never_replaces_a_broken_config(self):
+        self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
+        cfg_file = self.tmp / "home/config.json"
+        cfg = json.loads(cfg_file.read_text())
+        cfg["test_commands"], cfg["wip"] = {"app": ["./test.sh"]}, None
+        cfg_file.write_text(json.dumps(cfg))
+        code, _, err = self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        self.assertEqual(code, 1)
+        self.assertIn("wip", err)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"app": ["./test.sh"]})
+
     def test_init_renames_old_wonka_base(self):
         board = self.tmp / "vault/wonka"
         board.mkdir(parents=True)
@@ -172,6 +183,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("WONKA-00001: "), out)
 
+    def add_ticket(self, *argv):
+        """init, a repo and one ticket added with `wonka add x <argv>`: returns add's (code, out, err)."""
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = self.tmp / "app"
+        repo.mkdir(exist_ok=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
+        with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
+            return self.run_cli("add", *(argv or ("x",)), "--repo", str(repo))
+
+    def test_a_lost_note_is_a_clean_error(self):
+        self.add_ticket("x")
+        self.add_ticket("y")
+        note_path = self.tmp / "vault/wonka/golden-tickets/WONKA-00001.md"
+        note_path.unlink()
+        code, out, err = self.run_cli("status")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(f"⚠️ the note {note_path} is gone", out)
+        self.assertIn("WONKA-00002", out)
+        for argv in (("set", "WONKA-00001", "title", "T"), ("set", "WONKA-00001", "jira", "AB-1")):
+            with self.subTest(argv=argv), mock.patch.object(cli.sys, "stdin", io.StringIO("spec")):
+                code, _, err = self.run_cli(*argv)
+                self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: the note {note_path} is gone (deleted or moved?)"))
+
     def test_add_makes_an_idea_unless_triage(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = self.tmp / "app"
@@ -229,6 +266,38 @@ class CliTest(unittest.TestCase):
             "questions": [{"q": "Keep the old API?", "options": ["Yes", "No, nothing uses it"], "recommended": 1}],
             "suggest": "draft", "why": "the spec missed the API",
             "followups": [{"title": "Cache lookups", "idea": "memoise the user lookup"}]})
+
+    def test_bad_stdin_json_shapes_are_clean_errors(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        cases = [
+            (("ask", "WONKA-00001", "--stdin"), {"q": "x"}, "stdin must be a JSON list of questions"),
+            (("ask", "WONKA-00001", "--stdin"), [{"options": ["a"]}], 'stdin[1] needs a "q"'),
+            (("ask", "WONKA-00001", "--stdin"), [{"q": "x", "options": "ab"}], "stdin[1].options must be a list"),
+            (("ask", "WONKA-00001", "--stdin"), [{"q": "x", "recommended": "0"}], "stdin[1].recommended"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), ["good nut"],
+             "the report must be a JSON object"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"issues": "a.py: bad"},
+             "issues must be a list of strings"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"followups": [{"title": "T"}]},
+             'followups[1] needs an "idea"'),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"followups": {"idea": "x"}},
+             "followups must be a list"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"questions": [1]},
+             'questions[1] needs a "q"'),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"suggest": "ship"},
+             "suggest must be close or draft"),
+            (("report", "WONKA-00001", "--squirrel", "architect", "--stdin"), {"why": None}, "why must be a string"),
+        ]
+        for argv, data, msg in cases:
+            with self.subTest(data=data), mock.patch.object(cli.sys, "stdin", io.StringIO(json.dumps(data))):
+                code, _, err = self.run_cli(*argv, "--dispatch", "1")
+                self.assertEqual(code, 1)
+                self.assertIn(msg, err)
+                self.assertNotIn("Traceback", err)
+        code, _, err = self.run_cli("report", "WONKA-00001", "--squirrel", "architect", "--verdict", "bad",
+                                    "--followup", " :: ", "--dispatch", "1")
+        self.assertEqual(code, 1)
+        self.assertIn('followups[1] needs an "idea"', err)
 
     def test_baked_takes_flaky(self):
         a = cli.parser().parse_args(["baked", "WONKA-00001", "--dispatch", "3", "--flaky", "runner lost"])
@@ -517,6 +586,21 @@ class CliTest(unittest.TestCase):
         self.assertIn("not valid JSON", err)
         alert.assert_called_once()
         self.assertIn("not valid JSON", alert.call_args[0][0])
+
+    def test_state_of_the_wrong_shape_is_a_clean_error(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        (self.tmp / "home" / store.STATE_FILE).write_text('{"next_id": 1, "tickets": []}')
+        with mock.patch.object(cli, "alert"):
+            code, _, err = self.run_cli("status")
+        self.assertEqual(code, 1)
+        self.assertIn("is not a Wonka state file (tickets must be an object", err)
+
+    def test_config_non_finite_numbers_are_refused(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        for key, raw in (("stale_hours", "inf"), ("test_lock_wait_minutes", "nan")):
+            code, _, err = self.run_cli("config", key, raw)
+            self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: {key} must be a finite number"))
+        self.assertEqual(store.load_config()["test_lock_wait_minutes"], 3)
 
     def test_missing_vault_pings_the_desktop(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))

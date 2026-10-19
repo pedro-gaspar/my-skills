@@ -2,8 +2,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from wonka import note
+from wonka import note, store
 
 
 class NoteTest(unittest.TestCase):
@@ -99,6 +100,60 @@ class NoteTest(unittest.TestCase):
         text = path.read_text()
         self.assertIn("\nid: WONKA-00001\n", text)
         self.assertIn("\ntitle: plain title\n", text)
+
+    def test_reads_yaml_escapes_json_does_not_know(self):
+        cases = {r'"Caf\xe9"': "Café", r'"\e"': "\x1b", r'"a\ b"': "a b", '"a\tb"': "a\tb", r'"C:\e"': "C:\x1b",
+                 r'"\N\_\L\P"': "\x85\xa0\u2028\u2029", r'"\ud83c\udf6b"': "🍫", r'"\q"': "\\q",
+                 r'"\U99999999"': "\\U99999999"}
+        for raw, want in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(self._meta(f"title: {raw}")["title"], want)
+
+    def test_drops_trailing_comments(self):
+        self.assertEqual(self._meta('title: "x" # c')["title"], "x")
+        self.assertEqual(self._meta("title: 'it''s' # c")["title"], "it's")
+        self.assertEqual(self._meta("title: plain # c")["title"], "plain")
+        self.assertEqual(self._meta("title: C# rocks")["title"], "C# rocks")
+        self.assertEqual(self._meta('title: "a # b"')["title"], "a # b")
+
+    def test_round_trips_line_separators_and_controls(self):
+        path = self.note_path()
+        for title in ("a\u2028b", "a\x85b", "a\x0cb", "a\x1db", "x\x7f", "a\u2029b"):
+            with self.subTest(title=repr(title)):
+                note.write(path, {"id": "WONKA-00001", "title": title, "size": "s"}, "body")
+                meta, body = note.read(path)
+                self.assertEqual((meta["title"], meta["size"], body), (title, "s", "body\n"))
+
+    def test_empty_frontmatter_keeps_the_body(self):
+        path = self.note_path()
+        path.write_text("---\n---\n# T\n\n---\n\nmore\n")
+        self.assertEqual(note.read(path), ({}, "# T\n\n---\n\nmore\n"))
+
+    def test_closing_line_must_be_exactly_three_dashes(self):
+        self.assertEqual(self._meta("title: a\n----\nsize: s"), {"title": "a", "size": "s"})
+
+    def test_bom_is_dropped_so_the_frontmatter_is_read(self):
+        path = self.note_path()
+        path.write_bytes("\ufeff---\nid: WONKA-00001\n---\nbody\n".encode())
+        meta, body = note.read(path)
+        note.write(path, meta, body)
+        self.assertEqual(path.read_text(), "---\nid: WONKA-00001\ntitle:\nstatus:\nphase:\nsize:\njira:\n---\nbody\n")
+
+    def test_non_utf8_bytes_read_as_replacement_characters(self):
+        path = self.note_path()
+        path.write_bytes(b"---\nid: WONKA-00001\ntitle: Caf\xe9\n---\nbody \xff\n")
+        self.assertEqual(note.read(path), ({"id": "WONKA-00001", "title": "Caf\ufffd"}, "body \ufffd\n"))
+
+    def test_unreadable_frontmatter_is_a_wonka_error_naming_the_note(self):
+        path = self.note_path()
+        path.write_text("---\nid: x\n---\n")
+        with mock.patch.object(note, "_scalar", side_effect=ValueError("boom")), \
+                self.assertRaisesRegex(store.WonkaError, f"{path}: the frontmatter can't be read"):
+            note.read(path)
+
+    def test_one_line(self):
+        self.assertEqual(note.one_line(" a\nb \u2028 c\r\n"), "a b c")
+        self.assertEqual(note.one_line(None), "")
 
     def test_new_questions_archives_an_answered_round(self):
         body = note.set_section("", "idea", "an idea")

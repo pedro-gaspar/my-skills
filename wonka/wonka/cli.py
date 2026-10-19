@@ -31,10 +31,9 @@ def ensure_link():
 
 
 def cmd_init(a):
-    try:
-        cfg = store.load_config()
-    except WonkaError:
-        cfg = copy.deepcopy(store.DEFAULT_CONFIG)
+    # an existing config keeps its settings: a broken one is refused, never silently replaced by the defaults
+    exists = (store.home() / "config.json").exists()
+    cfg = store.load_config() if exists else copy.deepcopy(store.DEFAULT_CONFIG)
     cfg["vault"], cfg["folder"] = str(Path(a.vault).expanduser().resolve()), a.folder
     for key, value in (("wip.triage", a.triage), ("wip.drafting", a.drafting), ("wip.baking", a.baking),
                        ("archive_after_days", a.archive_days), ("stale_hours", a.stale_hours),
@@ -115,21 +114,66 @@ def parse_question(text):
     return {"q": q, "options": [o.lstrip("*").strip() for o in opts], "recommended": rec}
 
 
+def _strings(value):
+    return isinstance(value, list) and all(isinstance(x, str) for x in value)
+
+
+def check_questions(qs, what="questions"):
+    """JSON questions must be a list of {"q": str, "options": [str], "recommended": int, "why": str}."""
+    if not isinstance(qs, list):
+        raise WonkaError(f"{what} must be a JSON list of questions")
+    for i, q in enumerate(qs, 1):
+        if not isinstance(q, dict) or not isinstance(q.get("q"), str) or not q["q"].strip():
+            raise WonkaError(f"{what}[{i}] needs a \"q\" with the question text")
+        if not _strings(q.get("options", [])):
+            raise WonkaError(f"{what}[{i}].options must be a list of strings")
+        rec = q.get("recommended")
+        if rec is not None and (isinstance(rec, bool) or not isinstance(rec, int)):
+            raise WonkaError(f"{what}[{i}].recommended must be an option's index")
+        if not isinstance(q.get("why") or "", str):
+            raise WonkaError(f"{what}[{i}].why must be a string")
+    return qs
+
+
+def check_report(rep):
+    """A squirrel report: refused here, before the state is touched, rather than half-filed."""
+    if not isinstance(rep, dict):
+        raise WonkaError("the report must be a JSON object")
+    if not isinstance(rep.get("verdict", ""), str):
+        raise WonkaError("verdict must be a string (good nut or bad nut)")
+    if not _strings(rep.get("issues", [])):
+        raise WonkaError("issues must be a list of strings")
+    check_questions(rep.get("questions", []))
+    followups = rep.get("followups", [])
+    if not isinstance(followups, list):
+        raise WonkaError("followups must be a list")
+    for i, fu in enumerate(followups, 1):
+        if not isinstance(fu, dict) or not isinstance(fu.get("idea"), str) or not fu["idea"].strip():
+            raise WonkaError(f"followups[{i}] needs an \"idea\" with the idea text")
+        if not isinstance(fu.get("title") or "", str):
+            raise WonkaError(f"followups[{i}].title must be a string")
+    if rep.get("suggest") not in (None, "close", "draft"):
+        raise WonkaError("suggest must be close or draft")
+    if not isinstance(rep.get("why", ""), str):
+        raise WonkaError("why must be a string")
+    return rep
+
+
 def _questions(a):
     """Questions come as --question flags (what agents use) or, with --stdin, as JSON."""
     qs = [parse_question(x) for x in a.question or []]
-    return qs + (_stdin_json() if getattr(a, "stdin", False) else [])
+    return qs + (check_questions(_stdin_json(), "stdin") if getattr(a, "stdin", False) else [])
 
 
 def _report(a):
     if a.stdin:
-        return _stdin_json()
+        return check_report(_stdin_json())
     rep = {"verdict": "good nut" if a.verdict == "good" else "bad nut", "issues": a.issue or [],
            "questions": [parse_question(x) for x in a.question or []], "suggest": a.suggest, "why": a.why or ""}
     for fu in a.followup or []:
         title, sep, idea = fu.partition("::")
         rep.setdefault("followups", []).append({"title": title.strip(), "idea": (idea if sep else title).strip()})
-    return rep
+    return check_report(rep)
 
 
 def run(a, f):
@@ -205,7 +249,10 @@ def run(a, f):
             print(json.dumps(m, ensure_ascii=False))
     elif c == "status":
         for k in f.live():
-            meta = f.read(k)[0]
+            try:
+                meta = f.read(k)[0]
+            except (WonkaError, OSError) as e:  # a lost or broken note never hides the other tickets
+                meta = {"title": f"⚠️ {e}"}
             print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('title', '')}"
                   + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
 

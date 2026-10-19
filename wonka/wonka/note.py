@@ -48,13 +48,26 @@ class Raw(str):
 
 
 def read(path):
-    text = path.read_text()
+    """(meta, body) of a note. Bytes that are not UTF-8 read as U+FFFD (what Obsidian shows) and a leading BOM is
+    dropped, so a hand edit never stops the factory; frontmatter that still can't be read is a WonkaError naming the note."""
+    text = path.read_bytes().decode("utf-8", errors="replace").removeprefix("﻿")
+    try:
+        return _parse(text)
+    except ValueError as e:
+        raise store.WonkaError(f"{path}: the frontmatter can't be read ({e})")
+
+
+_CLOSE = re.compile(r"^---[ \t]*$", re.M)
+
+
+def _parse(text):
     meta, body = {}, text
     if text.startswith("---\n"):
-        end = text.find("\n---", 4)
-        if end != -1:
+        end = _CLOSE.search(text, 4)
+        if end:
             key, heads, cont = None, {}, {}
-            for line in text[4:end].splitlines():
+            # split on \n only: str.splitlines also splits on \x0c, \x85,   and others, cutting a value short
+            for line in text[4:max(4, end.start() - 1)].split("\n"):
                 k, sep, value = line.partition(":")
                 if sep and not line.startswith((" ", "\t", "-", "#")):
                     key = k.strip()
@@ -68,7 +81,7 @@ def read(path):
                     meta[key] = Raw(meta[key] + "\n" + line)
             for key, head in heads.items():
                 meta[key] = _scalar(head, cont[key])
-            body = text[end + 4:].lstrip("\n")
+            body = text[end.end():].lstrip("\n")
     return meta, body
 
 
@@ -105,10 +118,56 @@ def write(path, meta, body):
     store.write_atomic(path, "---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n")
 
 
+def _uncomment(v):
+    """The value without a trailing ' # comment', which YAML drops: after a quoted value's closing quote, or at a
+    plain value's first ' #'."""
+    if v[:1] in ("'", '"'):
+        i = 1
+        while i < len(v):
+            if v[0] == '"' and v[i] == "\\":
+                i += 2
+                continue
+            if v[i] == v[0]:
+                if v[0] == "'" and v[i + 1:i + 2] == "'":
+                    i += 2
+                    continue
+                rest = v[i + 1:]
+                return v[:i + 1] if not rest.strip() or re.match(r"\s+#", rest) else v
+            i += 1
+        return v
+    m = re.search(r"(^|\s)#", v)
+    return v[:m.start()].rstrip() if m else v
+
+
 def _unquote(v):
+    v = _uncomment(v)
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
-        return json.loads(v) if v[0] == '"' else v[1:-1].replace("''", "'")
+        return _unescape(v[1:-1]) if v[0] == '"' else v[1:-1].replace("''", "'")
     return "" if v in ("null", "~") else v
+
+
+_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r",
+            "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0", "L": " ", "P": " "}
+_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)", re.S)
+
+
+def _unescape(s):
+    """A YAML double-quoted value's escapes, a superset of JSON's (\\xe9, \\e, \\ and more); an unknown one is kept as written."""
+    def one(m):
+        e = m.group(1)
+        if len(e) > 1:
+            code = int(e[1:], 16)
+            return chr(code) if code <= 0x10FFFF else m.group(0)
+        return _ESCAPES.get(e, m.group(0))
+    out = _ESCAPE.sub(one, s)
+    try:
+        return out.encode("utf-16", "surrogatepass").decode("utf-16")  # a JSON-style 🍫 pair is one character
+    except UnicodeError:
+        return out
+
+
+# What YAML can't hold as is in a quoted value (controls, line and paragraph separators, surrogates): escaped on write.
+_UNSAFE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f  \ud800-\udfff￾￿]")
 
 
 def _quote(v):
@@ -116,10 +175,18 @@ def _quote(v):
     risky = v and (
         ": " in v or " #" in v or v.endswith(":")
         or v[0] in "[]{}&*!|>'\"%@`#,?-"
-        or v != v.strip() or any(c in v for c in "\t\n\r")
+        or v != v.strip() or any(c in v for c in "\t\n\r") or _UNSAFE.search(v)
         or v.lower() in ("true", "false", "null", "yes", "no", "~")
     )
-    return json.dumps(v, ensure_ascii=False) if risky else v
+    if not risky:
+        return v
+    return _UNSAFE.sub(lambda m: f"\\u{ord(m.group(0)):04x}", json.dumps(v, ensure_ascii=False))
+
+
+def one_line(text):
+    """text with its line breaks (all that str.splitlines splits on) folded into single spaces: a newline in a title
+    or Jira key would break the banner's heading line."""
+    return " ".join(part.strip() for part in str(text or "").splitlines() if part.strip())
 
 
 def _bounds(body, heading):

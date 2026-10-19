@@ -549,7 +549,11 @@ class Factory:
         return folder(self.cfg) / f"{tid}.md"
 
     def read(self, tid):
-        return note.read(self.path(tid))
+        path = self.path(tid)
+        try:
+            return note.read(path)
+        except FileNotFoundError:
+            raise WonkaError(f"the note {path} is gone (deleted or moved?)")
 
     def write(self, tid, meta, body):
         """Every write re-renders the banner and the factory log from the JSON state."""
@@ -754,6 +758,8 @@ class Factory:
 
     def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None,
             spec_review=None, blocked_by=None, start="triage"):
+        if not (idea or "").strip():
+            raise WonkaError("the idea is empty: say what the ticket should build")
         if start not in machine.START:
             raise WonkaError(f"start must be {' or '.join(machine.START)}")
         if size and size not in machine.SIZES:
@@ -777,8 +783,8 @@ class Factory:
                     spec_review = "human" if note.needs_human_review(parent_meta) else "agent"
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
-        title = title or _default_title(idea)
-        meta = {"id": tid, "title": title, "size": size or "", "jira": jira or "",
+        title = note.one_line(title) or _default_title(idea)
+        meta = {"id": tid, "title": title, "size": size or "", "jira": note.one_line(jira),
                 "spec_review": spec_review or "agent"}
         state = machine.IDEA if start == "idea" else (start, "pending")
         meta["status"], meta["phase"] = machine.label(state)
@@ -805,7 +811,7 @@ class Factory:
             raise WonkaError("spec_review must be agent or human")
         if field in ("title", "size", "jira", "spec_review"):
             meta, body = self.read(tid)
-            meta[field] = value
+            meta[field] = note.one_line(value) if field in ("title", "jira") else value
             self.write(tid, meta, body)
         elif field == "pr_repo":
             self.ticket(tid)["pr_repo"] = value
@@ -830,12 +836,12 @@ class Factory:
                 raise WonkaError(f"{duplicate_of} is Wont-Do: triage {tid} on its own")
         meta, body = self.read(tid)
         meta["size"] = size
-        if title:
-            meta["title"] = title
+        if note.one_line(title):
+            meta["title"] = note.one_line(title)
         if duplicate_of:
             try:
                 other_title = self.read(duplicate_of)[0].get("title", "")
-            except OSError:
+            except (WonkaError, OSError):
                 other_title = ""
             body = note.set_section(body, "duplicate", f"- Duplicate of [[{duplicate_of}]] {other_title}".rstrip())
             self.write(tid, meta, body)
@@ -943,7 +949,7 @@ class Factory:
             try:
                 if self.path(tid).exists():
                     size = self.read(tid)[0].get("size")
-            except OSError:
+            except (WonkaError, OSError):
                 pass
             out.append(metrics_mod.ticket_metrics(tid, t, size, tickets, now()))
         return out
@@ -1363,6 +1369,9 @@ class Factory:
                     f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
         self.expect(tid, ("reviewing", "progress"))
         t = self.ticket(tid)
+        if reviewer not in (t["reviewers"] or ["architect"]):
+            raise WonkaError(f"squirrel-{reviewer} is not reviewing {tid}; its squirrels: "
+                             f"{', '.join(t['reviewers'] or ['architect'])}")
         t.setdefault("reports", {})[reviewer] = rep
         missing = [r for r in t["reviewers"] if r not in t["reports"]]
         if missing:
@@ -1885,7 +1894,7 @@ class Factory:
         for name in foreign:
             try:
                 tid = str(note.read(folder / name)[0].get("id") or "")
-            except (OSError, UnicodeDecodeError):
+            except (OSError, WonkaError):
                 continue
             t = self.db["tickets"].get(tid)
             if not t or t.get("archived") or self.path(tid).exists():

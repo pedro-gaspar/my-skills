@@ -5,6 +5,7 @@ import copy
 import datetime
 import fcntl
 import json
+import math
 import os
 import re
 import shlex
@@ -141,6 +142,8 @@ def set_setting(cfg, key, raw):
         value = SETTINGS[key](raw)
     except ValueError:
         raise WonkaError(f"{key} must be a number")
+    if not math.isfinite(value):  # inf or nan: `wonka test` would wait for the lock forever
+        raise WonkaError(f"{key} must be a finite number")
     if value < (1 if key.startswith("wip.") or key == "max_review_rounds" else 0):
         raise WonkaError(f"{key} is too small")
     *parents, leaf = key.split(".")
@@ -167,11 +170,48 @@ def load_config():
     if not path.exists():
         raise WonkaError("No ~/.wonka/config.json. Run: wonka init --vault <obsidian vault>")
     try:
-        cfg = {**copy.deepcopy(DEFAULT_CONFIG), **json.loads(path.read_text())}
+        data = json.loads(path.read_text())
     except ValueError as e:
-        raise CriticalError(f"{path} is not valid JSON ({e}): fix it or run wonka init again")
+        raise CriticalError(f"{path} is not valid JSON ({e}): fix it, or delete it and run wonka init to start over from the defaults")
+    if not isinstance(data, dict):
+        raise CriticalError(f"{path} must hold a JSON object: fix it, or delete it and run wonka init to start over from the defaults")
+    cfg = {**copy.deepcopy(DEFAULT_CONFIG), **data}
+    _check_config(cfg, path)
     cfg["wip"] = {**DEFAULT_CONFIG["wip"], **cfg["wip"]}
     return cfg
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _check_config(cfg, path):
+    """A hand edit gone wrong (null, a string for a list, a list for an object) is named here, not met as a
+    traceback later. Settings Wonka reads with a fallback (worktree_files and the other per-project maps) may be null."""
+    def bad(key, what):
+        return CriticalError(f"{path}: {key} must be {what}: fix it, or delete it and run wonka init to start over from the defaults")
+
+    for key in ("vault", "folder"):
+        if not isinstance(cfg[key], str) or not cfg[key].strip():
+            raise bad(key, "a folder path" + (" (wonka init --vault <obsidian vault>)" if key == "vault" else ""))
+    if not isinstance(cfg["wip"], dict):
+        raise bad("wip", 'an object like {"triage": 2, "drafting": 1, "baking": 2}')
+    for key, value in cfg["wip"].items():
+        if not _number(value):
+            raise bad(f"wip.{key}", "a number")
+    for key in SETTINGS:
+        if "." not in key and not _number(cfg[key]):
+            raise bad(key, "a number")
+    for key in ("worktree_files", "test_commands", "ci_hosts", "ci_log_command"):
+        if cfg[key] is None:
+            cfg[key] = {}
+        if not isinstance(cfg[key], dict):
+            raise bad(key, "an object keyed by project")
+        if key == "ci_log_command":
+            continue  # a bad command stops only its project: wonka ci-logs refuses it and the doctor warns
+        for project, value in cfg[key].items():
+            if not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+                raise bad(f"{key}.{project}", "a list of strings")
 
 
 def save_config(cfg):
@@ -255,14 +295,30 @@ def log(*lines):
 def _load(text):
     if text is None:
         return {"next_id": 1, "tickets": {}}
+    path = home() / STATE_FILE
     try:
         db = json.loads(text)
-        machine.migrate(db)  # state files written before WONKA-00100 and WONKA-00140 hold the old keys
-        return db
     except ValueError as e:
-        path = home() / STATE_FILE
         raise CriticalError(f"{path} is not valid JSON ({e}). The previous version is {path}.bak: check it, then "
                          f"cp {path}.bak {path}")
+    problem = _state_problem(db)
+    if problem:
+        raise CriticalError(f"{path} is not a Wonka state file ({problem}). The previous version is {path}.bak: "
+                            f"check it, then cp {path}.bak {path}")
+    machine.migrate(db)  # state files written before WONKA-00100 and WONKA-00140 hold the old keys
+    return db
+
+
+def _state_problem(db):
+    """What is wrong with the shape of a loaded state file, or None."""
+    if not isinstance(db, dict):
+        return "not a JSON object"
+    if not isinstance(db.get("tickets"), dict):
+        return "tickets must be an object keyed by ticket id"
+    if isinstance(db.get("next_id"), bool) or not isinstance(db.get("next_id"), int):
+        return "next_id must be a number"
+    bad = next((k for k, t in db["tickets"].items() if not isinstance(t, dict)), None)
+    return f"ticket {bad} must be an object" if bad else None
 
 
 def _lock(fh, timeout):
