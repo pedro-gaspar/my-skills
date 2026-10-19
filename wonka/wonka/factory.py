@@ -912,13 +912,14 @@ class Factory:
                 t["conflicts"] = True
                 self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
                 return f"{tid}: PR has merge conflicts"
-            if pr == "OPEN" and mergeable == "MERGEABLE" and t.pop("conflicts", None):
-                # fixed by hand before a fixer ran (or while it could not start): drop the warning and the stuck state
-                t.pop("conflict_error", None)
-                t.pop("retries", None)
-                if t.pop("stuck", None):
-                    body = note.drop_section(body, "stuck")
-                self.write(tid, meta, body)
+            if pr == "OPEN" and mergeable == "MERGEABLE":
+                t.pop("retries", None)  # conflicts gone (by hand or a fixer): the next episode gets the full budget
+                if t.pop("conflicts", None):
+                    # fixed by hand before a fixer ran (or while it could not start): drop the warning and the stuck state
+                    t.pop("conflict_error", None)
+                    if t.pop("stuck", None):
+                        body = note.drop_section(body, "stuck")
+                    self.write(tid, meta, body)
             changes = note.get_section(body, "changes")
             if changes is None:  # a PR opened before change requests existed gets the box too
                 self.set_section(tid, "changes", note.CHANGES_BOX)

@@ -2137,6 +2137,35 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(job["job"], "conflicts")
         self.assertEqual(self.f_ticket(tid)["retries"], 1)
 
+    def failed_fixer_back_in_awaiting(self, tid):
+        """A fixer that left no result: ship() puts the ticket back in shipped/awaiting with retries 1."""
+        self.to_awaiting_merge(tid)
+        self.fixer_job(tid)
+        with self.f() as f:
+            f.finished(tid, "wonka:oompa-loompa-fixer")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
+
+    def test_mergeable_pr_resets_retries_after_a_failed_fixer(self):
+        tid = self.add()
+        self.failed_fixer_back_in_awaiting(tid)
+        self.pr_state.write_text("OPEN MERGEABLE")  # the human resolved the conflicts on GitHub
+        tick = self.tick()
+        self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        t = self.f_ticket(tid)
+        self.assertNotIn("retries", t)
+        self.assertNotIn("conflicts", t)
+
+    def test_unknown_or_conflicting_pr_keeps_retries(self):
+        tid = self.add()
+        self.failed_fixer_back_in_awaiting(tid)
+        self.pr_state.write_text("OPEN UNKNOWN")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
+
     def test_leftover_merge_is_aborted_on_start(self):
         tid = self.add()
         wt, _ = self.to_awaiting_merge(tid)
