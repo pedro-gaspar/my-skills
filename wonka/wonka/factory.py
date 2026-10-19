@@ -1991,7 +1991,13 @@ class Factory:
             if pr == "CLOSED":
                 self.move(tid, KILLED, "github", "PR closed without merging")
                 return f"{tid}: PR closed"
-            if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts") and not t.get("stuck"):
+            if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts") and (not t.get("stuck") or t.get("ci_stuck")):
+                if t.pop("ci_stuck", None):  # CI cannot go green on a conflicting PR: conflicts come first, the CI budget stays spent
+                    t.pop("stuck", None)
+                    body = note.drop_section(body, "stuck")
+                    self.write(tid, meta, body)
+                    self.log_event(tid, "The PR has merge conflicts while stuck on red CI: unstuck so a fixer can rebase it "
+                                        "(CI is checked again on the rebased head)")
                 fixes = t.get("conflict_fixes", 0)
                 if fixes >= MAX_CONFLICT_FIXES:
                     base = t.get("pr_base") or t["base_branch"]
