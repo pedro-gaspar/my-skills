@@ -17,6 +17,7 @@ from wonka.factory import JOB_AGENTS
 from wonka.gitwrap import _parse, check, command, env, target
 from wonka.store import WonkaError
 
+from . import GIT_CONFIG, GIT_HOME, REAL_PASSWD_HOME
 from .fixtures import RepoFixture, sh
 
 
@@ -137,7 +138,7 @@ class CheckTest(unittest.TestCase):
 
     def test_passwd_home_ignores_HOME(self):
         with mock.patch.dict(os.environ, {"HOME": "/tmp/evil"}):
-            self.assertEqual(gitwrap._passwd_home(), pwd.getpwuid(os.getuid()).pw_dir)
+            self.assertEqual(REAL_PASSWD_HOME(), pwd.getpwuid(os.getuid()).pw_dir)
 
     def test_write_states_follow_the_job_map(self):
         self.assertEqual(gitwrap.WRITE_STATES, {JOB_AGENTS["oompa-loompa-builder"], JOB_AGENTS["oompa-loompa-fixer"]})
@@ -565,6 +566,26 @@ class WrapperTest(RepoFixture, unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.git(tid, "status")[0], 0)
             self.assertEqual(self.git(tid, "--dispatch", "999", "status")[0], 0)
+
+
+class HermeticGitTest(unittest.TestCase):
+    """The suite never reads the developer's git config (tests/__init__.py): not directly, not through wonka git."""
+
+    def global_config(self, env_=None):
+        return subprocess.run(["git", "config", "--global", "--list"], env=env_, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, check=True).stdout.splitlines()
+
+    def test_git_in_tests_reads_only_the_test_config(self):
+        self.assertEqual(os.environ["GIT_CONFIG_GLOBAL"], GIT_CONFIG)
+        self.assertEqual(os.environ["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertEqual(os.environ["GIT_EDITOR"], "true")
+        self.assertEqual(self.global_config(), ["user.name=t", "user.email=t@t"])
+
+    def test_wonka_git_reads_only_the_test_config(self):
+        e = env()
+        self.assertEqual(e["HOME"], GIT_HOME)
+        self.assertNotIn("GIT_CONFIG_GLOBAL", e)
+        self.assertEqual(self.global_config(e), ["user.name=t", "user.email=t@t"])
 
 
 if __name__ == "__main__":
