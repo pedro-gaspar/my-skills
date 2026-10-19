@@ -664,8 +664,8 @@ class Factory:
         t["pr_url"] = out.splitlines()[-1]
         self.set_section(tid, "changes", note.CHANGES_BOX)
         if reused:
-            self.move(tid, ("shipped", "awaiting"), "wonka",
-                      f"PR updated with the requested changes, review and merge it: {t['pr_url']}")
+            what = "PR updated with the requested changes" if t.get("change_requests") else "PR updated"
+            self.move(tid, ("shipped", "awaiting"), "wonka", f"{what}, review and merge it: {t['pr_url']}")
             return f"{tid}: PR updated {t['pr_url']}"
         self.move(tid, ("shipped", "awaiting"), "wonka", f"PR opened, approve and merge it: {t['pr_url']}")
         return f"{tid}: PR {t['pr_url']}"
