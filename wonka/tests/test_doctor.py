@@ -56,6 +56,28 @@ class PermissionsTest(unittest.TestCase):
             self.assertEqual(doctor._permissions(), (["Bash(git *)"], []))
 
 
+class CiLogChecksTest(unittest.TestCase):
+    CFG = {"ci_log_command": {"p": "beyond ci logs"}, "ci_hosts": {"p": ["ci.example.com"]}}
+
+    def test_bypass_rules_warn(self):
+        for rule in ("Bash(beyond ci logs *)", "Bash(beyond ci logs:*)"):
+            with self.subTest(rule=rule):
+                result = list(doctor._ci_log_checks(self.CFG, ["Bash(wonka *)", rule]))
+                self.assertEqual([lv for lv, _ in result], ["warn"])
+                self.assertIn(rule, result[0][1])
+        result = list(doctor._ci_log_checks(self.CFG, ["Bash(beyond ci logsx *)"]))
+        self.assertEqual([lv for lv, _ in result], ["ok"])
+
+    def test_command_without_hosts_warns(self):
+        result = list(doctor._ci_log_checks({"ci_log_command": {"p": "beyond ci logs"}}, []))
+        self.assertEqual([lv for lv, _ in result], ["warn"])
+        self.assertIn("ci_hosts.p", result[0][1])
+
+    def test_clean_is_ok_and_unconfigured_is_silent(self):
+        self.assertEqual([lv for lv, _ in doctor._ci_log_checks(self.CFG, [])], ["ok"])
+        self.assertEqual(list(doctor._ci_log_checks({}, ["Bash(beyond ci logs *)"])), [])
+
+
 class PermissionChecksTest(unittest.TestCase):
     DIRS = ["/w/worktrees", "/v/wonka"]
 

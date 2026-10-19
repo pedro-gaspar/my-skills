@@ -15,7 +15,7 @@ from .store import WonkaError
 ROOT = Path(__file__).resolve().parent.parent
 LINK = Path.home() / ".local" / "bin" / "wonka"
 # handled by hand: argparse would mangle `--` and the options meant for the command
-PASSTHROUGH = {"git": "gitwrap", "test": "testrun"}  # subcommand -> module in this package with main(argv)
+PASSTHROUGH = {"git": "gitwrap", "test": "testrun", "ci-logs": "cilogs"}  # subcommand -> module in this package with main(argv)
 
 
 def ensure_link():
@@ -61,6 +61,8 @@ def show_config(cfg):
     files = "; ".join(f"{proj}: {', '.join(paths)}" for proj, paths in items) or "none"
     cmds = sorted((cfg.get("test_commands") or {}).items())
     tests = "; ".join(f"{proj}: {', '.join(c)}" for proj, c in cmds) or "none"
+    hosts = "; ".join(f"{proj}: {', '.join(h)}" for proj, h in sorted((cfg.get("ci_hosts") or {}).items())) or "none"
+    logcmd = "; ".join(f"{proj}: {c}" for proj, c in sorted((cfg.get("ci_log_command") or {}).items())) or "none"
     print(f"📏 triage at once   : {cfg['wip']['triage']}\n"
           f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
           f"🍫 baking at once   : {cfg['wip']['baking']}\n"
@@ -70,6 +72,8 @@ def show_config(cfg):
           f"🌱 follow-up depth  : {cfg['max_followup_depth']}\n"
           f"📄 worktree files   : {files}\n"
           f"🧪 test commands    : {tests}\n"
+          f"🔗 CI hosts         : {hosts}\n"
+          f"📜 CI log command   : {logcmd}\n"
           f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
           f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
           f"📜 factory log      : {store.home() / 'factory.log'}")
@@ -338,6 +342,8 @@ def parser():
                                "status|diff|log|show|rev-parse|ls-files|blame|add|commit|rebase ...")
     sub.add_parser("test", help="agents: run a project's test command under a per-project lock: "
                                 "wonka test <id> [--dispatch <n>] -- <command> ...")
+    sub.add_parser("ci-logs", help="agents: fetch a failed CI log with the project's log tool, only from its CI "
+                                   "hosts: wonka ci-logs <id> [--dispatch <n>] <url>")
     return p
 
 

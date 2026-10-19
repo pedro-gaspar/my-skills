@@ -27,6 +27,8 @@ DEFAULT_CONFIG = {
     "max_followup_depth": 2,  # a squirrel's follow-up is not filed for a ticket this many follow-ups deep
     "worktree_files": {},  # project -> repo-relative gitignored files copied into its worktrees
     "test_commands": {},  # project -> argv prefixes `wonka test` may run, under a per-project lock
+    "ci_hosts": {},  # project -> hosts `wonka ci-logs` may fetch from
+    "ci_log_command": {},  # project -> the CI log tool's command prefix, run by `wonka ci-logs`
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
 }
 SETTINGS = {  # wonka config <key> <value>
@@ -83,9 +85,53 @@ def set_setting(cfg, key, raw):
             cmds.pop(project, None)
         cfg["test_commands"] = cmds
         return
+    if key.startswith("ci_hosts."):
+        project = key.split(".", 1)[1]
+        if not project:
+            raise WonkaError("usage: wonka config ci_hosts.<project> <host>[,<host>...]")
+        hosts = []
+        for h in (x.strip().lower() for x in raw.split(",")):
+            h = h[:-1] if h.endswith(".") else h
+            if not h:
+                continue
+            if (re.search(r"[/@?#\\\s]", h) or "://" in h
+                    or not re.fullmatch(r"[a-z0-9.-]+(:[0-9]{1,5})?", h)):
+                raise WonkaError(f"{h}: ci_hosts takes bare hosts (host or host:port), not URLs")
+            hosts.append(h)
+        cur = dict(cfg.get("ci_hosts") or {})
+        if hosts:
+            cur[project] = hosts
+        else:
+            cur.pop(project, None)
+        cfg["ci_hosts"] = cur
+        return
+    if key.startswith("ci_log_command."):
+        project = key.split(".", 1)[1]
+        if not project:
+            raise WonkaError("usage: wonka config ci_log_command.<project> <command>")
+        value = raw.strip()
+        if value:
+            try:
+                tokens = shlex.split(value)
+            except ValueError as e:
+                raise WonkaError(f"{value}: not a valid command prefix ({e})")
+            if not tokens:
+                value = ""
+        if value:
+            from .testrun import open_prefix  # lazily: testrun imports store
+            if open_prefix(value):
+                raise WonkaError(f"{value} lets an agent run any program outside the sandbox through "
+                                 "wonka ci-logs; pin it to the log tool (e.g. beyond ci logs)")
+        cur = dict(cfg.get("ci_log_command") or {})
+        if value:
+            cur[project] = value
+        else:
+            cur.pop(project, None)
+        cfg["ci_log_command"] = cur
+        return
     if key not in SETTINGS:
         raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, worktree_files.<project>, "
-                         "test_commands.<project>")
+                         "test_commands.<project>, ci_hosts.<project>, ci_log_command.<project>")
     try:
         value = SETTINGS[key](raw)
     except ValueError:

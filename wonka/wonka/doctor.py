@@ -145,6 +145,30 @@ def _notifier_checks():
                        "nothing pings you when a ticket needs you or the factory stops")
 
 
+def _ci_log_checks(cfg, allow):
+    """Yield (level, message) for the CI log tool config and for allow rules that bypass the host check."""
+    cmds = cfg.get("ci_log_command") or {}
+    hosts = cfg.get("ci_hosts") or {}
+    projects = sorted(set(cmds) | set(hosts))
+    if not projects:
+        return
+    clean = True
+    for p in projects:
+        if not (cmds.get(p) and hosts.get(p)):
+            clean = False
+            yield "warn", (f"ci_log_command.{p} needs ci_hosts.{p} (and the reverse): "
+                           "wonka ci-logs refuses until both are set")
+    bypass = [r for r in allow for c in cmds.values()
+              if r.startswith(f"Bash({c}") and r[len(f"Bash({c}"):][:1] in (" ", ":", ")")]
+    if bypass:
+        clean = False
+        yield "warn", ("these allow rules let any agent run the CI log tool on any URL, bypassing the CI host check; "
+                       "agents use wonka ci-logs (covered by Bash(wonka *)); remove them and the tool's sandbox "
+                       "exclusion: " + ", ".join(dict.fromkeys(bypass)))
+    if clean:
+        yield "ok", f"CI log tools: {len(cmds)} project(s) pinned to their CI hosts"
+
+
 def checks():
     """Yield (level, message): level is ok, warn or fail."""
     yield ("ok" if sys.version_info >= (3, 11) else "fail"), f"python {sys.version.split()[0]} (needs 3.11+)"
@@ -178,6 +202,7 @@ def checks():
     yield from _worktree_file_checks(cfg, tickets if isinstance(tickets, dict) else {})
 
     allow, dirs = _permissions()
+    yield from _ci_log_checks(cfg, allow)
     yield from permission_checks(allow, dirs, [str(store.worktrees_dir()), str(board)])
 
 
