@@ -280,6 +280,12 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(check(self.GOOD_BODY + "\n## Screenshots\nx\n"), [])
         self.assertEqual(check("## summary ##\nx\n\n## Jira\ny\n"), [])
         self.assertEqual(check(self.GOOD_BODY + "\n```\n## X\n```\n"), [])
+        self.assertEqual(check(self.GOOD_BODY + "\n```\n~~~\n## X\n```\n"), [])
+        self.assertEqual(check(self.GOOD_BODY + "\n~~~\n```\n## X\n~~~\n"), [])
+        self.assertEqual(check(self.GOOD_BODY + "\n````\n```\n## X\n````\n"), [])
+        self.assertIn("heading not in the template: ## Notes",
+                      check(self.GOOD_BODY + "\n```python\nx\n```\n## Notes\nx\n"))
+        self.assertEqual(check(self.GOOD_BODY + "\n```\nx\n``` not a close\n## X\n```\n"), [])
         self.assertEqual(check("  \n"), ["the PR body is empty"])
 
     def planned_with_template(self):

@@ -294,13 +294,17 @@ def find_pr_template(worktree):
 
 
 def _h2_sections(text):
-    """[(key, display heading, section text)] for each `## ` heading outside fenced code blocks; the key is the
-    heading normalised (whitespace collapsed, trailing #s stripped, casefolded)."""
-    out, fence = [], False
+    """[(key, display heading, section text)] for each `## ` heading outside fenced code blocks (a fence closes
+    only on the same character, at least as long); the key is the heading normalised (whitespace collapsed,
+    trailing #s stripped, casefolded)."""
+    out, fence = [], None
     for line in text.splitlines():
-        if line.strip().startswith(("```", "~~~")):
-            fence = not fence
-        elif not fence and (m := re.match(r"^## (.+)$", line)):
+        s = line.strip()
+        if fence is None and (o := re.match(r"(`{3,}|~{3,})", s)):
+            fence = o.group(1)
+        elif fence is not None and re.fullmatch(re.escape(fence[0]) + "{%d,}" % len(fence), s):
+            fence = None
+        elif fence is None and (m := re.match(r"^## (.+)$", line)):
             display = " ".join(m.group(1).rstrip("# \t").split())
             out.append([display.casefold(), display, ""])
             continue
