@@ -4,6 +4,12 @@ from wonka import machine
 
 
 class MachineTest(unittest.TestCase):
+    def test_old_status_tables_point_at_current_statuses(self):
+        for key in machine.OLD_STATUSES:
+            self.assertIn(key, machine.OLD_STATUS_KEYS)
+        for new in machine.OLD_STATUS_KEYS.values():
+            self.assertIn(new, machine.STATUSES)
+
     def test_every_edge_joins_valid_states(self):
         for src, dst in machine.EDGES:
             self.assertTrue(machine.valid(src), src)

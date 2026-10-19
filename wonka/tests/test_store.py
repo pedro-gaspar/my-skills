@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import store
+from wonka import machine, store
 
 
 class StateTest(unittest.TestCase):
@@ -128,6 +128,17 @@ class StateTest(unittest.TestCase):
                          [("🎫-Ready", "🎫-Planned"), ("✉️-Inbox", "📏-Triage"), (None, "💡-Idea")])
         self.assertEqual(base.read_text(), "groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n  - 🎫-Planned\n# mine\n")
         self.assertEqual(store.migrate_base(cfg), [])
+
+    def test_migrate_base_follows_the_machine_tables(self):
+        cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
+        base = self.tmp / "vault/wonka" / store.BASE_FILE
+        base.parent.mkdir(parents=True)
+        base.write_text("groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n  - 🧪-Brewing\n")
+        with mock.patch.dict(machine.OLD_STATUSES, {"drafting_old": "🧪-Brewing"}), \
+                mock.patch.dict(machine.OLD_STATUS_KEYS, {"drafting_old": "drafting"}):
+            self.assertEqual(store.migrate_base(cfg), [("🧪-Brewing", "🧪-Drafting")])
+        self.assertIn("🧪-Drafting", base.read_text())
+        self.assertNotIn("🧪-Brewing", base.read_text())
 
     def test_migrate_base_adds_the_idea_column_once(self):
         cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
