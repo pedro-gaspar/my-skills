@@ -34,6 +34,10 @@ WORKTREE_JOBS = {("baking", "progress"): "oompa-loompa-builder", ("shipped", "pr
 OFF_PR = frozenset({("baking", "pending"), ("baking", "progress"), ("baking", "ready"), ("reviewing", "pending"),
                     ("reviewing", "progress"), ("reviewing", "awaiting"), ("reviewing", "ready"),
                     ("shipped", "pending"), ("shipped", "progress")})
+# the states from which a tick may start a job on the latest base (a scout, a new worktree, a catch-up), counting the
+# moves into Drafting and Baking the same tick makes: prefetch() fetches their base before the lock
+NEEDS_BASE = frozenset({("triage", "pending"), ("triage", "ready"), ("drafting", "pending"), ("drafting", "progress"),
+                        ("planned", "pending"), ("baking", "pending")})
 _ALL = frozenset((status, phase) for status, phases in machine.VALID.items() for phase in phases)
 _UNFINISHED = _ALL - {machine.MERGED, KILLED}
 _PR_WAITS = frozenset({("shipped", "pending"), ("shipped", "progress"), ("shipped", "awaiting")})
@@ -170,7 +174,7 @@ def _age(stamp):
     return now() - dt.datetime.fromisoformat(stamp)
 
 
-TIMEOUT = 120  # seconds any git or gh call may take; most run inside the state lock
+TIMEOUT = 120  # seconds any git or gh call may take; a tick makes its slow reads before taking the state lock (prefetch)
 # git, gh and Git Credential Manager must never ask a human anything
 NONINTERACTIVE = {"GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "GCM_INTERACTIVE": "never"}
 # The gh program: tests patch this, never an environment variable, which a caller could set to run its own program
@@ -566,9 +570,12 @@ def split_ids(values):
 
 
 class Factory:
-    def __init__(self, cfg, db):
+    def __init__(self, cfg, db, fetched=None):
         self.cfg, self.db = cfg, db
         self._base_cache = None  # {(repo, base): ref} during tick(); None outside a tick: always fetch
+        # what prefetch() read before tick() took the state lock: {"reads": {(tid, what): (stamp, value)},
+        # "bases": {(repo, base): ref}}
+        self._fetched = fetched or {}
 
     # -- tickets and notes ------------------------------------------------
 
@@ -1135,16 +1142,22 @@ class Factory:
         cache = self._base_cache
         if cache is not None and key in cache:
             return cache[key]
-        ref = t["base_branch"]
         try:
-            git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
-            if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
-                ref = f"origin/{t['base_branch']}"
+            ref = self._fetch_base(t)
         except WonkaError:
-            pass  # offline or no origin: use the local base branch
+            ref = t["base_branch"]  # offline or no origin: use the local base branch
         if cache is not None:
             cache[key] = ref
         return ref
+
+    @staticmethod
+    def _fetch_base(t):
+        """Fetch origin's base branch: origin/<base>, or the local base when origin has no such branch. Raises when
+        the fetch fails."""
+        git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
+        if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
+            return f"origin/{t['base_branch']}"
+        return t["base_branch"]
 
     # -- scout: a read-only checkout of the latest base for triage and drafting --
 
@@ -1773,15 +1786,11 @@ class Factory:
                  f"The PR's checks failed on {head}. Fix them with new commits on the same branch."]
         for c in red:
             lines.append(note.demote(" ".join(x for x in (f"- {c['name']}: {c['result']}", c["url"]) if x)))
-        runs = []
-        for c in red:
-            rid = _run_id(c["url"], t["pr_repo"])
-            if rid and rid not in runs:
-                runs.append(rid)
+        runs = self._red_runs(tid, red)
         for rid in runs[:CI_LOG_RUNS]:
             lines.append(f"### Failed log of run {rid}")
             try:
-                log = gh("run", "view", rid, "--repo", t["pr_repo"], "--log-failed")
+                log = self._read(tid, ("log", rid), lambda: self._run_log(tid, rid))
             except (WonkaError, OSError) as e:
                 err = " ".join(str(e).split())[:200]
                 lines.append(f"(could not fetch the log: {err})")
@@ -1793,6 +1802,18 @@ class Factory:
         if len(runs) > CI_LOG_RUNS:
             lines.append(f"(logs of {len(runs) - CI_LOG_RUNS} more run(s) not fetched: open the links above)")
         return "\n".join(lines)
+
+    def _red_runs(self, tid, red):
+        """The distinct Actions run ids of the red checks, in order (only runs of the PR's repo)."""
+        runs = []
+        for c in red:
+            rid = _run_id(c["url"], self.ticket(tid)["pr_repo"])
+            if rid and rid not in runs:
+                runs.append(rid)
+        return runs
+
+    def _run_log(self, tid, rid):
+        return gh("run", "view", rid, "--repo", self.ticket(tid)["pr_repo"], "--log-failed")
 
     def _mark_ci_round(self, tid, head, red):
         t = self.ticket(tid)
@@ -1843,7 +1864,9 @@ class Factory:
         """The human ticked 🔁 Request changes: write their notes and the PR feedback into the plan, back to baking.
         `ci` is (head, red checks) when the PR's CI is red too: one round holds both."""
         t = self.ticket(tid)
-        pr, skipped, newest = self._pr_feedback(tid, t.get("changes_cutoff"))  # fetch first: a gh failure changes nothing
+        since = t.get("changes_cutoff")
+        pr, skipped, newest = self._read(tid, ("feedback", since),  # fetch first: a gh failure changes nothing
+                                         lambda: self._pr_feedback(tid, since))
         if not notes.strip() and not pr:
             if ci is None:
                 self.set_section(tid, "changes", note.CHANGES_BOX)
@@ -1972,6 +1995,82 @@ class Factory:
         _bump_stat(t, "conflict_fixes")
         self.move(tid, ("shipped", "awaiting"), "fixer", f"Merge conflicts fixed and pushed (fix {n}/{MAX_CONFLICT_FIXES})")
 
+    # -- reads done before the tick takes the state lock --------------------
+
+    def _fetch_stamp(self, tid):
+        """What prefetched PR data holds for: the ticket still in the same state on the same PR."""
+        return self.state(tid), self.ticket(tid).get("pr_url")
+
+    def _read(self, tid, what, fetch):
+        """fetch(), unless prefetch() already read `what` for this ticket while it was where it is now."""
+        hit = self._fetched.get("reads", {}).get((tid, what))
+        if hit is not None and hit[0] == self._fetch_stamp(tid):
+            return hit[1]
+        return fetch()
+
+    def prefetch(self):
+        """Do the slow network reads the next tick will need (PR states, checks, comments, CI logs, base fetches) on a
+        snapshot of the state, before tick() takes the state lock, so a slow GitHub never keeps the agents' commands
+        waiting on it. Changes nothing (self.db is a snapshot, never saved). Returns what Factory takes as `fetched`;
+        a read that fails is left out and tick() does it under the lock as before, as it does any read for a ticket
+        that has moved on since."""
+        reads, bases = {}, {}
+
+        def keep(tid, what, fetch):
+            try:
+                value = fetch()
+            except (WonkaError, OSError):
+                return None
+            reads[(tid, what)] = (self._fetch_stamp(tid), value)
+            return value
+
+        for tid in self.live():
+            try:
+                self._prefetch_ticket(tid, keep, bases)
+            except Exception as e:  # only ever a head start: the tick reads it under the lock, and reports a real fault
+                store.log(f"{tid} wonka: could not read ahead of the tick ({type(e).__name__}: {e})")
+        return {"reads": reads, "bases": {k: v for k, v in bases.items() if v}}
+
+    def _prefetch_ticket(self, tid, keep, bases):
+        t, s = self.ticket(tid), self.state(tid)
+        if s in OFF_PR and t.get("pr_url"):
+            keep(tid, "state", lambda: self._pr_state(tid))
+        elif s == ("shipped", "awaiting") and t.get("pr_url"):
+            if view := keep(tid, "view", lambda: self._pr_view(tid)):
+                self._prefetch_pr(tid, view, keep)
+        key = (t.get("repo"), t.get("base_branch"))
+        if s in NEEDS_BASE and all(key) and key not in bases and not (
+                t.get("stuck") or (t.get("job_started_at") and not t.get("resume"))):
+            try:
+                bases[key] = self._fetch_base(t)
+            except WonkaError:
+                bases[key] = None  # fetched under the lock, as before
+
+    def _prefetch_pr(self, tid, view, keep):
+        """The reads _watch_pr() will make on an open PR: its comments when changes are requested, the failed CI logs
+        when a CI fix round is due."""
+        t = self.ticket(tid)
+        pr, mergeable, _, head, rollup = view
+        if pr != "OPEN":
+            return
+        try:
+            changes = note.get_section(self.read(tid)[1], "changes")
+        except (WonkaError, OSError):
+            changes = None
+        if changes is not None and note.requested_changes(changes)[0]:
+            since = t.get("changes_cutoff")
+            keep(tid, ("feedback", since), lambda: self._pr_feedback(tid, since))
+        if mergeable != "MERGEABLE":
+            return
+        red, pending, total = _ci_checks(_parse_rollup(rollup))
+        if not head or not total or pending or not red or t.get("ci_fixes", 0) >= MAX_CI_FIXES:
+            return  # as _red_ci(): no round is due
+        sig = _ci_signature(red)
+        if head == t.get("ci_handled_sha") and t.get("ci_handled_runs", sig) == sig:
+            return
+        for rid in self._red_runs(tid, red)[:CI_LOG_RUNS]:
+            keep(tid, ("log", rid), lambda: self._run_log(tid, rid))
+
     # -- the tick ---------------------------------------------------------
 
     def _find_renamed(self, foreign):
@@ -2023,7 +2122,7 @@ class Factory:
         last = self.state(tid)
         if last in OFF_PR and t.get("pr_url"):
             try:
-                pr = self._pr_state(tid)
+                pr = self._read(tid, "state", lambda: self._pr_state(tid))
             except (WonkaError, OSError) as e:  # offline: the fix round goes on, the next tick asks again
                 store.log(f"{tid} wonka: could not check the PR ({' '.join(str(e).split())})")
                 pr = None
@@ -2153,7 +2252,7 @@ class Factory:
         """The open PR waits on the human: record a merge or close, call a fixer for conflicts, start a fix round for
         requested changes or red CI."""
         t = self.ticket(tid)
-        pr, mergeable, pr_base, head, rollup = self._pr_view(tid)
+        pr, mergeable, pr_base, head, rollup = self._read(tid, "view", lambda: self._pr_view(tid))
         if pr == "OPEN" and pr_base:
             t["pr_base"] = pr_base  # the base may have been changed on GitHub since the ticket was added
         if pr == "MERGED":
@@ -2522,7 +2621,7 @@ class Factory:
                    if self.state(k) == ("triage", "pending") and self.ticket(k).get("job_started_at"))
 
     def tick(self, drop_missing=False):
-        self._base_cache = {}  # one base fetch per (repo, base) per tick
+        self._base_cache = dict(self._fetched.get("bases", {}))  # one base fetch per (repo, base) per tick
         try:
             events = self._find_renamed(self._foreign())
             self._check_notes(drop_missing)

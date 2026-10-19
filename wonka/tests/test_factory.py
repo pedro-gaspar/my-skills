@@ -5936,6 +5936,95 @@ class FactoryTest(unittest.TestCase):
                         t.pop("entered_done_at", None)
                 self.assertEqual(left, set(flags) - self.old_cleared(dst, by), (src, dst, by))
 
+    # -- the slow reads happen before the tick takes the state lock -----------
+
+    def prefetched_tick(self, gh=None):
+        """prefetch() on a snapshot, then the tick under the lock with what it read (and, given, another gh)."""
+        fetched = Factory(self.cfg, store.snapshot()).prefetch()
+        if gh is not None:
+            self.set_gh(gh)
+        with store.state() as db:
+            return Factory(self.cfg, db, fetched).tick(), fetched
+
+    def test_tick_reads_github_without_holding_the_lock(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("MERGED")
+        S = str(self.pr_state)
+        self.set_gh(FAKE_GH.replace('S="$WONKA_FAKE_PR_STATE"\n', 'S="$WONKA_FAKE_PR_STATE"\n'
+                                    'if [ "$1 $2" = "pr view" ]; then echo x >> "$S.views"; touch "$S.started"; '
+                                    'sleep 1.5; touch "$S.slept"; fi\n', 1))
+        result = {}
+
+        def tick():
+            result["code"] = cli.main(["tick"])
+
+        out = io.StringIO()
+        with mock.patch.object(cli, "LINK", self.tmp / "bin" / "wonka"), contextlib.redirect_stdout(out):
+            th = __import__("threading").Thread(target=tick)
+            th.start()
+            deadline = time.monotonic() + 30
+            while not Path(f"{S}.started").exists():
+                self.assertLess(time.monotonic(), deadline, "gh pr view never ran")
+                time.sleep(0.02)
+            with mock.patch.object(store, "LOCK_TIMEOUT", 1), store.state() as db:  # busy: CriticalError after 1 s
+                self.assertFalse(Path(f"{S}.slept").exists(), "the lock was free while gh was still at work")
+                self.assertEqual(db["tickets"][tid]["last_valid"], {"status": "shipped", "phase": "awaiting"})
+            th.join(60)
+        self.assertEqual(result["code"], 0)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertEqual(Path(f"{S}.views").read_text(), "x\n", "the tick used what it read before the lock")
+
+    def test_requested_changes_and_red_ci_are_read_before_the_lock(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        self.edit_note(tid, lambda t: t.replace(note.CHANGES_BOX, "- [x] 🔁 Request changes\nrename it"))
+        Path(f"{self.pr_state}.runlog").write_text("boom at test_x\n")
+        out, fetched = self.prefetched_tick(gh=FAILING_GH)  # under the lock every gh call fails
+        self.assertFalse(Path(f"{self.pr_state}.calls").exists(), "no gh call under the lock")
+        self.assertEqual({w if isinstance(w, str) else w[0] for _, w in fetched["reads"]}, {"view", "feedback", "log"})
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        self.assertIn("## 🔴 CI failure 1", plan)
+        self.assertIn("boom at test_x", plan)
+        self.assertIn("rename it", plan)
+
+    def test_prefetched_reads_for_another_state_are_not_used(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        url = self.f_ticket(tid)["pr_url"]
+        with self.f() as f:
+            for stamp, want in (((("baking", "pending"), url), "fetched"), ((("shipped", "awaiting"), "other"), "fetched"),
+                                ((("shipped", "awaiting"), url), "cached")):
+                f._fetched = {"reads": {(tid, "view"): (stamp, "cached")}}
+                self.assertEqual(f._read(tid, "view", lambda: "fetched"), want, stamp)
+            self.assertEqual(f._read(tid, "state", lambda: "fetched"), "fetched", "never read: fetched now")
+
+    def test_failed_prefetch_is_read_again_under_the_lock(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.set_gh(FAILING_GH)
+        fetched = Factory(self.cfg, store.snapshot()).prefetch()
+        self.assertEqual(fetched["reads"], {})
+        self.set_gh(FAKE_GH)
+        self.pr_state.write_text("MERGED")
+        with store.state() as db:
+            Factory(self.cfg, db, fetched).tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+
+    def test_base_is_fetched_before_the_lock(self):
+        tid = self.add()
+        self.push_upstream()
+        fetched = Factory(self.cfg, store.snapshot()).prefetch()
+        self.assertEqual(fetched["bases"], {(str(self.repo.resolve()), "main"): "origin/main"})
+        calls, patch = self.count_fetches()
+        with patch, store.state() as db:
+            jobs = Factory(self.cfg, db, fetched).tick()["jobs"]
+        self.assertEqual(calls, [], "no fetch under the lock")
+        self.assertEqual(jobs[0]["job"], "triage")
+        self.assertTrue((Path(jobs[0]["code"]) / "new.txt").exists(), "the scout has what was fetched")
+
 
 class GhCommandTest(unittest.TestCase):
     def test_wonka_gh_in_the_environment_is_ignored(self):

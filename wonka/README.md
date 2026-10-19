@@ -256,7 +256,11 @@ jira, spec_review, blocked_by`. `blocked_by` is a read-only mirror of the state 
 `~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It also keeps a never-reset record of what went wrong: `rounds` (one entry per review verdict: round, kind review/change/ci, time, and per squirrel the verdict, suggest and counts of issues, questions and follow-ups, plus the builder's `disputes` (issue, why) when it declined issues) and `stats` (`ci_rounds`, `conflict_fixes`, `retries`, `stuck`, `followups_filed` counters that survive the resets of the working counters; `stuck` counts each time the ticket goes 🎩 Stuck, once per stuck episode: a CI stuck that turns into a conflict stuck counts once). The CI working counters sit next to them: `ci_failures` counts every CI fix round of the ticket and numbers the plan's `## 🔴 CI failure N` sections (never reset); `ci_fixes` counts the CI fix rounds in a row on the open PR and makes the ticket 🎩 Stuck at 3 (reset by green checks, a merge or close, or Retry on a CI-stuck ticket); `ci_handled_sha` is the PR head whose red checks were last handled and, with `ci_handled_runs` (the failing runs), keeps the same failure from being reworked twice (cleared by Retry on a CI-stuck ticket; `wonka baked --flaky` needs the worktree HEAD to be it). It and the notes
 are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
 giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status`, `wonka show`, `wonka repos`, `wonka metrics` and `wonka pr-comments` only read, so they never wait for it: an agent
-is never stalled by a tick that is busy talking to GitHub.
+is never stalled by a tick that is busy talking to GitHub. A tick itself makes its slow reads (each PR's state,
+checks and requested-change comments, failed CI logs, the base fetches for new jobs) before it takes the lock, on a
+snapshot of the state, so `wonka baked`, `report`, `finished` and the other result commands wait only for its quick
+part; a read that failed, or one for a ticket that moved on meanwhile, is redone under the lock. Pushes, opening a PR
+and a fixer's fetches still happen under it.
 
 ## Develop
 

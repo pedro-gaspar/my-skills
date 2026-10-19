@@ -444,8 +444,10 @@ def main(argv=None):
         if a.cmd in READ_ONLY:
             run(a, Factory(cfg, store.snapshot()))
             return 0
+        # a tick reads GitHub and fetches before it takes the lock, so the agents' commands never wait on the network
+        fetched = Factory(cfg, store.snapshot()).prefetch() if a.cmd == "tick" else None
         with store.state() as db:
-            run(a, Factory(cfg, db))
+            run(a, Factory(cfg, db, fetched))
         return 0
     except WonkaError as e:
         store.log(f"{a.cmd} {getattr(a, 'id', '')}: {e}".replace("  ", " "))
