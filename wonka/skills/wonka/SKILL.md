@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|init|config|doctor.
-argument-hint: "add \"idea\" | tick | status | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | status | retro [since] | init --vault <path> | config [key value] | doctor"
 model: haiku
 ---
 
@@ -40,6 +40,28 @@ and Jira key default to the parent's (the PR repo only when the child builds in 
 
 ## status
 `wonka status` and show the lines as they are.
+
+## retro
+Look back over the recent tickets with the inspector. Follow the steps literally.
+1. `since` is the argument (YYYY-MM-DD), else today minus 7 days.
+2. Run `wonka metrics --since <since> > /tmp/wonka-retro-<since>.jsonl`. If the file has no lines, say "no tickets
+   since <since>" and stop. Run `wonka config` and read its `factory folder` and `factory log` lines. Run `wonka repos`
+   and pick the plugin repo: the listed path that contains `wonka/.claude-plugin/plugin.json` (check with Glob). If
+   none does, `plugin_repo` is null.
+3. Dispatch `wonka:oompa-loompa-inspector` in the foreground (the Agent tool, without `run_in_background`). The prompt
+   is a job JSON with `since`, `metrics` (the temp file path), `board` (the factory folder), `factory_log` and
+   `plugin_repo`, plus the line `Inspect the factory since <since>.`
+4. Show the inspector's four-part report as it is.
+5. For each proposal in its final JSON list, ask one AskUserQuestion (batch up to 4 per call) showing the target,
+   file, change and evidence, with exactly these options: **Apply** (a 💡 Idea ticket), **Apply and start**
+   (straight to Triage) and **Skip**.
+6. For each accepted one run `wonka add --repo <repo> --title "<short imperative title, 60 chars at most>" "<change>
+
+   Evidence: <evidence>"`, adding `--triage` for Apply and start. A `plugin` proposal with no `plugin_repo`: ask the
+   user for the local my-skills clone path first. Never pass a path under `~/.claude/plugins` and never edit any file
+   yourself: proposals only become tickets.
+7. Reply with the tickets added (ids and titles) and the skipped count. Run a tick only if a ticket was started with
+   `--triage`.
 
 ## tick
 1. Run `wonka tick`. If it refuses because the tickets folder or every note is missing, report that and stop: never
