@@ -18,7 +18,7 @@ def mv(h, src, dst, by="wonka", why=None):
 
 
 def ticket(history, **kw):
-    return {"created_at": at(0), "history": history, "last_valid": {"status": "idea", "phase": "pending"}, **kw}
+    return {"created_at": at(0), "history": history, "last_valid": {"status": "idea", "phase": "awaiting"}, **kw}
 
 
 class MetricsTest(unittest.TestCase):
@@ -48,6 +48,12 @@ class MetricsTest(unittest.TestCase):
     def test_no_moves_uses_last_valid(self):
         t = ticket([])
         self.assertEqual(metrics.hours(t, T0 + dt.timedelta(hours=1)), ({"idea": 1.0}, 0.0))
+
+    def test_idea_time_is_not_waiting_on_a_human(self):
+        t = ticket([mv(2, "idea/awaiting", "triage/pending")], last_valid={"status": "triage", "phase": "pending"})
+        hin, wait = metrics.hours(t, T0 + dt.timedelta(hours=3))
+        self.assertEqual(hin, {"idea": 2.0, "triage": 1.0})
+        self.assertEqual(wait, 0.0)
 
     def test_outcomes(self):
         def kill(by, why=None):

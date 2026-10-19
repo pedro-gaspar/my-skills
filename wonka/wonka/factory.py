@@ -780,13 +780,14 @@ class Factory:
         title = title or _default_title(idea)
         meta = {"id": tid, "title": title, "size": size or "", "jira": jira or "",
                 "spec_review": spec_review or "agent"}
-        meta["status"], meta["phase"] = machine.label((start, "pending"))
+        state = machine.IDEA if start == "idea" else (start, "pending")
+        meta["status"], meta["phase"] = machine.label(state)
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
             "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
             "review_round": 0, "parent": parent, "children": [], "blocked_by": blocked_by,
-            "last_valid": {"status": start, "phase": "pending"},
+            "last_valid": {"status": state[0], "phase": state[1]},
             "created_at": _iso(now()), "history": [],
         }
         if parent_t:
@@ -1912,12 +1913,13 @@ class Factory:
             return f"{tid}: note was deleted, ticket dropped"
         meta, body = self.read(tid)
         seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("phase"), machine.PHASES))
+        seen = machine.current(seen)  # an old Idea note reads 🕰️-Pending: relabelled silently below
         last = self.state(tid)
         if seen != last:
             if seen[0] == "wontdo" and last != KILLED:
                 self.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
                 return f"{tid}: killed by a human"
-            if last == ("idea", "pending") and seen == ("triage", "pending"):
+            if last == machine.IDEA and seen in (("triage", "pending"), ("triage", "awaiting")):
                 return self._start_idea(tid, "Dragged to Triage by a human")
             shown = f"{meta.get('status')}/{meta.get('phase')}"
             meta["status"], meta["phase"] = machine.label(last)
@@ -1937,7 +1939,7 @@ class Factory:
                 t.pop("ci_handled_sha", None)
             self.write(tid, meta, note.drop_section(body, "stuck"))
             return f"{tid}: unstuck by a human"
-        if last == ("idea", "pending"):
+        if last == machine.IDEA:
             sec = note.get_section(body, "start")
             if sec is None:
                 self.write(tid, meta, note.set_section(body, "start", note.START_BOX))  # a deleted box comes back

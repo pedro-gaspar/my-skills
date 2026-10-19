@@ -181,7 +181,7 @@ class FactoryTest(unittest.TestCase):
                                     "followups": [{"title": "Add a bye script", "idea": "bye.sh"}]})
         self.assertEqual(job["agents"], ["wonka:squirrel-architect", "wonka:squirrel-security"])
         self.assertEqual(self.state(tid), ("baking", "pending"))
-        self.assertEqual(self.state("WONKA-00002"), ("idea", "pending"))
+        self.assertEqual(self.state("WONKA-00002"), ("idea", "awaiting"))
         self.assertIn("## 💡 Start", self.note("WONKA-00002")[1])
         self.assertIn("no shebang", Path(self.f_ticket(tid)["plan"]).read_text())
 
@@ -5279,9 +5279,10 @@ class FactoryTest(unittest.TestCase):
 
     def test_add_creates_an_idea_with_a_start_box(self):
         tid = self.idea()
-        self.assertEqual(self.state(tid), ("idea", "pending"))
+        self.assertEqual(self.state(tid), ("idea", "awaiting"))
         meta, body = self.note(tid)
         self.assertEqual(meta["status"], "💡-Idea")
+        self.assertEqual(meta["phase"], "🙋-Awaiting-Human")
         self.assertIn("## 💡 Start", body)
         self.assertIn(note.START_BOX, body)
         self.assertIn("Just an idea", body)
@@ -5297,7 +5298,7 @@ class FactoryTest(unittest.TestCase):
             res = self.tick()
             self.assertEqual(res["jobs"], [])
             self.assertFalse([e for e in res["events"] if tid in e], res["events"])
-        self.assertEqual(self.state(tid), ("idea", "pending"))
+        self.assertEqual(self.state(tid), ("idea", "awaiting"))
         with self.f() as f:
             with self.assertRaises(WonkaError):
                 f.start(tid)
@@ -5326,12 +5327,28 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual((moves[-1]["by"], moves[-1]["why"]), ("human", "Dragged to Triage by a human"))
         self.assertNotIn("## 💡 Start", self.note(tid)[1])
 
+    def test_old_pending_idea_note_is_relabelled_silently(self):
+        tid = self.idea()
+        self.edit_note(tid, lambda t: t.replace("🙋-Awaiting-Human", "🕰️-Pending", 1))
+        res = self.tick()
+        self.assertFalse([e for e in res["events"] if "reverted" in e], res["events"])
+        self.assertEqual(self.note(tid)[0]["phase"], "🙋-Awaiting-Human")
+        self.assertEqual(self.state(tid), ("idea", "awaiting"))
+        self.assertFalse([h for h in self.f_ticket(tid)["history"] if str(h.get("why", "")).startswith("Reverted")])
+
+    def test_dragging_an_idea_to_triage_with_pending_phase_promotes_it(self):
+        tid = self.idea()
+        self.edit_note(tid, lambda t: t.replace("💡-Idea", "📏-Triage", 1).replace("🙋-Awaiting-Human", "🕰️-Pending", 1))
+        self.tick()
+        moves = [h for h in self.f_ticket(tid)["history"] if h.get("to")]
+        self.assertEqual((moves[-1]["by"], moves[-1]["why"]), ("human", "Dragged to Triage by a human"))
+
     def test_illegal_drag_from_idea_is_reverted(self):
         tid = self.idea()
         self.edit_note(tid, lambda t: t.replace("💡-Idea", "🍫-Baking", 1))
         res = self.tick()
         self.assertTrue([e for e in res["events"] if "reverted illegal" in e], res["events"])
-        self.assertEqual(self.state(tid), ("idea", "pending"))
+        self.assertEqual(self.state(tid), ("idea", "awaiting"))
         self.assertEqual(self.note(tid)[0]["status"], "💡-Idea")
 
     def test_dragging_an_idea_to_wont_do_kills_it(self):
@@ -5346,7 +5363,7 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("## 💡 Start", self.note(tid)[1])
         self.tick()
         self.assertIn(note.START_BOX, self.note(tid)[1])
-        self.assertEqual(self.state(tid), ("idea", "pending"))
+        self.assertEqual(self.state(tid), ("idea", "awaiting"))
 
     def test_ideas_use_no_wip_slots(self):
         self.cfg["wip"] = {**self.cfg["wip"], "triage": 1}  # a copy: the defaults are shared
@@ -5358,7 +5375,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             self.assertEqual(f._triaging(), 1)
         for i in ideas:
-            self.assertEqual(self.state(i), ("idea", "pending"))
+            self.assertEqual(self.state(i), ("idea", "awaiting"))
 
     def test_ideas_are_never_archived(self):
         tid = self.idea()
