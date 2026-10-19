@@ -265,3 +265,12 @@ python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (wh
 
 A bare `python3 -m unittest` from the repo root finds no tests (`NO TESTS RAN`, exit code 5). If a run reports 0
 tests, the command is wrong, not passing.
+
+The tests never touch GitHub: a fake `gh` prints what Wonka expects. `tests/test_gh_contract.py` checks that the real
+`gh` still prints it: every JSON field Wonka reads from `gh pr view`, `gh pr list` and `gh api`, against a public merged
+PR (cli/cli#9000). It needs the network and a logged-in `gh`, so it only runs on request. Run it after a gh upgrade or
+when you change a fake gh's output:
+
+```bash
+cd wonka && WONKA_GH_CONTRACT=1 python3 -m unittest tests.test_gh_contract -v
+```
