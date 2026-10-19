@@ -1176,6 +1176,22 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(any("stuck after 3 tries" in e for e in events), events)
         self.assertTrue(self.f_ticket(tid).get("stuck"))
 
+    def test_ship_never_pushes_a_protected_branch(self):
+        tid, wt = self._shipping_ticket()
+        origin = self.tmp / "origin.git"
+        main = sh("git", "rev-parse", "main", cwd=origin)
+        for branch in ("main", "master", "feature"):
+            with self.subTest(branch=branch), self.f() as f:
+                f.ticket(tid)["branch"] = branch
+                with self.assertRaisesRegex(WonkaError, f"refusing to write to branch {branch}"):
+                    factory.check_branch(f.ticket(tid))
+        with self.f() as f:
+            f.ticket(tid)["branch"] = "main"
+        events = self.tick()["events"]
+        self.assertTrue(any("refusing to write to branch main" in e for e in events), events)
+        self._assert_retried_once(tid)
+        self.assertEqual(sh("git", "rev-parse", "main", cwd=origin), main)
+
     def test_run_names_a_missing_working_directory(self):
         missing = self.tmp / "nope"
         with self.assertRaisesRegex(WonkaError, "working directory .* is missing"):
@@ -2374,6 +2390,23 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
+
+    def test_resolved_never_pushes_the_base_branch(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True, text=True)
+        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+        sh("git", "add", "hello.sh", cwd=wt)
+        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        origin = self.tmp / "origin.git"
+        main = sh("git", "rev-parse", "main", cwd=origin)
+        with self.f() as f:
+            f.ticket(tid)["branch"] = "main"
+            with self.assertRaisesRegex(WonkaError, "refusing to write to branch main"):
+                f.resolved(tid)
+        self.assertEqual(sh("git", "rev-parse", "main", cwd=origin), main)
 
     def test_late_resolved_from_an_earlier_dispatch_is_ignored(self):
         tid = self.add()

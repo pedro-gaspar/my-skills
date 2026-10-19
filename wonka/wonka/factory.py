@@ -165,6 +165,14 @@ class _Diverged(WonkaError):
     """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must merge."""
 
 
+def check_branch(t):
+    """Wonka only commits and pushes the ticket's own wonka/ branch: never main, master or the PR's base branch."""
+    branch = t.get("branch") or ""
+    if not branch.startswith("wonka/") or branch in (t.get("base_branch"), t.get("pr_base")):
+        raise WonkaError(f"refusing to write to branch {branch or '(none)'}: Wonka only commits and pushes its own "
+                         "wonka/ branches, never main, master or the base branch")
+
+
 def pr_body(tid, meta, spec):
     ids = [f"🎫 **Golden ticket:** {tid}"]
     if meta.get("jira"):
@@ -769,6 +777,7 @@ class Factory:
                 if state == "CLOSED":
                     self.move(tid, KILLED, "github", "PR closed without merging")
                     return f"{tid}: PR closed"
+            check_branch(t)
             try:
                 git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
             except WonkaError as e:
@@ -958,6 +967,7 @@ class Factory:
                                 cwd=wt, capture_output=True).returncode == 0
         if not merged:
             raise WonkaError(f"{t['merge_ref']} is not merged into {t['branch']} yet")
+        check_branch(t)
         git("push", "origin", t["branch"], cwd=wt)
         # the fix landed: the next conflict episode gets the full start budget and no stale warning
         t.pop("retries", None)

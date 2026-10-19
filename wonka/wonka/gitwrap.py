@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from . import store
-from .factory import JOB_AGENTS, Factory, fmt
+from .factory import JOB_AGENTS, Factory, check_branch, fmt
 from .store import WonkaError
 
 READS = ("status", "diff", "log", "show", "rev-parse", "ls-files", "blame")
@@ -194,10 +194,17 @@ def main(argv):
         f = Factory(cfg, db)
         t = f.ticket(tid)
         path = target(t, f.state(tid), sub)
-        repo = t["repo"]
+        repo, branch = t["repo"], t["branch"]
+        if sub in WRITES:
+            check_branch(t)
     # the state lock is released: a commit hook may run for minutes
     try:
         gd = git_dir(repo, path)
+        if sub in WRITES:
+            head = subprocess.run(command(path, gd, "symbolic-ref", ["--quiet", "--short", "HEAD"]), env=env(),
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
+            if head != branch:
+                raise WonkaError(f"git {sub} only runs on {branch}, but the worktree is on {head or 'a detached HEAD'}")
         return subprocess.run(command(path, gd, sub, args), env=env(), stdin=subprocess.DEVNULL).returncode
     except FileNotFoundError:
         raise WonkaError("git is not installed")

@@ -258,6 +258,31 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(kw["env"]["GIT_PAGER"], "cat")
         self.assertIs(kw["stdin"], subprocess.DEVNULL)
 
+    def test_write_refused_on_a_protected_branch(self):
+        tid = self.add()
+        self.to_baking(tid)
+        with self.f() as f:
+            f.ticket(tid)["branch"] = "main"
+        with mock.patch.object(gitwrap.subprocess, "run") as run:
+            code, err = self.git(tid, "commit", "-m", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to write to branch main", err)
+        run.assert_not_called()
+
+    def test_write_refused_when_the_worktree_left_its_branch(self):
+        tid = self.add()
+        wt = self.to_baking(tid)
+        sh("git", "checkout", "-q", "--detach", cwd=wt)
+        (wt / "hello.sh").write_text("echo hi\n")
+        code, err = self.git(tid, "add", "hello.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("but the worktree is on a detached HEAD", err)
+        sh("git", "checkout", "-q", "-b", "other", cwd=wt)
+        code, err = self.git(tid, "commit", "-m", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("but the worktree is on other", err)
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "?? hello.sh")
+
     def test_exit_code_passes_through(self):
         tid = self.add()
         with mock.patch.object(gitwrap.subprocess, "run", return_value=mock.Mock(returncode=128)):
