@@ -7,7 +7,8 @@ import subprocess
 
 from . import note, store
 
-DEFAULT = "npx --yes markdownlint-cli@0.49.1 --stdin"
+RELAXED = ("MD013", "MD041")  # line-length, first-line-h1: noisy on note sections, no effect on rendering
+DEFAULT = "npx --yes markdownlint-cli@0.49.1 --stdin --disable " + " ".join(RELAXED)
 TIMEOUT = 60
 MARK = "> [!warning] markdownlint flagged this section"
 HEADER = f"{MARK}, so it is kept as raw text below"
@@ -16,7 +17,7 @@ _ISOLATED = re.compile(r"\A" + re.escape(HEADER) + r"\n(?:> - [^\n]*\n)*\n(`{3,}
 
 
 def command():
-    """The linter argv from WONKA_MDLINT (default: markdownlint-cli via npx), or None when disabled."""
+    """The linter argv from WONKA_MDLINT (default: markdownlint-cli via npx, skipping MD013 and MD041), or None when disabled."""
     value = os.environ.get("WONKA_MDLINT", DEFAULT)
     if not value.strip() or value.strip().lower() == "off":
         return None
