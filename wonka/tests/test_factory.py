@@ -1416,6 +1416,32 @@ class FactoryTest(unittest.TestCase):
             self.assertNotIn("cleanup", f.ticket(tid))
         self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
 
+    def test_kept_worktree_folder_deleted_by_hand_frees_the_branch(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        shutil.rmtree(wt)
+        events = self.tick()["events"]
+        self.assertIsNone(self.f_ticket(tid)["worktree"])
+        self.assertNotIn("cleanup", self.f_ticket(tid))
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        self.assertNotIn(str(wt), sh("git", "worktree", "list", cwd=self.repo))
+        self.assertIn(f"{tid}: cleaned up the kept worktree and branch", events)
+
+    def test_live_worktree_folder_deleted_by_hand_is_recreated(self):
+        tid = self.add()
+        self.to_ready(tid)
+        wt = self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["fix it"]})
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+        shutil.rmtree(wt)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        self.assertTrue(Path(job["worktree"]).exists())
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertFalse(self.f_ticket(tid).get("stuck"))
+        self.assertTrue((wt / "hello.sh").exists())
+        self.assertTrue(any(str(h.get("why", "")).startswith("Worktree folder was gone") for h in self.history(tid)))
+
     def test_killed_ticket_kept_worktree_cleanup_keeps_branch(self):
         tid = self.add()
         wt, branch = self.kept_after(tid, "CLOSED")
