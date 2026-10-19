@@ -309,6 +309,9 @@ def _h2_sections(text):
     return [tuple(x) for x in out]
 
 
+_AI_FOOTER = re.compile(r"generated with \[?claude code|claude\.com/claude-code|co-authored-by:\s*claude", re.I)
+
+
 def check_pr_body(template, body):
     """The problems with a PR body written from `template`, as a list of strings; empty means OK."""
     if not body.strip():
@@ -316,6 +319,9 @@ def check_pr_body(template, body):
     problems = []
     if "<!--" in body:
         problems.append("remove the template's <!-- --> comments")
+    if _AI_FOOTER.search(body):
+        problems.append("remove the AI attribution line (Generated with Claude Code / Co-Authored-By: Claude): "
+                        "the PR body reads as written by the team")
     wanted = _h2_sections(template)
     have = {key for key, _, _ in _h2_sections(body)}
     known = {key for key, _, _ in wanted}
@@ -1725,7 +1731,15 @@ class Factory:
                 "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
                 "review_round": t["review_round"], "dispatch": t["dispatch"],
                 "test_commands": test_prefixes(self.cfg, t["project"]),
-                "pr_template": str(tpl) if job == "bake" and (tpl := find_pr_template(Path(t["worktree"]))) else None}
+                "pr_template": str(tpl) if job == "bake" and (tpl := find_pr_template(Path(t["worktree"]))) else None,
+                "jira": self._jira_of(tid) if job == "bake" else None}
+
+    def _jira_of(self, tid):
+        """The ticket's Jira key from its note, or None; a missing or unreadable note never strands a job."""
+        try:
+            return self.read(tid)[0].get("jira") or None
+        except (OSError, WonkaError):
+            return None
 
     def _setup_worktree(self, tid):
         """ensure_worktree() before a bake or review job; a failure counts like a retry, stuck after MAX_RETRIES.

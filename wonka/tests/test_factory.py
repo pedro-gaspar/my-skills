@@ -281,6 +281,10 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(check("## summary ##\nx\n\n## Jira\ny\n"), [])
         self.assertEqual(check(self.GOOD_BODY + "\n```\n## X\n```\n"), [])
         self.assertEqual(check("  \n"), ["the PR body is empty"])
+        for footer in ("\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+                       "\nCo-authored-by: Claude Opus <noreply@anthropic.com>\n"):
+            self.assertTrue(any("AI attribution" in p for p in check(self.GOOD_BODY + footer)), footer)
+        self.assertEqual(check(self.GOOD_BODY + "\nRefactors the Wonka CLI\n"), [])
 
     def planned_with_template(self):
         self.add_template()
@@ -297,7 +301,7 @@ class FactoryTest(unittest.TestCase):
         tid, _ = self.baking_with_template()
         with self.f() as f:
             for bad in ("", "## Summary\n<!-- x -->\n\n## Jira\nx\n", self.GOOD_BODY + "\n## Notes\nx\n",
-                        "## Summary\nx\n"):
+                        "## Summary\nx\n", self.GOOD_BODY + "\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n"):
                 with self.assertRaises(WonkaError, msg=bad):
                     f.write_pr_body(tid, bad)
             self.assertFalse(f.pr_body_path(tid).exists())
@@ -375,6 +379,21 @@ class FactoryTest(unittest.TestCase):
     def test_bake_job_carries_the_pr_template(self):
         tid, job = self.baking_with_template()
         self.assertTrue(job["pr_template"].endswith(".github/pull_request_template.md"))
+
+    def test_bake_job_carries_the_jira_key(self):
+        _, job = self.baking_with_template()
+        self.assertEqual(job["jira"], "CALC-42")
+
+    def test_jobs_without_jira_or_not_bake_carry_none(self):
+        tid = self.add()
+        self.to_planned(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        self.assertIsNone(job["jira"])
+        other = self.add(jira="CALC-7")
+        job = [j for j in self.tick()["jobs"] if j["id"] == other][0]
+        self.assertNotEqual(job["job"], "bake")
+        self.assertIsNone(job["jira"])
 
     def test_bake_job_has_no_pr_template_without_one(self):
         tid = self.add()
