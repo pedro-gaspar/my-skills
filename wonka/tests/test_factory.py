@@ -872,6 +872,105 @@ class FactoryTest(unittest.TestCase):
             f.baked(tid)
         self.assertEqual(self.state(tid), ("reviewing", "pending"))
 
+    def disputable(self, issues=("a", "b"), **extra):
+        """A ticket in a fix round after a review with these architect issues; returns (tid, worktree)."""
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": list(issues), **extra})
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        return tid, Path(job["worktree"])
+
+    def test_dispute_is_recorded_in_the_round_and_the_plan(self):
+        tid, wt = self.disputable(("a.sh:1: x → y", "b.sh: z → w"))
+        self.commit_and_bake(wt, "fix.sh")
+        with self.f() as f:
+            f.baked(tid, disputes=["b.sh: z → w :: the plan keeps z"])
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+        self.assertEqual(self.f_ticket(tid)["rounds"][-1]["disputes"],
+                         [{"issue": "b.sh: z → w", "why": "the plan keeps z"}])
+        plan = self.plan_text(tid)
+        self.assertEqual(plan.count("## 🐿️ Review round 1"), 1)
+        self.assertIn("### Disputed by the builder\n- b.sh: z → w :: the plan keeps z\n",
+                      plan[plan.index("## 🐿️ Review round 1"):])
+
+    def test_fully_disputed_round_needs_no_new_commit(self):
+        tid, _ = self.disputable()
+        with self.f() as f:
+            f.baked(tid, disputes=["a :: r1", "b :: r2"])
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid)[0], "shipped")
+
+    def test_partly_disputed_round_still_needs_a_commit(self):
+        tid, wt = self.disputable()
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "no new commits"):
+                f.baked(tid, disputes=["a :: r1"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertNotIn("disputes", self.f_ticket(tid)["rounds"][-1])
+        self.assertNotIn("Disputed by the builder", self.plan_text(tid))
+        self.commit_and_bake(wt, "fix.sh")
+        with self.f() as f:
+            f.baked(tid, disputes=["a :: r1"])
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+
+    def test_duplicate_disputes_count_once(self):
+        tid, _ = self.disputable()
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "no new commits"):
+                f.baked(tid, disputes=["a :: r", "A :: r2"])
+
+    def test_dispute_refused_outside_a_review_round(self):
+        tid = self.add()
+        self.to_planned(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "hello.sh")
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "nothing to dispute"):
+                f.baked(tid, disputes=["a :: b"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        tid = self.add("Other")
+        self.to_awaiting_merge(tid)
+        job = [j for j in self.red_round(tid)["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "ci.sh")
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "nothing to dispute"):
+                f.baked(tid, disputes=["a :: b"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_dispute_needs_an_issue_and_a_reason(self):
+        tid, wt = self.disputable()
+        self.commit_and_bake(wt, "fix.sh")
+        for bad in ("no separator", " :: why", "issue :: "):
+            with self.f() as f:
+                with self.assertRaises(WonkaError):
+                    f.baked(tid, disputes=[bad])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_dispute_text_cannot_add_a_heading(self):
+        tid, _ = self.disputable(("a",))
+        with self.f() as f:
+            f.baked(tid, disputes=["a\n## 🐿️ Review round 9 :: why"])
+        plan = self.plan_text(tid)
+        self.assertNotRegex(plan, r"(?m)^## 🐿️ Review round 9")
+        self.assertIn("- a ## 🐿️ Review round 9 :: why\n", plan)
+
+    def test_disputes_and_decisions_share_the_round_heading(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["a"], "questions": [self.QUESTION]})
+        self.edit_note(tid, lambda t: t.replace("  - [ ] Rename to hi", "  - [x] Rename to hi"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        with self.f() as f:
+            f.baked(tid, disputes=["a :: fine as is"])
+        plan = self.plan_text(tid)
+        self.assertEqual(plan.count("## 🐿️ Review round 1"), 1)
+        self.assertLess(plan.index("### Decisions"), plan.index("### Disputed by the builder"))
+
     def test_review_questions_can_close_or_redraft(self):
         a, b = self.add(), self.add("Other")
         for tid, suggest in ((a, "close"), (b, "draft")):

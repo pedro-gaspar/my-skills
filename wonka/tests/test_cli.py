@@ -236,6 +236,18 @@ class CliTest(unittest.TestCase):
                 for ln in cmds:
                     self.assertIn("--dispatch <dispatch>", ln, (name, verb))
 
+    def test_baked_takes_repeatable_disputes(self):
+        base = ["baked", "WONKA-00001", "--dispatch", "1"]
+        a = cli.parser().parse_args(base + ["--dispute", "a :: b", "--dispute", "c :: d"])
+        self.assertEqual(a.dispute, ["a :: b", "c :: d"])
+        self.assertIsNone(cli.parser().parse_args(base).dispute)
+
+    def test_agent_docs_explain_disputes(self):
+        root = Path(cli.__file__).resolve().parent.parent / "agents"
+        self.assertIn("--dispute", (root / "oompa-loompa-builder.md").read_text())
+        for p in root.glob("squirrel-*.md"):
+            self.assertIn("Disputed by the builder", p.read_text(), p.name)
+
     def test_drafted_takes_split(self):
         base = ["drafted", "WONKA-00001", "--size", "m", "--dispatch", "1"]
         self.assertTrue(cli.parser().parse_args(base + ["--split"]).split)
