@@ -240,6 +240,17 @@ class CliTest(unittest.TestCase):
         suite = unittest.TestLoader().discover(start_dir=str(root), top_level_dir=str(root), pattern="test_banner.py")
         self.assertGreater(suite.countTestCases(), 0)
 
+    def test_agent_docs_run_project_tests_through_wonka_test(self):
+        agents = Path(cli.__file__).resolve().parent.parent / "agents"
+        names = ["oompa-loompa-analyst", "oompa-loompa-builder", "oompa-loompa-fixer"]
+        names += [p.stem for p in agents.glob("squirrel-*.md")]
+        self.assertGreaterEqual(len(names), 9)
+        for name in names:
+            text = (agents / f"{name}.md").read_text()
+            for needle in ("test_commands", "wonka test <id> --dispatch <dispatch> -- <command>", "600000", "75"):
+                self.assertIn(needle, text, name)
+        self.assertNotIn("wonka test", (agents / "oompa-loompa-triage.md").read_text())
+
     def test_agent_docs_point_to_the_plans_test_command(self):
         """Agents use the plan's test command and treat a run of 0 tests as a wrong command, not a pass."""
         root = Path(cli.__file__).resolve().parent.parent
