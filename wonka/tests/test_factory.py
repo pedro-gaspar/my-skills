@@ -377,6 +377,16 @@ class FactoryTest(unittest.TestCase):
         self._reuse("<!-- wonka:WONKA-00001 --> \r\n\r\nOld spec\r\n", factory._body_sha(old))
         self.assertTrue(Path(f"{self.pr_state}.edit").exists())
 
+    def test_reused_pr_already_up_to_date_is_not_edited(self):
+        body = factory.pr_body("WONKA-00001", {}, "Add hello.sh")
+        sha = factory._body_sha(body)
+        tid = self._reuse(body, sha)
+        self.assertEqual(tid, "WONKA-00001")
+        self.assertFalse(Path(f"{self.pr_state}.edit").exists())
+        self.assertEqual(self.f_ticket(tid)["pr_body_sha"], sha)
+        self.assertFalse(self._left_alone(tid))
+        self.assertFalse([e for e in self.history(tid) if e.get("why", "").startswith("Could not update the PR description")])
+
     def test_reused_pr_without_a_recorded_hash_is_left_alone(self):
         tid = self._reuse("<!-- wonka:WONKA-00001 -->\n\nOld spec")
         self.assertFalse(Path(f"{self.pr_state}.edit").exists())
