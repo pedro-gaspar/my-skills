@@ -4,6 +4,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+if sys.version_info < (3, 11):
+    sys.exit(f"wonka needs Python 3.11+, this is {sys.version.split()[0]}")
+
 from wonka.cli import main  # noqa: E402
 
 sys.exit(main())
