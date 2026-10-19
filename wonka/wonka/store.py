@@ -160,15 +160,18 @@ def migrate_base(cfg):
         return []
     text = path.read_text()
     done = []
-    for old, new in (("🎫-Ready", "🎫-Planned"), ("✉️-Inbox", "📏-Triage")):
+    for key, old in machine.OLD_STATUSES.items():
+        new = machine.STATUSES[machine.OLD_STATUS_KEYS[key]]
         if old in text:
             text = text.replace(old, new)
             done.append((old, new))
-    if "💡-Idea" not in text:
-        found = re.search(r"^([ \t]*- )📏-Triage[ \t]*$", text, re.M)
+    idea = machine.STATUSES["idea"]
+    triage = machine.STATUSES["triage"]
+    if idea not in text:
+        found = re.search(rf"^([ \t]*- ){re.escape(triage)}[ \t]*$", text, re.M)
         if found:
-            text = text[:found.start()] + f"{found.group(1)}💡-Idea\n" + text[found.start():]
-            done.append((None, "💡-Idea"))
+            text = text[:found.start()] + f"{found.group(1)}{idea}\n" + text[found.start():]
+            done.append((None, idea))
     if done:
         write_atomic(path, text)
     return done
