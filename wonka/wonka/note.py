@@ -5,8 +5,8 @@ import re
 
 from . import store
 
-FIELDS = ("id", "title", "status", "phase", "size", "jira", "spec_review")
-OPTIONAL = ("spec_review",)  # owned fields written only when set: old notes get no blank line
+FIELDS = ("id", "title", "status", "phase", "size", "jira", "spec_review", "blocked_by")
+OPTIONAL = ("spec_review", "blocked_by")  # owned fields written only when set: old notes get no blank line
 
 HEADINGS = {
     "idea": "💡 Idea",

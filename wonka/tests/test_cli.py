@@ -330,6 +330,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual((code, err.strip()), (1, "🗑️ wonka: No ticket WONKA-00042"))
         self.assertIn("No ticket WONKA-00042", (self.tmp / "home/factory.log").read_text())
 
+
+    def test_blocked_by_and_block_parsers(self):
+        p = cli.parser()
+        self.assertEqual(p.parse_args(["add", "x", "--blocked-by", "WONKA-00001,WONKA-00002"]).blocked_by,
+                         ["WONKA-00001,WONKA-00002"])
+        self.assertEqual(len(p.parse_args(["block", "WONKA-00003", "WONKA-00001", "WONKA-00002"]).blockers), 2)
+        self.assertEqual(p.parse_args(["unblock", "WONKA-00003"]).blockers, [])
+
     def test_needs_human_spec_review_flag(self):
         self.assertTrue(cli.parser().parse_args(["add", "x", "--needs-human-spec-review"]).needs_human_spec_review)
         self.assertFalse(cli.parser().parse_args(["add", "x"]).needs_human_spec_review)

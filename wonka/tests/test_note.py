@@ -335,6 +335,14 @@ class SpecReviewTest(unittest.TestCase):
         self.assertIn("spec_review: human\n", p.read_text())
         self.assertEqual(note.read(p)[0]["spec_review"], "human")
 
+    def test_empty_blocked_by_writes_no_line(self):
+        for meta in ({"id": "W-1"}, {"id": "W-1", "blocked_by": ""}):
+            self.assertNotIn("blocked_by", self._write(meta).read_text())
+
+    def test_blocked_by_round_trips(self):
+        p = self._write({"id": "W-1", "blocked_by": "WONKA-00001, WONKA-00002"})
+        self.assertEqual(note.read(p)[0]["blocked_by"], "WONKA-00001, WONKA-00002")
+
     def test_needs_human_review_fails_safe(self):
         for v in ({}, {"spec_review": ""}, {"spec_review": "agent"}, {"spec_review": " Agent "}):
             self.assertFalse(note.needs_human_review(v), v)

@@ -86,10 +86,11 @@ push.
 
 | | |
 |---|---|
-| `/wonka add "idea"` | drop a ticket in Triage (run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`, `--needs-human-spec-review` to approve the spec yourself before baking) |
+| `/wonka add "idea"` | drop a ticket in Triage (run it from the target repo or pass `--repo <path>`; from a linked worktree the ticket is filed under the main checkout, so `.env` is there and it outlives the worktree; `--pr-repo owner/name`, `--jira`, `--needs-human-spec-review` to approve the spec yourself before baking; `--blocked-by WONKA-00001[,…]` to record tickets it waits on) |
 | `/wonka tick` | one turn of the factory: fix the cards, act on your ticks, merge checks, dispatch agents |
 | `/loop /wonka tick` | keep the factory running |
-| `/wonka status` | one line per ticket |
+| `wonka block <id> <blocker>[,…]` / `wonka unblock <id> [<blocker>…]` | record or remove "this ticket waits on those", only while the ticket is in Triage, Drafting or Planned. Refuses unknown ids, a ticket blocking itself, Won't-do blockers and cycles. `unblock` with no ids clears all. For now this only records and shows the dependency: the banner shows `⛓️ blocked by [[…]]` |
+| `/wonka status` | one line per ticket, with ` ⛓️ <ids>` for blockers that have not merged yet |
 | `wonka repos` | the repos the factory knows (project, local path, PR repo); the analyst uses it to file a ticket in another repo |
 | `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `test_lock_wait_minutes` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
@@ -181,7 +182,7 @@ also send an urgent desktop notification, so a `/loop` running in the background
 
 **The state machine** (`wonka/machine.py`) is the only way a ticket moves. Drag a card anywhere other than Wont-Do
 and the next tick puts it back, with a note on the ticket. Notes keep only `id, title, status, phase, size,
-jira, spec_review`. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
+jira, spec_review, blocked_by`. `blocked_by` is a read-only mirror of the state (comma-separated, absent when none): edit it with `wonka block`/`unblock`, since a hand edit is overwritten on the next write. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
 `~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It and the notes
 are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
 giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status` and `wonka show` only read, so they never wait for it: an agent
