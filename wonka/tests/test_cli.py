@@ -626,7 +626,8 @@ class CliTest(unittest.TestCase):
         bodies = {}
         for name, text in docs.items():
             self.assertIn(f"--squirrel {name} ", text, name)  # the normalisation below is not vacuous
-            self.assertNotIn("cd <worktree>", text, name)  # tests take the worktree as a path
+            self.assertIn("as `cd <worktree> && <command>`", text, name)  # the builder's rule, not a path argument
+            self.assertNotIn("worktree as a path", text, name)
             self.assertNotIn("discover -s <worktree>`", text, name)  # bare repo root finds no nested tests
             # Focus first: the architect focus says "architecture", which the name replacement would touch.
             text, focus = re.subn(r"^\*\*Your focus:\*\* .+$", "**Your focus:** FOCUS", text, flags=re.M)

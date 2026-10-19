@@ -260,7 +260,7 @@ is never stalled by a tick that is busy talking to GitHub.
 
 ```bash
 cd wonka && python3 -m unittest                  # from wonka/
-python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (what plans and squirrels use)
+python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (what plans use)
 ```
 
 A bare `python3 -m unittest` from the repo root finds no tests (`NO TESTS RAN`, exit code 5). If a run reports 0

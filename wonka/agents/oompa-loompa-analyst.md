@@ -69,9 +69,9 @@ not the absolute `code` path: the builder works in a different worktree.
      `## ❓ Questions`, triage's and yours) as `question → answer`, plus each real choice you made yourself between
      alternatives, one line each with the reason (name it exactly `## Decisions`, never like a review-round heading, or
      `wonka plan` takes it for the review log); context you found (repo-relative paths and line refs), step-by-step
-     changes, tests to add, how to verify (name the exact test command, written to run from any directory with paths
-     from the repo root and no `cd`, e.g. `python3 -m unittest discover -s wonka -t wonka`, since squirrels run it
-     against their worktree, and run it in `code` first to confirm it finds and runs tests: a run that reports 0 tests
+     changes, tests to add, how to verify (name the exact test command, written to run from the repo root with paths
+     from it and no `cd`, e.g. `python3 -m unittest discover -s wonka -t wonka`, since builders and squirrels run it
+     as `cd <worktree> && <command>`, and run it in `code` first to confirm it finds and runs tests: a run that reports 0 tests
      means the command is wrong; when the command starts with one of `test_commands`, write it exactly so (e.g. `./test.sh`): builders and squirrels then run it through `wonka test`, which runs it from the repo root), risks. A builder Oompa-Loompa with no other context builds from this alone.
      Write it with the Write tool to `<drafts>/<id>-plan.md`, then `wonka plan` copies it to the job's `plan` path
      (it need not exist yet):
