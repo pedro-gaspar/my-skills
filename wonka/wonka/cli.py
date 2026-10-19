@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import datetime as dt
 import importlib
 import json
 import sys
@@ -187,6 +188,9 @@ def run(a, f):
     elif c == "repos":
         for project, repo, pr_repo in f.repos():
             print(f"{project:20} {repo}  {pr_repo or '-'}")
+    elif c == "metrics":
+        for m in f.metrics(a.since):
+            print(json.dumps(m, ensure_ascii=False))
     elif c == "status":
         for k in f.live():
             meta = f.read(k)[0]
@@ -202,7 +206,15 @@ def _key(value, table):
 
 
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
-READ_ONLY = ("status", "show", "repos")  # read a snapshot of the state, so they never wait for a long tick
+READ_ONLY = ("status", "show", "repos", "metrics")  # read a snapshot of the state, so they never wait for a long tick
+
+
+def _day(v):
+    try:
+        dt.date.fromisoformat(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError("use YYYY-MM-DD")
+    return v
 
 
 def parser():
@@ -275,6 +287,9 @@ def parser():
                                                         "per repo already added with wonka add --repo <path> --parent <id>")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
     sub.add_parser("repos", help="the repos the factory knows: project, local path, PR repo")
+    s = sub.add_parser("metrics", help="one JSON line per ticket, archived ones too: outcome, hours per status, "
+                                       "review rounds and stats")
+    s.add_argument("--since", type=_day, help="only tickets created on or after this date (YYYY-MM-DD, UTC)")
     s = sub.add_parser("pr-body", help="builder: the PR description (markdown) on stdin, written from the repo's PR template")
     s.add_argument("id")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
