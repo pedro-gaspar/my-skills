@@ -20,6 +20,9 @@ MAX_CONFLICT_FIXES = 3  # fixes in a row that GitHub still calls CONFLICTING
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("inbox", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
+# the in-progress states whose job runs inside the ticket's worktree, and the agent that runs it
+# (reviewing/progress is handled apart: it has several squirrels)
+WORKTREE_JOBS = {("baking", "progress"): "oompa-loompa-builder", ("shipped", "progress"): "oompa-loompa-fixer"}
 REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?:Earlier change|Change) request) \d+", re.M)
 # PR comments by anyone else are not copied into the plan: the builder runs unattended and would read them as instructions
 TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
@@ -246,6 +249,8 @@ class Factory:
         t["last_valid"] = {"status": dst[0], "phase": dst[1]}
         t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
                              **({"why": why} if why else {})})
+        if dst == KILLED:
+            self._hold_for_live_job(tid, src)
         t.pop("job_started_at", None)
         if dst != ("shipped", "progress"):
             # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through
@@ -500,6 +505,13 @@ class Factory:
         t = self.ticket(tid)
         if not t.get("worktree"):
             return True
+        agents = self._held(tid)
+        if agents and Path(t["worktree"]).exists():
+            t["cleanup"] = True
+            if not quiet:
+                self.log_event(tid, f"Worktree kept until the running {', '.join(agents)} ends: {t['worktree']}. "
+                                    "Wonka retries each tick")
+            return False
         if Path(t["worktree"]).exists():
             try:
                 git("worktree", "remove", t["worktree"], cwd=t["repo"])
@@ -511,6 +523,42 @@ class Factory:
                 return False
         t["worktree"] = None
         return True
+
+    def _hold_for_live_job(self, tid, src):
+        """Just before a ticket is killed: if an agent is still at work in its worktree, hold the worktree for it
+        until it ends (finished()) or its job goes stale."""
+        t = self.ticket(tid)
+        if not t.get("job_started_at") or not t.get("worktree"):
+            return
+        if src in WORKTREE_JOBS:
+            agents = [WORKTREE_JOBS[src]]
+        elif src == ("reviewing", "progress") and "reports" in t:
+            # no reports key means _verdict() is running: every squirrel already reported
+            agents = [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]
+                      if r not in t["reports"] and r not in t.get("finished", [])]
+        else:
+            agents = []
+        if agents:
+            t["held_by"] = {"dispatch": t.get("dispatch"), "since": t["job_started_at"], "agents": agents}
+
+    def _held(self, tid):
+        """The agents still holding a killed ticket's worktree, or None. A hold expires after stale_hours."""
+        t = self.ticket(tid)
+        held = t.get("held_by")
+        if not held:
+            return None
+        hours = self.cfg["stale_hours"]
+        try:
+            expired = _age(held["since"]) > dt.timedelta(hours=hours)
+        except (ValueError, TypeError, KeyError):
+            expired = True
+        if expired or not held.get("agents"):
+            t.pop("held_by", None)
+            if expired:
+                store.log(f"{tid} wonka: no word from {', '.join(held.get('agents') or [])} for {hours}h, "
+                          "releasing its worktree")
+            return None
+        return held["agents"]
 
     def drop_branch(self, tid, quiet=False):
         """After a merged PR: delete the local branch. Best effort, only once the worktree is gone.
@@ -876,6 +924,8 @@ class Factory:
         t = self.ticket(tid)
         if not self.path(tid).exists():
             src = self.state(tid)
+            self._hold_for_live_job(tid, src)
+            t.pop("job_started_at", None)  # the ticket is archived: its job is no longer tracked
             t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "done"}, True, True
             t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/done", "by": "human"})
             self.drop_worktree(tid)
@@ -1106,6 +1156,14 @@ class Factory:
         t, s = self.ticket(tid), self.state(tid)
         if self._stale_dispatch(tid, dispatch):
             return f"{tid}: {agent} is from an earlier dispatch ({dispatch}, now {t['dispatch']}), ignored"
+        held = t.get("held_by")
+        if (held and name in held.get("agents", [])
+                and (dispatch is None or held.get("dispatch") is None or held["dispatch"] == dispatch)):
+            held["agents"].remove(name)
+            if held["agents"]:
+                return f"{tid}: {agent} ended, the ticket is killed; its worktree waits for {', '.join(held['agents'])}"
+            t.pop("held_by")
+            return f"{tid}: {agent} ended, the ticket is killed; its worktree is cleaned up next tick"
         if t.get("stuck"):
             return f"{tid}: stuck, waiting for a human to tick Retry"
         if s != expected or not t.get("job_started_at"):

@@ -1164,6 +1164,7 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(wt.exists())
         history = self.history(tid)
         self.assertTrue(any(h.get("why", "").startswith("Worktree kept") for h in history))
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["oompa-loompa-builder"])
         self.tick()
 
     def to_awaiting_merge(self, tid):
@@ -1317,10 +1318,133 @@ class FactoryTest(unittest.TestCase):
             self.assertTrue(f.ticket(tid).get("archived"))
         self.assertTrue(wt.exists())
         (wt / "scratch.txt").unlink()
+        self.assertIn("cleaned up next tick", self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"]))
         self.tick()
         self.assertFalse(wt.exists())
         with self.f() as f:
             self.assertIsNone(f.ticket(tid)["worktree"])
+
+    # -- a killed ticket's worktree waits for the agent still in it ---------
+
+    def kill(self, tid):
+        """Drag the ticket's note to Wont-Do and tick: the factory kills it."""
+        with self.f() as f:
+            label = f.read(tid)[0]["status"]
+        self.edit_note(tid, lambda t: t.replace(f"status: {label}", "status: 🫐-Wont-Do", 1))
+        self.assertIn(f"{tid}: killed by a human", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+
+    def bake_job(self, tid):
+        self.to_ready(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["job"], "bake")
+        return job, Path(job["worktree"])
+
+    def test_killed_while_baking_keeps_clean_worktree_until_builder_ends(self):
+        tid = self.add()
+        job, wt = self.bake_job(tid)
+        self.kill(tid)
+        self.assertTrue(wt.exists(), "the builder is still in it")
+        t = self.f_ticket(tid)
+        self.assertEqual(t["held_by"]["agents"], ["oompa-loompa-builder"])
+        self.assertEqual(t["held_by"]["dispatch"], job["dispatch"])
+        self.assertEqual(self.whys(tid, "Worktree kept until the running oompa-loompa-builder ends"), 1)
+
+        (wt / "hello.sh").write_text("echo hi\n")  # the builder carries on and commits
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "bake", cwd=wt)
+        self.tick()
+        self.assertTrue(wt.exists(), "a clean tree is still held while the builder runs")
+        self.assertEqual(self.whys(tid, "Worktree kept"), 1, "quiet while held")
+
+        msg = self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"])
+        self.assertEqual(msg, f"{tid}: wonka:oompa-loompa-builder ended, the ticket is killed; "
+                              "its worktree is cleaned up next tick")
+        self.assertNotIn("held_by", self.f_ticket(tid))
+        events = self.tick()["events"]
+        self.assertFalse(wt.exists())
+        self.assertIn(f"{tid}: cleaned up the kept worktree", events)
+        self.assertEqual(self.whys(tid, "Cleaned up the kept worktree"), 1)
+
+    def test_killed_hold_expires_after_stale_hours(self):
+        tid = self.add()
+        _, wt = self.bake_job(tid)
+        self.kill(tid)
+        self.assertTrue(wt.exists())
+        later = factory.now() + dt.timedelta(hours=self.cfg["stale_hours"], minutes=1)
+        with mock.patch.object(factory, "now", lambda: later):
+            self.tick()
+        self.assertFalse(wt.exists(), "no word from the builder: the hold expires")
+        t = self.f_ticket(tid)
+        self.assertNotIn("held_by", t)
+        self.assertIsNone(t["worktree"])
+
+    def test_unreadable_hold_time_counts_as_expired(self):
+        tid = self.add()
+        _, wt = self.bake_job(tid)
+        self.kill(tid)
+        with self.f() as f:
+            f.ticket(tid)["held_by"]["since"] = "garbage"
+        self.tick()
+        self.assertFalse(wt.exists())
+
+    def test_killed_during_review_waits_for_every_squirrel(self):
+        tid = self.add()
+        self.to_ready(tid, reviewers=("architect", "backend", "security"))
+        wt = self.bake(tid)
+        job = self.review(tid, architect={"verdict": "good nut"})
+        self.kill(tid)
+        self.assertTrue(wt.exists())
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["squirrel-backend", "squirrel-security"],
+                         "the squirrel that reported is not waited for")
+        msg = self.finished(tid, "wonka:squirrel-backend", job["dispatch"])
+        self.assertEqual(msg, f"{tid}: wonka:squirrel-backend ended, the ticket is killed; "
+                              "its worktree waits for squirrel-security")
+        self.tick()
+        self.assertTrue(wt.exists())
+        msg = self.finished(tid, "wonka:squirrel-security", job["dispatch"])
+        self.assertIn("cleaned up next tick", msg)
+        self.tick()
+        self.assertFalse(wt.exists())
+
+    def test_killed_during_fixer_holds_worktree(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        job = self.fixer_job(tid)
+        self.kill(tid)
+        self.assertTrue(wt.exists())
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["oompa-loompa-fixer"])
+        self.tick()
+        self.assertTrue(wt.exists())
+        self.assertIn("cleaned up next tick", self.finished(tid, "wonka:oompa-loompa-fixer", job["dispatch"]))
+        self.tick()
+        self.assertFalse(wt.exists())
+
+    def test_late_finish_from_an_earlier_dispatch_does_not_release_the_hold(self):
+        tid = self.add()
+        job, wt = self.bake_job(tid)
+        self.kill(tid)
+        self.assertIn("earlier dispatch", self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"] - 1))
+        self.assertIn("held_by", self.f_ticket(tid))
+        self.tick()
+        self.assertTrue(wt.exists())
+
+    def test_bad_nut_kill_does_not_hold(self):
+        tid = self.add()
+        self.to_ready(tid)
+        for n in range(3):
+            wt = self.bake(tid, f"f{n}.sh")
+            self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertNotIn("held_by", self.f_ticket(tid))
+        self.assertFalse(wt.exists())
+
+    def test_kill_without_a_running_job_removes_worktree_at_once(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.kill(tid)
+        self.assertFalse(wt.exists())
+        self.assertNotIn("held_by", self.f_ticket(tid))
 
     def test_legacy_kept_worktree_without_flag_is_retried(self):
         tid = self.add()
