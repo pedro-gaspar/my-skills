@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -52,16 +53,40 @@ def _age(stamp):
     return now() - dt.datetime.fromisoformat(stamp)
 
 
-def _run(cmd, cwd=None):
+TIMEOUT = 120  # seconds any git or gh call may take; most run inside the state lock
+# git, gh and Git Credential Manager must never ask a human anything
+NONINTERACTIVE = {"GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "GCM_INTERACTIVE": "never"}
+
+
+def _exec(cmd, cwd=None):
+    """Run a command with no stdin, no terminal and a time limit. Returns (returncode, stdout, stderr)."""
     try:
-        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
+        p = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **NONINTERACTIVE}, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     except FileNotFoundError as e:
         if cwd is not None and e.filename == str(cwd):
             raise WonkaError(f"working directory {cwd} is missing")
         raise WonkaError(f"{cmd[0]} is not installed")
-    except subprocess.CalledProcessError as e:
-        raise WonkaError(f"{' '.join(cmd[:3])} failed: {(e.stderr or e.stdout).strip()}")
-    return out.stdout.strip()
+    try:
+        out, err = p.communicate(timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.wait()
+        p.stdout.close()
+        p.stderr.close()
+        raise WonkaError(f"{' '.join(cmd[:3])} timed out after {TIMEOUT} s: is it waiting for a password, "
+                         "passphrase or host key, or is the network down?")
+    return p.returncode, out, err
+
+
+def _run(cmd, cwd=None):
+    code, out, err = _exec(cmd, cwd)
+    if code:
+        raise WonkaError(f"{' '.join(cmd[:3])} failed: {(err or out).strip()}")
+    return out.strip()
 
 
 def git(*args, cwd):
@@ -145,7 +170,7 @@ def _base_branch(top, has_origin):
 
 
 def _ref_exists(repo, ref):
-    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo, capture_output=True).returncode == 0
+    return _exec(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo)[0] == 0
 
 
 def _drop_stash_entry(repo, sha):
@@ -1046,8 +1071,7 @@ class Factory:
         wt = t["worktree"]
         if git("status", "--porcelain", cwd=wt) or _ref_exists(wt, "MERGE_HEAD") or _rebasing(wt):
             raise WonkaError("the worktree has uncommitted changes or an unfinished rebase: finish the rebase first")
-        rebased = subprocess.run(["git", "merge-base", "--is-ancestor", t["merge_ref"], "HEAD"],
-                                 cwd=wt, capture_output=True).returncode == 0
+        rebased = _exec(["git", "merge-base", "--is-ancestor", t["merge_ref"], "HEAD"], cwd=wt)[0] == 0
         if not rebased:
             raise WonkaError(f"{t['branch']} is not rebased onto {t['merge_ref']} yet")
         check_branch(t)

@@ -89,6 +89,12 @@ class PermissionChecksTest(unittest.TestCase):
         self.assertNotIn("github-cli", msg)
 
 
+class OkTest(unittest.TestCase):
+    def test_a_timeout_is_not_ok(self):
+        with mock.patch.object(doctor.subprocess, "run", side_effect=doctor.subprocess.TimeoutExpired("gh", 30)):
+            self.assertFalse(doctor._ok(["gh", "auth", "status"]))
+
+
 class OrphansTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

@@ -1222,6 +1222,38 @@ class FactoryTest(unittest.TestCase):
         with self.assertRaisesRegex(WonkaError, "is not installed"):
             factory._run(["no-such-binary-xyz"])
 
+    def _script(self, body):
+        path = self.tmp / "cmd.sh"
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        return str(path)
+
+    def test_run_times_out_and_kills_the_command(self):
+        pidfile = self.tmp / "child.pid"
+        script = self._script(f"sleep 30 &\necho $! > {pidfile}\nwait\n")
+        start = time.monotonic()
+        with mock.patch.object(factory, "TIMEOUT", 1), self.assertRaisesRegex(WonkaError, "timed out after 1 s"):
+            factory._run([script])
+        self.assertLess(time.monotonic() - start, 15)
+        pid = int(pidfile.read_text())
+        for _ in range(40):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the grandchild survived the timeout")
+
+    def test_run_is_non_interactive(self):
+        script = self._script('echo "$GIT_TERMINAL_PROMPT $GH_PROMPT_DISABLED"\ncat\n')
+        self.assertEqual(factory._run([script]), "0 1")
+
+    def test_run_keeps_the_failure_message(self):
+        script = self._script("echo boom >&2\nexit 1\n")
+        with self.assertRaisesRegex(WonkaError, "failed: boom"):
+            factory._run([script])
+
     def test_deleted_and_foreign_notes(self):
         tid = self.add()
         with self.f() as f:

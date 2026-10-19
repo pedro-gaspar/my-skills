@@ -14,8 +14,8 @@ SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" /
 
 def _ok(cmd):
     try:
-        return subprocess.run(cmd, capture_output=True).returncode == 0
-    except FileNotFoundError:
+        return subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=30).returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
