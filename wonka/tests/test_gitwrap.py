@@ -25,7 +25,13 @@ class CheckTest(unittest.TestCase):
                           ("commit", ["-mfix -p", "--no-edit"]), ("commit", ["--no-edit"]),
                           ("diff", ["--stat", "--", "--output"]), ("rev-parse", ["HEAD"]),
                           ("diff", ["--name-only", "--diff-filter=U"]),
-                          ("merge", ["--no-edit", "origin/main"]), ("merge", ["--abort"])):
+                          ("merge", ["--no-edit", "origin/main"]), ("merge", ["--abort"]),
+                          ("ls-files", ["--exclude", "*.pyc", "-o"]), ("ls-files", ["-x", "-X"]),
+                          ("ls-files", ["-x*.pyc", "--exclude-standard", "-o"]), ("ls-files", ["--exclude=*.o"]),
+                          ("blame", ["--ignore-rev", "HEAD~1", "README.md"]), ("blame", ["-L", "1,5", "README.md"]),
+                          ("blame", ["-L/Sx/,+3", "f"]), ("log", ["-SOLD", "--oneline"]), ("diff", ["-GOx"]),
+                          ("log", ["-n", "5"]), ("commit", ["-m", "x", "--pathspec-file-nul"]),
+                          ("add", ["--no-pathspec-from-file", "a.py"])):
             with self.subTest(sub=sub, args=args):
                 self.assertIsNone(check(sub, args))
 
@@ -41,7 +47,15 @@ class CheckTest(unittest.TestCase):
                      "blame --contents f x", "commit --amend", "commit --am", "commit --amen=x", "commit -F f",
                      "commit -sF f", "commit -t f", "commit --template=f", "commit -p", "commit --interactive",
                      "add -p", "add -vp", "add -A", "add --all", "add --al", "add -i", "add -e", "add --patch",
-                     "commit -m x --amend", "log --exec=x"):
+                     "commit -m x --amend", "log --exec=x",
+                     "add --pathspec-from-file=/etc/passwd", "add --pathspec-from-file /etc/passwd",
+                     "add --pathspec-from=x", "commit -m x --pathspec-from-file /etc/passwd",
+                     "commit --pathspec-from-file=x", "ls-files -X /etc/passwd", "ls-files -coX /etc/passwd",
+                     "ls-files --exclude-from=/etc/passwd", "ls-files --exclude-fr x",
+                     "ls-files --exclude-per-directory ../../etc/passwd", "ls-files --exclude-p=x",
+                     "blame -S /etc/passwd f", "blame -wS /etc/passwd f", "blame --ignore-revs-file=/etc/x f",
+                     "blame --ignore-revs f", "diff -O/etc/passwd", "log -p -O/etc/x", "show -O x",
+                     "status --pathspec-from-file=x"):
             sub, *args = line.split()
             with self.subTest(line=line), self.assertRaises(WonkaError):
                 check(sub, args)
