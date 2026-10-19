@@ -1,4 +1,7 @@
-"""markdownlint for note sections: a section it flags is kept as raw text so it can't break the rest of the note."""
+"""markdownlint for note sections: a section it flags is kept as raw text so it can't break the rest of the note.
+
+Blank lines around lists (MD032) are inserted first, so the common "list right after a paragraph" is fixed, not flagged.
+"""
 
 import os
 import re
@@ -69,11 +72,77 @@ def isolated(text):
     return bool(m) and all(len(r) < len(m.group(1)) for r in re.findall(r"`+", m.group(2)))
 
 
+_ITEM = re.compile(r"^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$")
+_BREAK = re.compile(r"^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def _item(line):
+    """(indent, marker, content) when the line starts a list item, else None (thematic breaks are not items)."""
+    m = _ITEM.match(line)
+    if not m or _BREAK.match(line):
+        return None
+    return len(m.group(1)), m.group(2), m.group(3) or ""
+
+
+def _fence_end(lines, start, opener):
+    """Index of the line closing the fence opened at `start` (the last line when it never closes)."""
+    mark = opener.group(1)
+    close = re.compile(r"^\s*" + re.escape(mark[0]) + "{%d,}\\s*$" % len(mark))
+    for i in range(start + 1, len(lines)):
+        if close.match(lines[i]):
+            return i
+    return len(lines) - 1
+
+
+def space_lists(text):
+    """The text with the blank lines MD032 wants before and after lists; code fences and nested items are left alone."""
+    lines = text.split("\n")
+    out = []
+    in_list, prev, i = False, None, 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            out.append(line)
+            prev = "blank"
+            i += 1
+            continue
+        item = _item(line)
+        if in_list:
+            if line[0] in " \t" or item:
+                prev = "list"
+            else:
+                if prev == "list":
+                    out.append("")
+                in_list, prev = False, "text"
+        elif item and item[0] <= 3:
+            number = item[1][:-1]
+            interrupts = bool(item[2]) if item[1] in "-*+" else number == "1"
+            if prev in (None, "blank") or interrupts:
+                if prev == "text":
+                    out.append("")
+                in_list, prev = True, "list"
+            else:
+                prev = "text"
+        else:
+            prev = "text"
+        out.append(line)
+        opener = _FENCE.match(line)
+        if opener:
+            end = _fence_end(lines, i, opener)
+            out.extend(lines[i + 1:end + 1])
+            i = end
+        i += 1
+    return "\n".join(out)
+
+
 def guard(text):
-    """The section content to write: as is when clean, unchecked or already isolated, isolated when flagged."""
+    """The section content to write: list spacing fixed first, then as is when clean, unchecked or already isolated,
+    isolated when flagged."""
     body = note.demote(text.strip())
     if not body or isolated(body):
         return body
+    body = space_lists(body)
     found = problems(body)
     if not found:
         return body

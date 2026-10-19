@@ -9,6 +9,50 @@ from wonka import mdlint
 
 MD041 = "stdin:1 error MD041/first-line-heading/first-line-h1 First line in a file should be a top-level heading"
 
+SAMPLES = [
+    "Para\n\n- a\n- b\n\nPara",
+    "- a\n\n- b\n\n- c",
+    "- a\n- b",
+    "1. a\n2. b\n\nend",
+    "Para\n---\nmore",
+    "some text\n2024. was a year",
+    "text\n```\nx\n- a\n```\nmore",
+]
+
+
+class SpaceListsTest(unittest.TestCase):
+    def test_list_after_paragraph_gets_a_blank_line(self):
+        self.assertEqual(mdlint.space_lists("Intro:\n- a\n- b"), "Intro:\n\n- a\n- b")
+        self.assertEqual(mdlint.space_lists("Intro:\n1. a\n2. b"), "Intro:\n\n1. a\n2. b")
+
+    def test_paragraph_after_list_gets_a_blank_line(self):
+        self.assertEqual(mdlint.space_lists("- a\n- b\nAfter"), "- a\n- b\n\nAfter")
+        self.assertEqual(mdlint.space_lists("- a\n### H"), "- a\n\n### H")
+        self.assertEqual(mdlint.space_lists("- a\n> q"), "- a\n\n> q")
+
+    def test_lists_inside_code_fences_are_untouched(self):
+        for t in ["text\n```\nx\n- a\ny\n```", "text\n~~~\nx\n- a\n~~~", "text\n````\n```\n- a\ny\n````"]:
+            with self.subTest(text=t):
+                self.assertEqual(mdlint.space_lists(t), t)
+        self.assertEqual(mdlint.space_lists("- a\n```\nb\n- c\n```"), "- a\n\n```\nb\n- c\n```")
+
+    def test_nested_and_continued_items_stay_together(self):
+        self.assertEqual(mdlint.space_lists("Intro:\n- a\n  more\n  - nested\n    - deeper\n- b"),
+                         "Intro:\n\n- a\n  more\n  - nested\n    - deeper\n- b")
+        t = "- a\n  ```\n  code\n  ```\n- b"
+        self.assertEqual(mdlint.space_lists(t), t)
+
+    def test_already_correct_markdown_is_unchanged(self):
+        for t in SAMPLES:
+            with self.subTest(text=t):
+                self.assertEqual(mdlint.space_lists(t), t)
+
+    def test_space_lists_is_idempotent(self):
+        for t in SAMPLES + ["Intro:\n- a\n- b\nAfter", "- a\n```\nb\n```\nc"]:
+            with self.subTest(text=t):
+                once = mdlint.space_lists(t)
+                self.assertEqual(mdlint.space_lists(once), once)
+
 
 class MdlintTest(unittest.TestCase):
     def setUp(self):
@@ -116,6 +160,22 @@ class MdlintTest(unittest.TestCase):
         self.linter(f'cat > "{seen}"\nexit 0\n')
         mdlint.guard("## Heading\ntext")
         self.assertEqual(seen.read_text(), "### Heading\ntext\n")
+
+    def test_guard_lints_the_spaced_text(self):
+        seen = self.tmp / "seen"
+        self.linter(f'cat > "{seen}"\nexit 0\n')
+        self.assertEqual(mdlint.guard("Intro:\n- a"), "Intro:\n\n- a")
+        self.assertEqual(seen.read_text(), "Intro:\n\n- a\n")
+
+    def test_other_failures_still_isolate_the_spaced_text(self):
+        self.failing()
+        out = mdlint.guard("Intro:\n- a")
+        self.assertTrue(out.startswith(mdlint.MARK))
+        self.assertIn("```text\nIntro:\n\n- a\n```", out)
+
+    def test_unchecked_text_is_still_spaced(self):
+        os.environ["WONKA_MDLINT"] = "off"
+        self.assertEqual(mdlint.guard("Intro:\n- a"), "Intro:\n\n- a")
 
     def test_default_command_is_markdownlint_via_npx(self):
         os.environ.pop("WONKA_MDLINT", None)
