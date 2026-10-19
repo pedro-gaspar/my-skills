@@ -84,6 +84,18 @@ class CliTest(unittest.TestCase):
         self.assertIn("too small", err)
         self.assertEqual(self.run_cli("config", "max_review_rounds", "x")[0], 1)
 
+    def test_config_worktree_files_round_trip(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        cfg_file = self.tmp / "home/config.json"
+        code, out, _ = self.run_cli("config", "worktree_files.beyondpricing", "server/.env, web/.env")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["worktree_files"], {"beyondpricing": ["server/.env", "web/.env"]})
+        self.assertIn("beyondpricing: server/.env, web/.env", out)
+        self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "")[0], 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["worktree_files"], {})
+        self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "/etc/passwd")[0], 1)
+        self.assertEqual(self.run_cli("config", "worktree_files.beyondpricing", "../x")[0], 1)
+
     def test_set_prints_the_summary(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = self.tmp / "app"

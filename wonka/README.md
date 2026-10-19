@@ -89,7 +89,7 @@ push.
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
 | `wonka repos` | the repos the factory knows (project, local path, PR repo); the analyst uses it to file a ticket in another repo |
-| `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth` |
+| `wonka config [key value]` | show or change settings: `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>` |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, state, Claude Code permissions and notes with stray ## sections |
 
@@ -108,6 +108,13 @@ push.
 Triage and the analyst read a throwaway read-only checkout of the latest `origin/<base>` in
 `~/.wonka/worktrees/<project>/<id>-scout`, made fresh for each job and removed once the ticket leaves triage or
 drafting. Your own checkout is never touched, so they never plan against stale code.
+
+Worktrees and scouts have no gitignored files. List the ones a project's tests need with
+`wonka config worktree_files.<project> server/.env,other/.env` (`<project>` is the repo folder name; an empty value
+removes it): the CLI copies them from your checkout into each worktree and scout, keeping their mode. Only files git
+ignores there are copied (never one a builder could commit), an existing file is never overwritten, and a missing one is
+noted in the ticket's factory log without blocking the job. They are copied, never symlinked, so a builder cannot change
+your checkout's file.
 
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Ready. Finished tickets (Shipped or Wont-Do) and their plans move to
 `wonka/archive/` after 7 days. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) are
