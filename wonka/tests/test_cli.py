@@ -107,6 +107,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(cli._report(numbered), cli._report(plain))
         self.assertNotIn("dispatch", cli._report(numbered))
 
+    def test_drafted_and_baked_take_a_dispatch_number(self):
+        drafted = ["drafted", "WONKA-00001", "--size", "s"]
+        self.assertEqual(cli.parser().parse_args(drafted + ["--dispatch", "3"]).dispatch, 3)
+        self.assertIsNone(cli.parser().parse_args(drafted).dispatch)
+        self.assertEqual(cli.parser().parse_args(["baked", "WONKA-00001", "--dispatch", "3"]).dispatch, 3)
+        self.assertIsNone(cli.parser().parse_args(["baked", "WONKA-00001"]).dispatch)
+
     def test_resolved_takes_an_id(self):
         a = cli.parser().parse_args(["resolved", "WONKA-00001"])
         self.assertEqual((a.cmd, a.id), ("resolved", "WONKA-00001"))

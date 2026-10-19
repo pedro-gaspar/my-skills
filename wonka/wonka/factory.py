@@ -368,7 +368,10 @@ class Factory:
             out += "\n" + log.strip("\n") + "\n"
         path.write_text(out)
 
-    def drafted(self, tid, size, reviewers=()):
+    def drafted(self, tid, size, reviewers=(), dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return (f"{tid}: analyst result is from an earlier dispatch "
+                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
         self.expect(tid, ("drafting", "progress"))
         t = self.ticket(tid)
         self.set_field(tid, "size", size)
@@ -536,7 +539,10 @@ class Factory:
         self.log_event(tid, f"Cleaned up the kept {what}")
         return f"{tid}: cleaned up the kept {what}"
 
-    def baked(self, tid):
+    def baked(self, tid, dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return (f"{tid}: builder result is from an earlier dispatch "
+                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
         self.expect(tid, ("baking", "progress"))
         t = self.ticket(tid)
         if git("status", "--porcelain", cwd=t["worktree"]):
