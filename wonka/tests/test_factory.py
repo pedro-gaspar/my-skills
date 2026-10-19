@@ -1125,7 +1125,8 @@ class FactoryTest(unittest.TestCase):
         self.clean_rebake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
         self.assertEqual(self.state(tid), ("wontdo", "ready"))
-        self.assertIn("3 review rounds", self.note(tid)[1])
+        self.assertIn("Bad nut: 4 review rounds", self.note(tid)[1], "the budget with the extra round granted")
+        self.assertNotIn("3 review rounds", self.note(tid)[1])
 
     def test_early_clean_rebake_does_not_shorten_the_budget(self):
         tid = self.add()

@@ -1489,8 +1489,9 @@ class Factory:
     def _back_to_baking(self, tid, why):
         t = self.ticket(tid)
         if t["review_round"] >= self._budget(t):
-            self.move(tid, KILLED, "wonka", f"Bad nut: {self._max_rounds()} review rounds without a clean bill, rolled away")
-            return f"{tid}: killed after {self._max_rounds()} review rounds"
+            budget = self._budget(t)  # max_review_rounds plus the extra rounds clean rounds that rebaked were granted
+            self.move(tid, KILLED, "wonka", f"Bad nut: {budget} review rounds without a clean bill, rolled away")
+            return f"{tid}: killed after {budget} review rounds"
         self.move(tid, ("baking", "pending"), "wonka", why)
         return f"{tid}: back to baking"
 
