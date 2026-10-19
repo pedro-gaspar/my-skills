@@ -489,6 +489,10 @@ class Factory:
         path = store.worktrees_dir() / t["project"] / tid
         branch = t["branch"] or f"wonka/{tid}-{slug(title)}"
         path.parent.mkdir(parents=True, exist_ok=True)
+        if t["worktree"]:  # the folder was deleted from outside
+            self.log_event(tid, f"Worktree folder was gone, recreating it from {branch}: {t['worktree']}")
+        if not path.exists():
+            git("worktree", "prune", cwd=t["repo"])  # forget a registration whose folder was deleted
         if _ref_exists(t["repo"], f"refs/heads/{branch}"):
             git("worktree", "add", str(path), branch, cwd=t["repo"])
         else:
@@ -589,6 +593,11 @@ class Factory:
                     self.log_event(tid, f"Worktree kept, it has local changes: {t['worktree']} ({e}). "
                                         "Wonka retries each tick until it is clean or gone")
                 return False
+        else:
+            try:
+                git("worktree", "prune", cwd=t["repo"])  # deleted by hand: drop its registration so the branch can go
+            except (WonkaError, OSError) as e:
+                store.log(f"{tid} wonka: could not prune the worktree registration {t['worktree']} ({e})")
         t["worktree"] = None
         return True
 
