@@ -56,9 +56,9 @@ class CliTest(unittest.TestCase):
     def test_init_renames_the_old_ready_column(self):
         board = self.tmp / "vault/wonka"
         board.mkdir(parents=True)
-        (board / "🍫 Factory.base").write_text("order:\n  - 🎫-Ready\nmine: 1\n")
+        (board / "🍫 Factory.base").write_text("order:\n  - ✉️-Inbox\n  - 🎫-Ready\nmine: 1\n")
         self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
-        self.assertEqual((board / "🍫 Factory.base").read_text(), "order:\n  - 🎫-Planned\nmine: 1\n")
+        self.assertEqual((board / "🍫 Factory.base").read_text(), "order:\n  - 📏-Triage\n  - 🎫-Planned\nmine: 1\n")
 
     def test_init_keeps_both_when_both_exist(self):
         board = self.tmp / "vault/wonka"

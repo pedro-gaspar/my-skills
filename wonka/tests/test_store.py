@@ -99,18 +99,34 @@ class StateTest(unittest.TestCase):
         with store.state():
             pass
         new = json.loads(self.path.read_text())
-        self.assertEqual(new["tickets"]["WONKA-1"]["history"], [{"from": "inbox/ready", "to": "planned/pending"}])
+        self.assertEqual(new["tickets"]["WONKA-1"]["history"], [{"from": "triage/ready", "to": "planned/pending"}])
+        self.assertEqual(json.loads(self.bak.read_text()), old)
+
+    def test_old_inbox_state_keys_are_migrated_on_read_and_saved_with_a_backup(self):
+        old = {"next_id": 2, "tickets": {"WONKA-1": {"last_valid": {"status": "inbox", "phase": "pending"},
+                                                      "history": [{"from": "inbox/pending", "to": "inbox/ready"}]}}}
+        self.path.write_text(json.dumps(old))
+        snap = store.snapshot()
+        self.assertEqual(snap["tickets"]["WONKA-1"]["last_valid"], {"status": "triage", "phase": "pending"})
+        with store.state():
+            pass
+        new = json.loads(self.path.read_text())
+        self.assertEqual(new["tickets"]["WONKA-1"]["history"], [{"from": "triage/pending", "to": "triage/ready"}])
         self.assertEqual(json.loads(self.bak.read_text()), old)
 
     def test_migrate_base_renames_the_column_only(self):
         cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
         base = self.tmp / "vault/wonka" / store.BASE_FILE
-        self.assertFalse(store.migrate_base(cfg))
+        self.assertEqual(store.migrate_base(cfg), [])
         base.parent.mkdir(parents=True)
         base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
-        self.assertTrue(store.migrate_base(cfg))
+        self.assertEqual(store.migrate_base(cfg), [("🎫-Ready", "🎫-Planned")])
         self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
-        self.assertFalse(store.migrate_base(cfg))
+        self.assertEqual(store.migrate_base(cfg), [])
+        base.write_text("groupOrder:\n  - ✉️-Inbox\n  - 🎫-Ready\n# mine\n")
+        self.assertEqual(store.migrate_base(cfg), [("🎫-Ready", "🎫-Planned"), ("✉️-Inbox", "📏-Triage")])
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 📏-Triage\n  - 🎫-Planned\n# mine\n")
+        self.assertEqual(store.migrate_base(cfg), [])
 
 
 if __name__ == "__main__":

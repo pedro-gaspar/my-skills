@@ -149,7 +149,7 @@ class FactoryTest(unittest.TestCase):
                 f.report(tid, name, rep)
         return job
 
-    def test_xs_ticket_goes_from_inbox_to_archive(self):
+    def test_xs_ticket_goes_from_triage_to_archive(self):
         tid = self.add()
         self.assertEqual(tid, "WONKA-00001")
         self.assertEqual(self.tick()["jobs"][0]["agents"], ["wonka:oompa-loompa-triage"])
@@ -162,7 +162,7 @@ class FactoryTest(unittest.TestCase):
                                     "followups": [{"title": "Add a bye script", "idea": "bye.sh"}]})
         self.assertEqual(job["agents"], ["wonka:squirrel-architect", "wonka:squirrel-security"])
         self.assertEqual(self.state(tid), ("baking", "pending"))
-        self.assertEqual(self.state("WONKA-00002"), ("inbox", "pending"))
+        self.assertEqual(self.state("WONKA-00002"), ("triage", "pending"))
         self.assertIn("no shebang", Path(self.f_ticket(tid)["plan"]).read_text())
 
         self.bake(tid, "fix.sh")
@@ -540,11 +540,11 @@ class FactoryTest(unittest.TestCase):
 
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
-        self.edit_note(a, lambda t: t.replace("✉️-Inbox", "🍫-Baking"))
-        self.edit_note(b, lambda t: t.replace("✉️-Inbox", "🗑️-Wont-Do"))
+        self.edit_note(a, lambda t: t.replace("📏-Triage", "🍫-Baking"))
+        self.edit_note(b, lambda t: t.replace("📏-Triage", "🗑️-Wont-Do"))
         events = self.tick()["events"]
         self.assertIn(f"{a}: reverted illegal 🍫-Baking/🕰️-Pending", events)
-        self.assertEqual(self.note(a)[0]["status"], "✉️-Inbox")
+        self.assertEqual(self.note(a)[0]["status"], "📏-Triage")
         self.assertIn("Reverted", self.note(a)[1])
         self.assertEqual(self.state(b), ("wontdo", "ready"))
 
@@ -563,7 +563,11 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(a, "s")
-        self.check_old_label(a, ("inbox", "ready"), "phase", "🌟-Done", "🌟-Ready")
+        self.check_old_label(a, ("triage", "ready"), "phase", "🌟-Done", "🌟-Ready")
+
+    def test_old_inbox_status_in_a_note_is_migrated_silently(self):
+        a = self.add()
+        self.check_old_label(a, ("triage", "pending"), "status", "✉️-Inbox", "📏-Triage")
 
     def test_old_ready_status_in_a_note_is_migrated_silently(self):
         b = self.add()
@@ -584,7 +588,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             self.assertEqual(f.ticket(b)["history"][-1]["why"], f"Duplicate of {a}")
             self.assertTrue(any(b in h.get("why", "") for h in f.ticket(a)["history"]))
-        self.assertEqual(self.state(a), ("inbox", "pending"))
+        self.assertEqual(self.state(a), ("triage", "pending"))
         self.assertNotIn(b, [j["id"] for j in self.tick()["jobs"]])
 
     def test_triage_duplicate_is_checked_before_anything_is_written(self):
@@ -606,7 +610,7 @@ class FactoryTest(unittest.TestCase):
             with self.subTest(kw=kw):
                 with self.assertRaises(WonkaError), self.f() as f:
                     f.triage(b, "s", **kw)
-                self.assertEqual(self.state(b), ("inbox", "pending"))
+                self.assertEqual(self.state(b), ("triage", "pending"))
                 self.assertNotIn("## 🗑️ Duplicate", self.note(b)[1])
 
     def test_medium_ticket_waits_for_approval_and_answers(self):
@@ -614,14 +618,14 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"], "recommended": 0}])
-        self.assertEqual(self.state(tid), ("inbox", "awaiting"))
+        self.assertEqual(self.state(tid), ("triage", "awaiting"))
         body = self.note(tid)[1]
         self.assertTrue(body.startswith("# 🎫 Add a hello script\n\n> [!question] 🙋 Your turn: approve it\n> The triage Oompa-Loompa sized it **m**"))
-        self.assertIn("· triage · ✉️-Inbox 🕰️-Pending → ✉️-Inbox 🙋-Awaiting-Human", body)
+        self.assertIn("· triage · 📏-Triage 🕰️-Pending → 📏-Triage 🙋-Awaiting-Human", body)
         self.assertGreater(body.index("## 🎩 Factory log"), body.index("## ❓ Questions"), "log stays last")
         self.edit_note(tid, lambda t: t.replace("- [ ] Approve", "- [x] Approve"))
         self.tick()
-        self.assertEqual(self.state(tid), ("inbox", "awaiting"), "a question is still open")
+        self.assertEqual(self.state(tid), ("triage", "awaiting"), "a question is still open")
         self.edit_note(tid, lambda t: t.replace("- [ ] Bash", "- [x] Bash"))
         self.tick()
         self.assertEqual(self.state(tid), ("drafting", "progress"), "approved, promoted and claimed in one tick")
@@ -1078,7 +1082,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(tid, "m")
-        self.assertEqual(self.state(tid), ("inbox", "awaiting"))
+        self.assertEqual(self.state(tid), ("triage", "awaiting"))
         with self.f() as f, self.assertRaisesRegex(WonkaError, "nothing to retry"):
             f.retry(tid)
         t = self.f_ticket(tid)
@@ -1130,7 +1134,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_a_stuck_ticket_dragged_to_wont_do_drops_stuck(self):
         tid = self.stuck_ticket()
-        self.edit_note(tid, lambda t: t.replace("✉️-Inbox", "🗑️-Wont-Do"))
+        self.edit_note(tid, lambda t: t.replace("📏-Triage", "🗑️-Wont-Do"))
         self.tick()
         self.assert_finished_clean(tid)
 
@@ -1190,7 +1194,7 @@ class FactoryTest(unittest.TestCase):
         msg = self.finished(tid, "wonka:oompa-loompa-triage")
         self.assertIn("moved on", msg)
         self.assertTrue(msg.startswith(f"{tid}: "))
-        self.assertEqual(self.state(tid), ("inbox", "ready"))
+        self.assertEqual(self.state(tid), ("triage", "ready"))
         self.assertNotIn("retries", self.f_ticket(tid))
         self.assertEqual([j["job"] for j in self.tick()["jobs"]], ["draft"])
         with self.f() as f:
@@ -1209,7 +1213,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         msg = self.finished(tid, "wonka:oompa-loompa-triage")
         self.assertEqual(msg, f"{tid}: wonka:oompa-loompa-triage left no result, back in the queue")
-        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertEqual(self.state(tid), ("triage", "pending"))
         t = self.f_ticket(tid)
         self.assertEqual(t["retries"], 1)
         self.assertNotIn("job_started_at", t)
@@ -1293,7 +1297,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.finished(tid, "wonka:oompa-loompa-triage"),
                          f"{tid}: stuck, waiting for a human to tick Retry")
         self.assertEqual(self.f_ticket(tid)["retries"], before["retries"])
-        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertEqual(self.state(tid), ("triage", "pending"))
 
     def test_start_bumps_the_dispatch_number(self):
         tid = self.add()
@@ -1370,7 +1374,7 @@ class FactoryTest(unittest.TestCase):
         self.assertGreater(d2, d1)
         retries = self.f_ticket(tid)["retries"]
         self.assertIn("earlier dispatch", self.finished(tid, "wonka:oompa-loompa-triage", d1))
-        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertEqual(self.state(tid), ("triage", "pending"))
         self.assertEqual(self.f_ticket(tid)["retries"], retries)
         self.assertIn("job_started_at", self.f_ticket(tid), "the live job is untouched")
         self.assertIn("left no result", self.finished(tid, "wonka:oompa-loompa-triage", None),
@@ -1637,6 +1641,16 @@ class FactoryTest(unittest.TestCase):
         base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
         self.assertIn(event, self.tick()["events"])
         self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
+        self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
+
+    def test_tick_migrates_an_old_inbox_column(self):
+        event = "🍫 Factory.base: column ✉️-Inbox renamed to 📏-Triage"
+        store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
+        base = store.board(self.cfg) / store.BASE_FILE
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text("groupOrder:\n  - ✉️-Inbox\n# mine\n")
+        self.assertIn(event, self.tick()["events"])
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 📏-Triage\n# mine\n")
         self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
 
     def test_add_with_unknown_parent_leaves_nothing_behind(self):
@@ -2316,7 +2330,7 @@ class FactoryTest(unittest.TestCase):
         with mock.patch.object(factory, "notify") as n:
             with self.f() as f:
                 f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"]}])
-        self.assertEqual(self.state(tid), ("inbox", "awaiting"))
+        self.assertEqual(self.state(tid), ("triage", "awaiting"))
         n.assert_called_once_with(tid, "Add a hello script", None)
 
     def test_one_unreadable_note_does_not_block_other_tickets(self):
@@ -2580,7 +2594,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.triage(a, "s")
             f.triage(b, "s")
-        sa = Path(self.job_for(a)["code"])  # one drafting slot: b waits in the Inbox
+        sa = Path(self.job_for(a)["code"])  # one drafting slot: b waits in Triage
         self.assertTrue(sa.exists())
 
         self.edit_note(a, lambda t: t.replace("🧪-Drafting", "🗑️-Wont-Do"))
@@ -3641,7 +3655,7 @@ class FactoryTest(unittest.TestCase):
         os.rename(self.tmp / "vault", self.tmp / "vault-unmounted")  # an unmounted drive, a moved vault
         with self.assertRaisesRegex(WonkaError, "tickets folder .* is missing"):
             self.tick()
-        self.assertEqual([self.state(k) for k in ids], [("inbox", "pending")] * 3)
+        self.assertEqual([self.state(k) for k in ids], [("triage", "pending")] * 3)
         os.rename(self.tmp / "vault-unmounted", self.tmp / "vault")
         self.assertEqual(len(self.tick()["jobs"]), 2, "back to normal once the vault is back")
 
@@ -3652,7 +3666,7 @@ class FactoryTest(unittest.TestCase):
                 f.path(k).unlink()
         with self.assertRaisesRegex(WonkaError, "--drop-missing"):
             self.tick()
-        self.assertEqual([self.state(k) for k in ids], [("inbox", "pending")] * 2)
+        self.assertEqual([self.state(k) for k in ids], [("triage", "pending")] * 2)
         with self.f() as f:
             events = f.tick(drop_missing=True)["events"]
         self.assertEqual([self.state(k) for k in ids], [("wontdo", "ready")] * 2)
@@ -3668,7 +3682,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: note was renamed to Add a hello script.md, renamed back", events)
         self.assertTrue(path.exists())
         self.assertFalse(renamed.exists())
-        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertEqual(self.state(tid), ("triage", "pending"))
         self.assertFalse([e for e in events if "not a Wonka ticket" in e])
 
     def test_note_writes_leave_no_temp_file(self):
@@ -3718,7 +3732,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             msg = f.triage(tid, "s", dispatch=job["dispatch"])
         self.assertIn("from an earlier dispatch", msg)
-        self.assertEqual(self.state(tid), ("inbox", "pending"))
+        self.assertEqual(self.state(tid), ("triage", "pending"))
 
     def test_followups_stop_at_max_followup_depth(self):
         self.cfg["max_followup_depth"] = 1

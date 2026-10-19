@@ -14,7 +14,7 @@ class NoteTest(unittest.TestCase):
 
     def test_frontmatter_round_trip_quotes_titles(self):
         path = self.note_path()
-        meta = {"id": "WONKA-00001", "title": "Fix: the thing", "status": "✉️-Inbox", "phase": "🕰️-Pending",
+        meta = {"id": "WONKA-00001", "title": "Fix: the thing", "status": "📏-Triage", "phase": "🕰️-Pending",
                 "size": "s", "jira": ""}
         note.write(path, meta, "## 💡 Idea\nhello\n")
         back, body = note.read(path)
@@ -24,7 +24,7 @@ class NoteTest(unittest.TestCase):
 
     def test_frontmatter_keeps_obsidian_lists_byte_for_byte(self):
         path = self.note_path()
-        text = "---\nid: WONKA-00001\ntitle: T\nstatus: ✉️-Inbox\nphase: 🕰️-Pending\nsize: s\njira:\ntags:\n  - a\n  - b\ncssclasses: wide\n---\nbody\n"
+        text = "---\nid: WONKA-00001\ntitle: T\nstatus: 📏-Triage\nphase: 🕰️-Pending\nsize: s\njira:\ntags:\n  - a\n  - b\ncssclasses: wide\n---\nbody\n"
         path.write_text(text)
         meta, body = note.read(path)
         meta["size"] = "m"
@@ -40,7 +40,7 @@ class NoteTest(unittest.TestCase):
         self.assertEqual((meta["title"], meta["status"], meta["jira"]), ("It's: done", "🍫-Baking", ""))
 
     FOLDED = ("---\nid: WONKA-00001\ntitle: >-\n  Handle block scalars and trailing colons in note YAML so that\n"
-              "  long titles survive\nstatus: ✉️-Inbox\nphase: 🕰️-Pending\nsize: s\njira:\n---\nbody\n")
+              "  long titles survive\nstatus: 📏-Triage\nphase: 🕰️-Pending\nsize: s\njira:\n---\nbody\n")
     LONG = "Handle block scalars and trailing colons in note YAML so that long titles survive"
 
     def _meta(self, frontmatter):
@@ -53,7 +53,7 @@ class NoteTest(unittest.TestCase):
         path.write_text(self.FOLDED)
         meta, body = note.read(path)
         self.assertEqual(meta["title"], self.LONG)
-        self.assertEqual((meta["status"], meta["phase"], meta["jira"]), ("✉️-Inbox", "🕰️-Pending", ""))
+        self.assertEqual((meta["status"], meta["phase"], meta["jira"]), ("📏-Triage", "🕰️-Pending", ""))
         self.assertEqual(body, "body\n")
 
     def test_reads_literal_and_clipped_block_scalars(self):

@@ -121,7 +121,7 @@ def run(a, f):
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
                   spec_review="human" if a.needs_human_spec_review else None)
-        print(f"🎫 {tid} has a golden ticket! It's in the ✉️ Inbox: {f.path(tid)}")
+        print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
     elif c == "set":
         f.set_field(a.id, a.field, a.value)
         print(f.summary(a.id))
@@ -207,7 +207,7 @@ def parser():
     s = sub.add_parser("config", help="show settings, or change one: wonka config wip.baking 3")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")
-    s = sub.add_parser("add", help="drop a new golden ticket in the Inbox")
+    s = sub.add_parser("add", help="drop a new golden ticket in Triage")
     s.add_argument("idea")
     s.add_argument("--title")
     s.add_argument("--repo", help="git repo the ticket builds in (default: cwd)")
@@ -221,7 +221,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("field")
     s.add_argument("value")
-    s = sub.add_parser("triage", help="triage: size an Inbox ticket")
+    s = sub.add_parser("triage", help="triage: size a ticket in Triage")
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
     s.add_argument("--title")

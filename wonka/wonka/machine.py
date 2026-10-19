@@ -1,7 +1,7 @@
 """The golden ticket state machine: which (status, phase) pairs exist and how they may change."""
 
 STATUSES = {
-    "inbox": "✉️-Inbox",
+    "triage": "📏-Triage",
     "drafting": "🧪-Drafting",
     "planned": "🎫-Planned",
     "baking": "🍫-Baking",
@@ -15,15 +15,15 @@ PHASES = {
     "progress": "🎩-In-Progress",
     "ready": "🌟-Ready",
 }
-# Names before WONKA-00100 (old key -> new key); used only to read old notes, input and state files.
-OLD_STATUS_KEYS = {"ready": "planned"}
+# Names before WONKA-00100 (ready) and WONKA-00140 (inbox) (old key -> new key); used only to read old notes, input and state files.
+OLD_STATUS_KEYS = {"ready": "planned", "inbox": "triage"}
 OLD_PHASE_KEYS = {"done": "ready"}
-OLD_STATUSES = {"ready": "🎫-Ready"}
+OLD_STATUSES = {"ready": "🎫-Ready", "inbox": "✉️-Inbox"}
 OLD_PHASES = {"done": "🌟-Done"}
 SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
 SPEC_REVIEWS = ("agent", "human")
-AUTO_READY = ("xs", "s")  # Inbox tickets this small need no human approval
+AUTO_READY = ("xs", "s")  # Triage tickets this small need no human approval
 
 
 def review_budget(t, max_rounds):
@@ -32,7 +32,7 @@ def review_budget(t, max_rounds):
 
 
 VALID = {
-    "inbox": {"pending", "awaiting", "ready"},
+    "triage": {"pending", "awaiting", "ready"},
     "drafting": {"pending", "progress", "awaiting"},
     "planned": {"pending"},
     "baking": {"pending", "progress", "ready"},
@@ -44,10 +44,10 @@ VALID = {
 KILLED = ("wontdo", "ready")
 
 _EDGES = [
-    ("inbox/pending", "inbox/ready"),
-    ("inbox/pending", "inbox/awaiting"),
-    ("inbox/awaiting", "inbox/ready"),
-    ("inbox/ready", "drafting/pending"),
+    ("triage/pending", "triage/ready"),
+    ("triage/pending", "triage/awaiting"),
+    ("triage/awaiting", "triage/ready"),
+    ("triage/ready", "drafting/pending"),
     ("drafting/pending", "drafting/progress"),
     ("drafting/progress", "drafting/pending"),  # retry
     ("drafting/progress", "drafting/awaiting"),

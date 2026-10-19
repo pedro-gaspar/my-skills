@@ -9,9 +9,9 @@ MAX_ROUNDS_KEY = "max_review_rounds"
 
 
 QUIPS = {
-    ("inbox", "pending"): "🎫 “I've got a golden ticket!”",
-    ("inbox", "awaiting"): "🎩 “The suspense is terrible. I hope it'll last.”",
-    ("inbox", "ready"): "🎶 “We are the music makers, and we are the dreamers of dreams.”",
+    ("triage", "pending"): "🎫 “I've got a golden ticket!”",
+    ("triage", "awaiting"): "🎩 “The suspense is terrible. I hope it'll last.”",
+    ("triage", "ready"): "🎶 “We are the music makers, and we are the dreamers of dreams.”",
     ("drafting", "pending"): "🚪 “Little surprises around every corner, but nothing dangerous.”",
     ("drafting", "progress"): "🧪 “Invention is 93% perspiration, 6% electricity, 4% evaporation and 2% butterscotch ripple.”",
     ("drafting", "awaiting"): "🤔 “Strike that. Reverse it.” …or don't. Your call.",
@@ -77,14 +77,14 @@ def _story(tid, t, meta, cfg):
             f"Read the 📜 Spec and the plan [[{tid}-plan]], then tick one option in ❓ Questions: **Approve** sends it "
             "to baking, **Re-draft** sends it back to the analyst with what you write under the question, **Close** drops it.")
     return {
-        ("inbox", "pending"): ("abstract", "Waiting for triage",
+        ("triage", "pending"): ("abstract", "Waiting for triage",
                                "📏 An Oompa-Loompa sizes this ticket as soon as triage has room "
                                f"({wip.get('triage', 2)} at a time)."),
-        ("inbox", "awaiting"): ("question", "🙋 Your turn: approve it", (
+        ("triage", "awaiting"): ("question", "🙋 Your turn: approve it", (
             f"The triage Oompa-Loompa sized it **{size}**. Tick **Approve** and answer every question (⭐ is the recommendation) "
             "to send it to Drafting." if size not in machine.AUTO_READY else
             "The triage Oompa-Loompa needs answers first: tick one option per question (⭐ is the recommendation).")),
-        ("inbox", "ready"): ("info", "Ready for the Inventing Room",
+        ("triage", "ready"): ("info", "Ready for the Inventing Room",
                             f"🧪 The analyst picks it up as soon as Drafting has room ({wip['drafting']} at a time)."),
         ("drafting", "pending"): ("info", "Next in line for the analyst", "🧪 Drafting starts on the next tick."),
         ("drafting", "progress"): ("info", "The analyst is drafting",
