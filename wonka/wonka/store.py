@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
     "vault": None,
     "folder": "wonka",
     "wip": {"triage": 2, "drafting": 1, "baking": 2},  # tickets worked on at the same time
-    "archive_after_days": 7,  # finished tickets (Shipped or Wont-Do) and their plans move to archive/ after this
+    "archive_after_days": 7,  # finished tickets (Shipped or Wont Do) and their plans move to archive/ after this
     "stale_hours": 2,  # a job running longer than this is offered for retry
     "max_review_rounds": 3,  # review rounds with issues before a bad nut is rolled away
     "max_followup_depth": 2,  # a squirrel's follow-up is not filed for a ticket this many follow-ups deep
@@ -244,16 +244,17 @@ def plans_dir(cfg):
 
 
 def migrate_base(cfg):
-    """Rename the old columns and add new ones (💡-Idea before 📏-Triage); returns (old, new) pairs, old is None for an
+    """Rename the old columns (and the hyphenated labels) and add new ones (💡 Idea before 📏 Triage); returns (old, new) pairs, old is None for an
     added column."""
     path = board(cfg) / BASE_FILE
     if not path.exists():
         return []
     text = path.read_text()
     done = []
-    for key, old in machine.OLD_STATUSES.items():
-        new = machine.STATUSES[machine.OLD_STATUS_KEYS[key]]
-        if old in text:
+    renames = [(old, machine.STATUSES[machine.OLD_STATUS_KEYS[key]]) for key, old in machine.OLD_STATUSES.items()]
+    renames += [(machine.hyphenated(new), new) for new in (*machine.STATUSES.values(), *machine.PHASES.values())]
+    for old, new in renames:
+        if old != new and old in text:
             text = text.replace(old, new)
             done.append((old, new))
     idea = machine.STATUSES["idea"]

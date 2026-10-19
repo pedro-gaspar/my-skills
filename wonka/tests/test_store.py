@@ -176,38 +176,38 @@ class StateTest(unittest.TestCase):
         self.assertEqual(store.migrate_base(cfg), [])
         base.parent.mkdir(parents=True)
         base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
-        self.assertEqual(store.migrate_base(cfg), [("🎫-Ready", "🎫-Planned")])
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫-Planned\n# mine\n")
+        self.assertEqual(store.migrate_base(cfg), [("🎫-Ready", "🎫 Planned")])
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫 Planned\n# mine\n")
         self.assertEqual(store.migrate_base(cfg), [])
         base.write_text("groupOrder:\n  - ✉️-Inbox\n  - 🎫-Ready\n# mine\n")
         self.assertEqual(store.migrate_base(cfg),
-                         [("🎫-Ready", "🎫-Planned"), ("✉️-Inbox", "📏-Triage"), (None, "💡-Idea")])
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n  - 🎫-Planned\n# mine\n")
+                         [("🎫-Ready", "🎫 Planned"), ("✉️-Inbox", "📏 Triage"), (None, "💡 Idea")])
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n  - 🎫 Planned\n# mine\n")
         self.assertEqual(store.migrate_base(cfg), [])
 
     def test_migrate_base_follows_the_machine_tables(self):
         cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
         base = self.tmp / "vault/wonka" / store.BASE_FILE
         base.parent.mkdir(parents=True)
-        base.write_text("groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n  - 🧪-Brewing\n")
+        base.write_text("groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n  - 🧪-Brewing\n")
         with mock.patch.dict(machine.OLD_STATUSES, {"drafting_old": "🧪-Brewing"}), \
                 mock.patch.dict(machine.OLD_STATUS_KEYS, {"drafting_old": "drafting"}):
-            self.assertEqual(store.migrate_base(cfg), [("🧪-Brewing", "🧪-Drafting")])
-        self.assertIn("🧪-Drafting", base.read_text())
+            self.assertEqual(store.migrate_base(cfg), [("🧪-Brewing", "🧪 Drafting")])
+        self.assertIn("🧪 Drafting", base.read_text())
         self.assertNotIn("🧪-Brewing", base.read_text())
 
     def test_migrate_base_adds_the_idea_column_once(self):
         cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
         base = self.tmp / "vault/wonka" / store.BASE_FILE
         base.parent.mkdir(parents=True)
-        base.write_text("groupOrder:\n    - 📏-Triage\n    - 🧪-Drafting\n")
-        self.assertEqual(store.migrate_base(cfg), [(None, "💡-Idea")])
-        self.assertEqual(base.read_text(), "groupOrder:\n    - 💡-Idea\n    - 📏-Triage\n    - 🧪-Drafting\n")
+        base.write_text("groupOrder:\n    - 📏 Triage\n    - 🧪 Drafting\n")
+        self.assertEqual(store.migrate_base(cfg), [(None, "💡 Idea")])
+        self.assertEqual(base.read_text(), "groupOrder:\n    - 💡 Idea\n    - 📏 Triage\n    - 🧪 Drafting\n")
         self.assertEqual(store.migrate_base(cfg), [])
-        self.assertEqual(base.read_text(), "groupOrder:\n    - 💡-Idea\n    - 📏-Triage\n    - 🧪-Drafting\n")
-        base.write_text("groupOrder:\n  - 🧪-Drafting\n")
+        self.assertEqual(base.read_text(), "groupOrder:\n    - 💡 Idea\n    - 📏 Triage\n    - 🧪 Drafting\n")
+        base.write_text("groupOrder:\n  - 🧪 Drafting\n")
         self.assertEqual(store.migrate_base(cfg), [])
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 🧪-Drafting\n")
+        self.assertEqual(base.read_text(), "groupOrder:\n  - 🧪 Drafting\n")
 
 
 if __name__ == "__main__":

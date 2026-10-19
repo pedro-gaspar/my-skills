@@ -1,20 +1,20 @@
 """The golden ticket state machine: which (status, phase) pairs exist and how they may change."""
 
 STATUSES = {
-    "idea": "💡-Idea",
-    "triage": "📏-Triage",
-    "drafting": "🧪-Drafting",
-    "planned": "🎫-Planned",
-    "baking": "🍫-Baking",
-    "reviewing": "🐿️-Reviewing",
-    "shipped": "🚢-Shipped",
-    "wontdo": "🗑️-Wont-Do",
+    "idea": "💡 Idea",
+    "triage": "📏 Triage",
+    "drafting": "🧪 Drafting",
+    "planned": "🎫 Planned",
+    "baking": "🍫 Baking",
+    "reviewing": "🐿️ Reviewing",
+    "shipped": "🚢 Shipped",
+    "wontdo": "🗑️ Wont Do",
 }
 PHASES = {
-    "pending": "🕰️-Pending",
-    "awaiting": "🙋-Awaiting-Human",
-    "progress": "🎩-In-Progress",
-    "ready": "🌟-Ready",
+    "pending": "🕰️ Pending",
+    "awaiting": "🙋 Awaiting Human",
+    "progress": "🎩 In Progress",
+    "ready": "🍭 Ready",
 }
 # Names before WONKA-00100 (ready) and WONKA-00140 (inbox) (old key -> new key); used only to read old notes, input and state files.
 OLD_STATUS_KEYS = {"ready": "planned", "inbox": "triage"}
@@ -113,14 +113,22 @@ def label(state):
     return STATUSES[state[0]], PHASES[state[1]]
 
 
+def hyphenated(text):
+    """A label as it was written before Wonka 1.18 ("🙋-Awaiting-Human"): the board and old notes may still hold it."""
+    return text.replace(" ", "-")
+
+
 def _clean(value):
-    return str(value or "").replace("️", "").strip().lower()
+    """Lowercase, no emoji variation selector, and hyphens read as spaces: old labels ("🗑️-Wont-Do") and hand-typed
+    ones ("wont-do") match the new ones."""
+    return " ".join(str(value or "").replace("️", "").replace("-", " ").split()).lower()
 
 
 def _match(value, table):
     v = _clean(value)
+    bare = v.split(" ", 1)[-1] if v[:1] and not v[:1].isalnum() else v  # an old emoji (🌟 Ready) still reads
     for key, text in table.items():
-        if v in (key, _clean(text), _clean(text.split("-", 1)[1])):
+        if v == _clean(text) or bare in (key, _clean(text).split(" ", 1)[-1]):
             return key
     return None
 

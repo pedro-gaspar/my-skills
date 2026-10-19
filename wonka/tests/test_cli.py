@@ -72,7 +72,7 @@ class CliTest(unittest.TestCase):
         board.mkdir(parents=True)
         (board / "🍫 Factory.base").write_text("order:\n  - ✉️-Inbox\n  - 🎫-Ready\nmine: 1\n")
         self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
-        self.assertEqual((board / "🍫 Factory.base").read_text(), "order:\n  - 💡-Idea\n  - 📏-Triage\n  - 🎫-Planned\nmine: 1\n")
+        self.assertEqual((board / "🍫 Factory.base").read_text(), "order:\n  - 💡 Idea\n  - 📏 Triage\n  - 🎫 Planned\nmine: 1\n")
 
     def test_init_keeps_both_when_both_exist(self):
         board = self.tmp / "vault/wonka"
@@ -541,7 +541,7 @@ class CliTest(unittest.TestCase):
         for text in ["ci_hosts.", "ci_log_command.", "wonka ci-logs"]:
             self.assertIn(text, readme)
         self.assertNotIn("add `Bash(beyond ci logs *)`", readme)
-        shipped = [line for line in readme.splitlines() if line.startswith("| 🚢-Shipped")][0]
+        shipped = [line for line in readme.splitlines() if line.startswith("| 🚢 Shipped")][0]
         self.assertIn("wonka ci-logs", shipped)
 
     def test_readme_documents_the_sandbox_boundary(self):

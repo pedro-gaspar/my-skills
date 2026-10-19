@@ -47,7 +47,7 @@ class MachineTest(unittest.TestCase):
             self.assertFalse(machine.allowed(idea, dst), dst)
         self.assertTrue(machine.allowed(idea, machine.KILLED))
         self.assertFalse(machine.valid(("idea", "pending")))
-        self.assertEqual(machine.parse("💡-Idea", machine.STATUSES), "idea")
+        self.assertEqual(machine.parse("💡 Idea", machine.STATUSES), "idea")
         self.assertEqual(machine.parse("Idea", machine.STATUSES), "idea")
 
     def test_migrate_moves_ideas_to_awaiting(self):
@@ -62,11 +62,28 @@ class MachineTest(unittest.TestCase):
         self.assertEqual(repr(db), before)
 
     def test_parse_accepts_labels_with_or_without_emoji(self):
-        self.assertEqual(machine.parse("🐿️-Reviewing", machine.STATUSES), "reviewing")
+        self.assertEqual(machine.parse("🐿️ Reviewing", machine.STATUSES), "reviewing")
         self.assertEqual(machine.parse("🐿-Reviewing", machine.STATUSES), "reviewing")
-        self.assertEqual(machine.parse("Wont-Do", machine.STATUSES), "wontdo")
+        self.assertEqual(machine.parse("Wont Do", machine.STATUSES), "wontdo")
         self.assertEqual(machine.parse("awaiting", machine.PHASES), "awaiting")
         self.assertIsNone(machine.parse("Done-ish", machine.PHASES))
+
+    def test_parse_reads_the_hyphenated_labels(self):
+        """Labels were written with hyphens before 1.18 (🙋-Awaiting-Human): notes and boards may still hold them."""
+        for key, text in machine.STATUSES.items():
+            self.assertEqual(machine.parse(machine.hyphenated(text), machine.STATUSES), key, text)
+        for key, text in machine.PHASES.items():
+            self.assertEqual(machine.parse(machine.hyphenated(text), machine.PHASES), key, text)
+        self.assertEqual(machine.parse("Wont-Do", machine.STATUSES), "wontdo")
+        self.assertEqual(machine.parse("awaiting-human", machine.PHASES), "awaiting")
+        self.assertEqual(machine.parse("In  Progress", machine.PHASES), "progress")
+        for old in ("🌟 Ready", "🌟-Ready"):  # Ready's emoji before 1.18
+            self.assertEqual(machine.parse(old, machine.PHASES), "ready", old)
+
+    def test_labels_are_emoji_space_text(self):
+        for text in (*machine.STATUSES.values(), *machine.PHASES.values()):
+            emoji, _, words = text.partition(" ")
+            self.assertTrue(emoji and words and "-" not in text, text)
 
     def test_parse_reads_old_names(self):
         self.assertEqual(machine.parse("🎫-Ready", machine.STATUSES), "planned")
@@ -75,8 +92,8 @@ class MachineTest(unittest.TestCase):
         self.assertEqual(machine.parse("🌟-Done", machine.PHASES), "ready")
         self.assertEqual(machine.parse("done", machine.PHASES), "ready")
         self.assertEqual(machine.parse("Ready", machine.PHASES), "ready")
-        self.assertEqual(machine.parse("🎫-Planned", machine.STATUSES), "planned")
-        for old in ("✉️-Inbox", "✉-Inbox", "Inbox", "inbox", "📏-Triage", "triage", "Triage"):
+        self.assertEqual(machine.parse("🎫 Planned", machine.STATUSES), "planned")
+        for old in ("✉️-Inbox", "✉-Inbox", "Inbox", "inbox", "📏 Triage", "triage", "Triage"):
             self.assertEqual(machine.parse(old, machine.STATUSES), "triage", old)
 
     def test_migrate_renames_inbox_to_triage(self):

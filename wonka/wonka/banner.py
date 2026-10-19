@@ -71,7 +71,7 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
         if dead:
             return "warning", f"🙋 Your turn: ⛓️ blocked by {', '.join(dead)}, which is Won't do", (
                 f"{', '.join(f'[[{b}]]' for b in dead)} will never merge, so this ticket would wait forever. "
-                f"Run `wonka unblock {tid} {dead[0]}` (or `wonka unblock {tid}` to clear all), or drag this card to Wont-Do.")
+                f"Run `wonka unblock {tid} {dead[0]}` (or `wonka unblock {tid}` to clear all), or drag this card to Wont Do.")
         return "info", f"⛓️ Blocked by {', '.join(waiting)}", (
             f"Waits until {', '.join(f'[[{b}]]' for b in waiting)} merge{'s' if len(waiting) == 1 else ''}, "
             "then moves on as usual. It uses no WIP slot meanwhile.")
@@ -96,7 +96,7 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
     return {
         ("idea", "awaiting"): ("tip", "💡 Just an idea: start it when it's ready",
                               "No agent touches it yet. Refine the 💡 Idea, then tick **Start** in 💡 Start or drag the "
-                              "card to 📏-Triage. Not worth doing? Drag it to 🗑️-Wont-Do."),
+                              "card to 📏 Triage. Not worth doing? Drag it to 🗑️ Wont Do."),
         ("triage", "pending"): ("abstract", "Waiting for triage",
                                "📏 An Oompa-Loompa sizes this ticket as soon as triage has room "
                                f"({wip.get('triage', 2)} at a time)."),

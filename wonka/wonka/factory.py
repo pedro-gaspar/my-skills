@@ -836,7 +836,7 @@ class Factory:
             if other["repo"] != self.ticket(tid)["repo"]:
                 raise WonkaError(f"{duplicate_of} builds in another repo, not a duplicate")
             if self.state(duplicate_of) == KILLED:
-                raise WonkaError(f"{duplicate_of} is Wont-Do: triage {tid} on its own")
+                raise WonkaError(f"{duplicate_of} is Wont Do: triage {tid} on its own")
         meta, body = self.read(tid)
         meta["size"] = size
         if note.one_line(title):
@@ -2005,7 +2005,7 @@ class Factory:
                 self._archive_files(tid)
                 t["archived"] = True
                 self.log_event(tid, "The note was deleted: archived early, as it ended")
-                return f"{tid}: note was deleted, archived as {'merged' if src == machine.MERGED else 'Wont-Do'}"
+                return f"{tid}: note was deleted, archived as {'merged' if src == machine.MERGED else 'Wont Do'}"
             self._hold_for_live_job(tid, src)
             t.pop("job_started_at", None)  # the ticket is archived: its job is no longer tracked
             t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "ready"}, True, True
@@ -2015,11 +2015,11 @@ class Factory:
             return f"{tid}: note was deleted, ticket dropped"
         meta, body = self.read(tid)
         seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("phase"), machine.PHASES))
-        seen = machine.current(seen)  # an old Idea note reads 🕰️-Pending: relabelled silently below
+        seen = machine.current(seen)  # an old Idea note reads 🕰️ Pending: relabelled silently below
         last = self.state(tid)
         if seen != last:
             if seen[0] == "wontdo" and machine.allowed(last, KILLED):  # a merged ticket is put back below
-                self.move(tid, KILLED, "human", "Dragged to Wont-Do by a human")
+                self.move(tid, KILLED, "human", "Dragged to Wont Do by a human")
                 return f"{tid}: killed by a human"
             if last == machine.IDEA and seen in (("triage", "pending"), ("triage", "awaiting")):
                 return self._start_idea(tid, "Dragged to Triage by a human")
@@ -2190,7 +2190,7 @@ class Factory:
         """Claim a job for an agent and return what it needs to know."""
         t, s = self.ticket(tid), self.state(tid)
         if s[0] == "idea":
-            raise WonkaError(f"{tid} is an Idea: tick Start or drag it to 📏-Triage first")
+            raise WonkaError(f"{tid} is an Idea: tick Start or drag it to 📏 Triage first")
         job = {"triage": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
                "shipped": "conflicts"}[s[0]]
         base_ref = None
