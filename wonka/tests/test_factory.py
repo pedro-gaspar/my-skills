@@ -2827,6 +2827,35 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(b, [j["id"] for j in tick["jobs"]])
         self.assertFalse(any("not a Wonka ticket" in e for e in tick["events"]))
 
+    def test_yaml_escapes_and_bad_bytes_in_a_note_do_not_stop_the_tick(self):
+        a = self.add("Add a hello script")
+        with self.f() as f:
+            path = f.path(a)
+        text = path.read_text().replace("title: Add a hello script", r'title: "Caf\xe9 \e\ ok" # mine')
+        path.write_bytes(text.encode() + b"\nstray \xff byte\n")
+        tick = self.tick()
+        self.assertFalse(any("⚠️" in e for e in tick["events"]), tick["events"])
+        self.assertIn(a, [j["id"] for j in tick["jobs"]])
+        self.assertEqual(self.note(a)[0]["title"], "Café \x1b ok")
+
+    def test_unreadable_frontmatter_is_an_error_on_its_ticket_only(self):
+        a = self.add("Add a hello script")
+        b = self.add("Add a bye script")
+        with self.f() as f:
+            path = f.path(a)
+        path.write_text(path.read_text().replace("title: Add a hello script", "title: BOOM"))
+        real = note._scalar
+
+        def scalar(head, lines):
+            if head == "BOOM":
+                raise ValueError("bad")
+            return real(head, lines)
+
+        with mock.patch.object(note, "_scalar", scalar):
+            tick = self.tick()
+        self.assertIn(f"{a}: ⚠️ {path}: the frontmatter can't be read (bad)", tick["events"])
+        self.assertIn(b, [j["id"] for j in tick["jobs"]])
+
     def push_upstream(self, name="new.txt"):
         """Someone else pushes a commit to origin/main: the user's checkout falls behind."""
         other = self.tmp / "other"

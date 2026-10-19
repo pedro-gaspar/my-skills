@@ -549,7 +549,11 @@ class Factory:
         return folder(self.cfg) / f"{tid}.md"
 
     def read(self, tid):
-        return note.read(self.path(tid))
+        path = self.path(tid)
+        try:
+            return note.read(path)
+        except FileNotFoundError:
+            raise WonkaError(f"the note {path} is gone (deleted or moved?)")
 
     def write(self, tid, meta, body):
         """Every write re-renders the banner and the factory log from the JSON state."""
@@ -835,7 +839,7 @@ class Factory:
         if duplicate_of:
             try:
                 other_title = self.read(duplicate_of)[0].get("title", "")
-            except OSError:
+            except (WonkaError, OSError):
                 other_title = ""
             body = note.set_section(body, "duplicate", f"- Duplicate of [[{duplicate_of}]] {other_title}".rstrip())
             self.write(tid, meta, body)
@@ -943,7 +947,7 @@ class Factory:
             try:
                 if self.path(tid).exists():
                     size = self.read(tid)[0].get("size")
-            except OSError:
+            except (WonkaError, OSError):
                 pass
             out.append(metrics_mod.ticket_metrics(tid, t, size, tickets, now()))
         return out
@@ -1885,7 +1889,7 @@ class Factory:
         for name in foreign:
             try:
                 tid = str(note.read(folder / name)[0].get("id") or "")
-            except (OSError, UnicodeDecodeError):
+            except (OSError, WonkaError):
                 continue
             t = self.db["tickets"].get(tid)
             if not t or t.get("archived") or self.path(tid).exists():

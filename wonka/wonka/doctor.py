@@ -70,7 +70,7 @@ def _orphans(cfg):
             n += 1
             try:
                 body = note.read(path)[1]
-            except (OSError, UnicodeDecodeError) as e:
+            except (OSError, store.WonkaError) as e:
                 found.append(f"{path}: unreadable ({e})")
                 continue
             for heading, above in note.unknown_sections(body):
