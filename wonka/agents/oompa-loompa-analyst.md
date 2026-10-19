@@ -23,8 +23,9 @@ not the absolute `code` path: the builder works in a different worktree.
    present, `## ❓ Questions` (ticked answers, plus any text written under a question) and the review rounds at the
    bottom of the plan file (when the ticket came back from review): `## 🐿️ Review round N`, plus
    `## 🐿️ Earlier review round N` from earlier re-drafts, and `## 🔁 Change request N` /
-   `## 🔁 Earlier change request N` (changes the human asked for on an open PR). `wonka plan` keeps them at the
-   bottom automatically, so do not copy them into the new plan.
+   `## 🔁 Earlier change request N` (changes the human asked for on an open PR). A review round may hold a
+   `### Decisions` list: the human's answers to the squirrels' questions, which the new plan must respect. `wonka plan`
+   keeps them at the bottom automatically, so do not copy them into the new plan.
 2. Study the code in `code` until you know exactly what to build: files, functions, data, tests, edge cases.
 3. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash
@@ -39,7 +40,10 @@ not the absolute `code` path: the builder works in a different worktree.
    wonka drafted <id> --size l --dispatch <dispatch>
    ```
 6. **xs, s or m**:
-   - Write the detailed plan: goal, context you found (repo-relative paths and line refs), step-by-step changes, tests to add,
+   - Write the detailed plan: goal; a `## Decisions` section: every answered question (from `## ✅ Answers` and
+     ticked `## ❓ Questions`, triage's and yours) as `question → answer`, plus each real choice you made yourself
+     between alternatives, one line each with the reason (name it exactly `## Decisions`, never like a review-round
+     heading, or `wonka plan` takes it for the review log); context you found (repo-relative paths and line refs), step-by-step changes, tests to add,
      how to verify (name the exact test command, written to run from any directory with paths from the repo root and no
      `cd`, e.g. `python3 -m unittest discover -s wonka -t wonka`, since squirrels run it against their worktree,
      and run it in `code` first to confirm it finds and runs tests: a run that reports 0 tests means the command is

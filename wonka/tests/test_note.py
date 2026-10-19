@@ -216,6 +216,36 @@ class NoteTest(unittest.TestCase):
         self.assertFalse(note.all_recommended(""))
         self.assertFalse(note.all_recommended(None))
 
+    def test_decisions(self):
+        skip = (note.CLOSE_Q, note.DRAFT_Q)
+        sec = note.render_questions([
+            {"q": "Rename it?", "options": ["Keep hello", "Rename to hi"], "recommended": 0},
+            {"q": "Redis or Postgres?", "options": ["Redis", "Postgres"], "recommended": 1, "why": "in stack"},
+            {"q": "Unanswered?", "options": ["A", "B"]},
+            {"q": note.CLOSE_Q, "options": ["Yes", "No"], "recommended": 0, "other": False},
+            {"q": note.DRAFT_Q, "options": ["Yes", "No"], "recommended": 0, "other": False},
+        ])
+        self.assertEqual(note.decisions(sec, skip_no=skip), "", "nothing ticked")
+        self.assertEqual(note.decisions(""), "")
+        self.assertEqual(note.decisions(None), "")
+        lines = (sec.replace("- [ ] Keep hello", "- [x] Keep hello").replace("- [ ] Redis", "- [x] Redis")
+                 .replace("- [ ] Postgres", "- [x] Postgres")).splitlines()
+        lines.insert(lines.index("- **Q2. Redis or Postgres?**"), "    ## really keep it")
+        lines.insert(lines.index("- **Q3. Unanswered?**"), "  we have both anyway")
+        text = "\n".join(lines)
+        close_no = text.replace("  - [ ] No", "  - [x] No")  # CLOSE_Q and DRAFT_Q both answered No
+        self.assertEqual(note.decisions(close_no, skip_no=skip),
+                         "- Rename it? → Keep hello (recommended)\n"
+                         "  > ### really keep it\n"
+                         "- Redis or Postgres? → Redis; Postgres (recommended — in stack)\n"
+                         "  > we have both anyway")
+        draft_yes = text.replace(f"{note.DRAFT_Q}**\n  - [ ] Yes", f"{note.DRAFT_Q}**\n  - [x] Yes")
+        out = note.decisions(draft_yes, skip_no=skip)
+        self.assertIn(f"- {note.DRAFT_Q} → Yes (recommended)", out)
+        self.assertNotIn(note.CLOSE_Q, out)
+        self.assertNotIn("Unanswered", out)
+        self.assertIn("- 🫐 Close this ticket? → No", note.decisions(close_no), "No is kept without skip_no")
+
     def test_approval_and_retry_checkboxes(self):
         self.assertFalse(note.approved("- [ ] Approve (size m)"))
         self.assertTrue(note.approved("- [x] Approve (size m)"))

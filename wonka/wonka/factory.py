@@ -613,11 +613,12 @@ class Factory:
                 self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid)
                 seen.add(title.casefold())
         issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
-        if t["plan"] and Path(t["plan"]).exists():
-            log = [f"\n## 🐿️ Review round {rnd}"]
+        if issues and t["plan"] and Path(t["plan"]).exists():
+            log = [f"\n## 🐿️ Review round {rnd}"]  # only squirrels with issues: a clean verdict is noise to the builder
             for name, rep in reps.items():
-                log.append(f"### squirrel-{name}: {rep.get('verdict', '?')}")
-                log += [f"- {i}" for i in rep.get("issues", [])]
+                if rep.get("issues"):
+                    log.append(f"### squirrel-{name}: {rep.get('verdict', '?')}")
+                    log += [f"- {i}" for i in rep["issues"]]
             with open(t["plan"], "a") as fh:
                 fh.write("\n".join(log) + "\n")
         qs = [q for rep in reps.values() for q in rep.get("questions", [])]
@@ -636,6 +637,23 @@ class Factory:
         self.move(tid, ("reviewing", "done"), "squirrels", f"Review round {rnd}/{self._budget(t)}: a good nut")
         self.move(tid, ("shipped", "pending"), "wonka")
         return f"{tid}: clean review, off to ship"
+
+    def _log_decisions(self, tid, section):
+        """Append the human's answers to the squirrels' questions to the plan, under this round's review heading."""
+        t = self.ticket(tid)
+        body = note.decisions(section, skip_no=(note.CLOSE_Q, note.DRAFT_Q))
+        if not body or not t["plan"] or not Path(t["plan"]).exists():
+            return
+        plan = Path(t["plan"])
+        text = plan.read_text()
+        head = f"## 🐿️ Review round {t['review_round']}"
+        rounds = list(REVIEW_LOG.finditer(text))
+        sep = "" if not text or text.endswith("\n") else "\n"
+        if rounds and rounds[-1].group(0) == head:
+            add = f"### Decisions\n{body}\n"
+        else:  # a clean round with questions logged no heading yet
+            add = f"\n{head}\n### Decisions\n{body}\n"
+        plan.write_text(text + sep + add)
 
     def _back_to_baking(self, tid, why):
         t = self.ticket(tid)
@@ -897,6 +915,7 @@ class Factory:
                 if note.picked_yes(sec, note.CLOSE_Q):
                     self.move(tid, KILLED, "human", "Closed after review")
                     return f"{tid}: closed after review"
+                self._log_decisions(tid, sec)  # before a redraft resets review_round
                 if note.picked_yes(sec, note.DRAFT_Q):
                     t["review_round"] = 0
                     t.pop("extra_rounds", None)
