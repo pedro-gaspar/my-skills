@@ -233,7 +233,7 @@ class WrapperTest(unittest.TestCase):
             f.write_plan(tid, "# plan\n")
             f.set_section(tid, "spec", "Add hello.sh")
             f.drafted(tid, "s", ["architect"])
-        self.assertEqual(self.state(tid), ("ready", "pending"))
+        self.assertEqual(self.state(tid), ("planned", "pending"))
 
     def to_baking(self, tid):
         self.to_ready(tid)

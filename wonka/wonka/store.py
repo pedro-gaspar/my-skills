@@ -10,6 +10,8 @@ import shutil
 import time
 from pathlib import Path
 
+from . import machine
+
 STATE_FILE = "golden_ticket_status.json"
 BASE_FILE = "🍫 Factory.base"  # the Obsidian board; its file name is what Obsidian shows
 OLD_BASE_FILE = "Wonka.base"  # name before WONKA-00084; wonka init renames it
@@ -17,7 +19,7 @@ DEFAULT_CONFIG = {
     "vault": None,
     "folder": "wonka",
     "wip": {"triage": 2, "drafting": 1, "baking": 2},  # tickets worked on at the same time
-    "archive_after_days": 7,  # Done tickets (and their plans) move to archive/ after this
+    "archive_after_days": 7,  # finished tickets (Shipped or Wont-Do) and their plans move to archive/ after this
     "stale_hours": 2,  # a job running longer than this is offered for retry
     "max_review_rounds": 3,  # review rounds with issues before a bad nut is rolled away
     "max_followup_depth": 2,  # a squirrel's follow-up is not filed for a ticket this many follow-ups deep
@@ -98,6 +100,18 @@ def plans_dir(cfg):
     return board(cfg) / "plans"
 
 
+def migrate_base(cfg):
+    """Rename the old 🎫-Ready column to 🎫-Planned in an existing Factory.base; True when it rewrote the file."""
+    path = board(cfg) / BASE_FILE
+    if not path.exists():
+        return False
+    text = path.read_text()
+    if "🎫-Ready" not in text:
+        return False
+    write_atomic(path, text.replace("🎫-Ready", "🎫-Planned"))
+    return True
+
+
 def archive_dir(cfg):
     return board(cfg) / "archive"
 
@@ -120,7 +134,9 @@ def _load(text):
     if text is None:
         return {"next_id": 1, "tickets": {}}
     try:
-        return json.loads(text)
+        db = json.loads(text)
+        machine.migrate(db)  # state files written before WONKA-00100 hold the old keys
+        return db
     except ValueError as e:
         path = home() / STATE_FILE
         raise CriticalError(f"{path} is not valid JSON ({e}). The previous version is {path}.bak: check it, then "

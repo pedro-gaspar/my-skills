@@ -376,7 +376,7 @@ class Factory:
         t, src = self.ticket(tid), self.state(tid)
         if not machine.allowed(src, dst):
             raise WonkaError(f"{tid}: {fmt(src)} → {fmt(dst)} is not a legal move")
-        final = dst in (("shipped", "done"), KILLED)  # merged or killed: the ticket is finished
+        final = dst in (("shipped", "ready"), KILLED)  # merged or killed: the ticket is finished
         t["last_valid"] = {"status": dst[0], "phase": dst[1]}
         t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
                              **({"why": why} if why else {})})
@@ -390,11 +390,11 @@ class Factory:
             t.pop("merge_ref", None)
             t.pop("lease", None)
         t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
-        if dst[0] != "shipped" or dst[1] == "done":
+        if dst[0] != "shipped" or dst[1] == "ready":
             # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
             # merge starts clean (kept through pending/progress so a failed fixer's retry does not reset it)
             t.pop("conflict_fixes", None)
-        if dst[1] == "done":
+        if dst[1] == "ready":
             t.pop("pr_base", None)
         if final:
             t["entered_done_at"] = _iso(now())
@@ -411,7 +411,7 @@ class Factory:
         if final:
             t.pop("cleanup", None)  # the flag reflects only this attempt
             self.drop_worktree(tid)
-            if dst == ("shipped", "done"):
+            if dst == ("shipped", "ready"):
                 self.drop_branch(tid)
         if t.get("scout") and dst not in (("inbox", "pending"), ("drafting", "pending"), ("drafting", "progress")):
             self.drop_scout(tid)  # no triage or draft job left to read it
@@ -492,13 +492,13 @@ class Factory:
             self.move(tid, KILLED, "triage", f"Duplicate of {duplicate_of}")
             self.log_event(duplicate_of, f"{tid} was closed as a duplicate of this ticket", by="triage")
             return
-        if size not in machine.AUTO_DONE:
+        if size not in machine.AUTO_READY:
             body = note.set_section(body, "approval", f"- [ ] Approve (size **{size}**: tick to send it to Drafting)")
         if questions:
             body = note.new_questions(body, note.render_questions(questions))
         self.write(tid, meta, body)
-        if size in machine.AUTO_DONE and not questions:
-            self.move(tid, ("inbox", "done"), "triage")
+        if size in machine.AUTO_READY and not questions:
+            self.move(tid, ("inbox", "ready"), "triage")
         else:
             self.move(tid, ("inbox", "awaiting"), "triage", "The triage Oompa-Loompa needs a human: see Approval / Questions")
 
@@ -598,7 +598,7 @@ class Factory:
             body = note.set_section(body, "spec", f"{spec}\n\n📋 Plan: [[{tid}-plan]]")
         self.write(tid, meta, body)
         t["plan"], t["reviewers"] = str(plan), list(reviewers) or ["architect"]
-        self.move(tid, ("ready", "pending"), "analyst")
+        self.move(tid, ("planned", "pending"), "analyst")
 
     # -- baking -----------------------------------------------------------
 
@@ -787,15 +787,15 @@ class Factory:
         """Retry what a done ticket kept: its worktree (it had local changes) and, after a merge, its branch.
         Quiet on failure (it runs every tick); never forces, so local changes are never lost."""
         t, s = self.ticket(tid), self.state(tid)
-        if s not in (("shipped", "done"), KILLED):
+        if s not in (("shipped", "ready"), KILLED):
             t.pop("cleanup", None)
             return None
         had_wt = bool(t.get("worktree"))
         if not self.drop_worktree(tid, quiet=True):
             return None
-        had_branch = (s == ("shipped", "done") and bool(t.get("branch")) and Path(t["repo"]).is_dir()
+        had_branch = (s == ("shipped", "ready") and bool(t.get("branch")) and Path(t["repo"]).is_dir()
                       and _ref_exists(t["repo"], f"refs/heads/{t['branch']}"))
-        if s == ("shipped", "done") and not self.drop_branch(tid, quiet=True):
+        if s == ("shipped", "ready") and not self.drop_branch(tid, quiet=True):
             return None
         t.pop("cleanup", None)
         if not had_wt and not had_branch:
@@ -816,7 +816,7 @@ class Factory:
             raise WonkaError(f"no commits on {t['branch']} yet")
         if t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]:
             raise WonkaError(f"no new commits on {t['branch']} since the last review: commit the fixes first")
-        self.move(tid, ("baking", "done"), "builder")
+        self.move(tid, ("baking", "ready"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
 
     # -- reviewing --------------------------------------------------------
@@ -901,7 +901,7 @@ class Factory:
             return f"{tid}: review questions for a human"
         if issues:
             return self._back_to_baking(tid, f"Review round {rnd}/{self._budget(t)}: {len(issues)} issue(s), back to baking")
-        self.move(tid, ("reviewing", "done"), "squirrels", f"Review round {rnd}/{self._budget(t)}: a good nut")
+        self.move(tid, ("reviewing", "ready"), "squirrels", f"Review round {rnd}/{self._budget(t)}: a good nut")
         self.move(tid, ("shipped", "pending"), "wonka")
         return f"{tid}: clean review, off to ship"
 
@@ -1226,8 +1226,8 @@ class Factory:
             src = self.state(tid)
             self._hold_for_live_job(tid, src)
             t.pop("job_started_at", None)  # the ticket is archived: its job is no longer tracked
-            t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "done"}, True, True
-            t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/done", "by": "human"})
+            t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "ready"}, True, True
+            t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/ready", "by": "human"})
             self.drop_worktree(tid)
             self.drop_scout(tid)
             return f"{tid}: note was deleted, ticket dropped"
@@ -1245,6 +1245,10 @@ class Factory:
             store.log(f"{tid} wonka: {why}")
             self.write(tid, meta, body)
             return f"{tid}: reverted illegal {shown}"
+        if (meta.get("status"), meta.get("phase")) != machine.label(last):
+            # silent migration of old labels (🌟-Done, 🎫-Ready) and hand-typed names
+            meta["status"], meta["phase"] = machine.label(last)
+            self.write(tid, meta, body)
         if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
             t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
             self.write(tid, meta, note.drop_section(body, "stuck"))
@@ -1252,7 +1256,7 @@ class Factory:
         if last == ("inbox", "awaiting"):
             appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
             if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
-                self.move(tid, ("inbox", "done"), "human", "Approved")
+                self.move(tid, ("inbox", "ready"), "human", "Approved")
                 return f"{tid}: approved"
         elif last == ("drafting", "awaiting") and note.all_answered(note.get_section(body, "questions")):
             self.move(tid, ("drafting", "progress"), "human", "Questions answered, the analyst resumes")
@@ -1274,7 +1278,7 @@ class Factory:
                     return f"{tid}: back to drafting"
                 if not issues:
                     if note.all_recommended(sec, skip=(note.CLOSE_Q, note.DRAFT_Q)):
-                        self.move(tid, ("reviewing", "done"), "human", "Review answers in, all as recommended: a good nut")
+                        self.move(tid, ("reviewing", "ready"), "human", "Review answers in, all as recommended: a good nut")
                         self.move(tid, ("shipped", "pending"), "wonka")
                         return f"{tid}: clean review answered, off to ship"
                     t["extra_rounds"] = t.get("extra_rounds", 0) + 1
@@ -1289,7 +1293,7 @@ class Factory:
             if pr == "OPEN" and pr_base:
                 t["pr_base"] = pr_base  # the base may have been changed on GitHub since the ticket was added
             if pr == "MERGED":
-                self.move(tid, ("shipped", "done"), "github", "PR merged 🎉")
+                self.move(tid, ("shipped", "ready"), "github", "PR merged 🎉")
                 return f"{tid}: shipped"
             if pr == "CLOSED":
                 self.move(tid, KILLED, "github", "PR closed without merging")
@@ -1331,7 +1335,7 @@ class Factory:
     def archive(self, tid):
         t = self.ticket(tid)
         stamp = t.get("entered_done_at")
-        if t.get("archived") or self.state(tid) not in (("shipped", "done"), KILLED) or not stamp:
+        if t.get("archived") or self.state(tid) not in (("shipped", "ready"), KILLED) or not stamp:
             return None
         if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
             return None
@@ -1536,18 +1540,20 @@ class Factory:
         try:
             events = self._find_renamed(self._foreign())
             self._check_notes(drop_missing)
+            if store.migrate_base(self.cfg):
+                events.append("🍫 Factory.base: column 🎫-Ready renamed to 🎫-Planned")
             events += [m for k in self.live()
                        for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
             events += [m for k, t in sorted(self.db["tickets"].items())
-                       if (t.get("cleanup") or t.get("worktree")) and self.state(k) in (("shipped", "done"), KILLED)
+                       if (t.get("cleanup") or t.get("worktree")) and self.state(k) in (("shipped", "ready"), KILLED)
                        for m in [self._safe(k, self.cleanup)] if m]
             foreign = self._foreign()
             seen = set(self.db.get("foreign_notes", []))
             events += [f"{n}: not a Wonka ticket, use /wonka add instead" for n in foreign if n not in seen]
             self.db["foreign_notes"] = foreign
-            for src, dst, limit in ((("inbox", "done"), ("drafting", "pending"), "drafting"),
-                                    (("ready", "pending"), ("baking", "pending"), "baking")):
+            for src, dst, limit in ((("inbox", "ready"), ("drafting", "pending"), "drafting"),
+                                    (("planned", "pending"), ("baking", "pending"), "baking")):
                 for k in self.live():
                     if self.state(k) == src and self._count(dst[0]) < self.cfg["wip"][limit]:
                         events.append(self._safe(k, lambda k: self.move(k, dst, "wonka") or f"{k}: → {fmt(dst)}"))
