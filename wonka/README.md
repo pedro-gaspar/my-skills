@@ -40,7 +40,7 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | 🎫-Ready | waits for a Baking slot |
 | 🍫-Baking | 🍫 **oompa-loompa-builder** (Opus) builds in `~/.wonka/worktrees/<project>/<id>` and commits |
 | 🐿️-Reviewing | 🐿️ **squirrel-architect / -backend / -frontend / -security / -spark / -airflow** (Opus, picked by the analyst). Issues → back to Baking; follow-ups → new Inbox tickets; decisions → `## 🐿️ Review Questions` (incl. close the ticket / back to Drafting); a clean round ships once every answer is the recommended one, otherwise rebakes. Max `max_review_rounds` (default 3) rounds with issues, then Wont-Do; a clean round that rebakes adds an extra round |
-| 🛗-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed (a worktree with local changes is kept and retried each tick: clean or delete it and Wonka removes it and the branch). Or tick **🔁 Request changes** (write what to change under it and/or leave PR review comments): back to Baking for a fix round with a fresh 3 review rounds; the fixes are pushed to the same PR. Only comments by the repo's owners, members and collaborators are copied to the builder (others could slip it instructions on a public repo); the number skipped shows in the factory log. Each tick an open PR with merge conflicts gets 🔧 **oompa-loompa-fixer** (Sonnet): it merges the base in, resolves, commits, and the CLI pushes (`wonka resolved`, never a force push); no new review, the PR is back to 🙋 |
+| 🛗-Shipped | the CLI pushes and opens the PR → 🙋 (click the desktop ping to open the PR) approve and merge it → 🌟 Done, worktree and local branch removed (a worktree with local changes is kept and retried each tick: clean or delete it and Wonka removes it and the branch). Or tick **🔁 Request changes** (write what to change under it and/or leave PR review comments): back to Baking for a fix round with a fresh 3 review rounds; the fixes are pushed to the same PR. A fix round starts from the PR branch on GitHub, so commits pushed there (an applied suggestion, "Update branch") are kept; if the push is still rejected the ticket goes stuck at once with what to do. Only comments by the repo's owners, members and collaborators are copied to the builder (others could slip it instructions on a public repo); the number skipped shows in the factory log. Each tick an open PR with merge conflicts gets 🔧 **oompa-loompa-fixer** (Sonnet): it merges the base in, resolves, commits, and the CLI pushes (`wonka resolved`, never a force push); no new review, the PR is back to 🙋 |
 | 🫐-Wont-Do | killed, split or closed (the local branch is kept, it may hold work). You can drag any card here |
 
 Triage and the analyst read a throwaway read-only checkout of the latest `origin/<base>` in
@@ -69,7 +69,9 @@ waiting for a human should never block the line.
 Every note opens with a banner that says where the ticket is, what happens next and, when it's 🙋 your turn, exactly
 what to tick. It also lists size, project, plan, PR and review round. The board's **🙋 Your turn** view lists only
 tickets that wait for you. At the bottom, a folded **🎩 Factory log** holds the history. A job (or opening the PR)
-that fails 3 times shows **🎩 Stuck** with a Retry checkbox; details are in `~/.wonka/factory.log`.
+that fails 3 times shows **🎩 Stuck** with a Retry checkbox; details are in `~/.wonka/factory.log`. A push
+rejected because the PR branch has new commits on GitHub is stuck at once, not after 3 tries: merge them in the
+worktree, then tick Retry.
 
 The 💡 Idea and 📜 Spec are free text, so they are checked with markdownlint (all default rules, via `npx`) when
 written. A section it flags is kept as raw text in a code block under a warning that lists the problems, so broken

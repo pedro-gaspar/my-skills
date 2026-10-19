@@ -107,6 +107,21 @@ def _ref_exists(repo, ref):
     return subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo, capture_output=True).returncode == 0
 
 
+# git says "(fetch first)" when the remote has objects we never fetched and "(non-fast-forward)" when we have them:
+# both mean the remote branch has commits the local one lacks. This matches git's English output; under another
+# locale it misses and the push failure takes the normal retry path.
+_REJECTED = re.compile(r"\[rejected\].*\((?:fetch first|non-fast-forward)\)")
+
+
+def _push_rejected(err):
+    """True when git push failed because the remote branch has commits the local one lacks."""
+    return bool(_REJECTED.search(str(err)))
+
+
+class _PushRejected(WonkaError):
+    """git push was rejected as not a fast-forward: retrying cannot help, a human must merge."""
+
+
 def pr_body(tid, meta, spec):
     ids = [f"🎫 **Golden ticket:** {tid}"]
     if meta.get("jira"):
@@ -580,7 +595,12 @@ class Factory:
         try:
             if not t["pr_repo"]:
                 raise WonkaError("no pr_repo: set it with `wonka set ID pr_repo owner/name`")
-            git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
+            try:
+                git("push", "-u", "origin", t["branch"], cwd=t["worktree"])
+            except WonkaError as e:
+                if _push_rejected(e):
+                    raise _PushRejected(str(e)) from e
+                raise
             origin = parse_remote(git("remote", "get-url", "origin", cwd=t["worktree"]))
             head = t["branch"] if origin in (None, t["pr_repo"]) else f"{origin.split('/')[0]}:{t['branch']}"
             meta, body = self.read(tid)
@@ -594,6 +614,12 @@ class Factory:
                          "--body", pr_body(tid, meta, spec))
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
+            if isinstance(e, _PushRejected):  # the human pushed to the PR: retrying cannot help, say what to do
+                why = (f"push rejected: the PR branch has commits on GitHub that the worktree lacks. "
+                       f"In the worktree run git pull --no-rebase origin {t['branch']}, then tick Retry")
+                outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
+                self.log_event(tid, f"Push rejected, not a fast-forward: {err}")
+                return f"{tid}: PR failed: {why}; {outcome}"
             outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
         t["pr_url"] = out.splitlines()[-1]
@@ -828,6 +854,12 @@ class Factory:
             self.move(tid, ("drafting", "progress"), "wonka")
         elif s == ("baking", "pending"):
             self.ensure_worktree(tid)
+            if t.get("pr_url"):  # a fix round on an open PR: take what was pushed there, so the ship's push fast-forwards
+                try:
+                    self._sync_pr_branch(tid)
+                except WonkaError as e:  # offline or diverged: never block the builder, ship() explains a rejected push
+                    self.log_event(tid, "Could not catch up with the PR branch on GitHub, baking on the local branch "
+                                        f"({' '.join(str(e).split())})")
             self.move(tid, ("baking", "progress"), "wonka")
         elif s == ("reviewing", "pending"):
             self.ensure_worktree(tid)
@@ -865,11 +897,14 @@ class Factory:
                 "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
                 "review_round": t["review_round"], "dispatch": t["dispatch"]}
 
-    def retry(self, tid, why="the last job did not finish"):
+    def retry(self, tid, why="the last job did not finish", final=False):
+        """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help)."""
         t, s = self.ticket(tid), self.state(tid)
         if s[1] not in ("pending", "progress"):
             raise WonkaError(f"{tid} is {fmt(s)}: no job is running or queued, nothing to retry")
         retries = t.get("retries", 0) + 1
+        if final:
+            retries = max(retries, MAX_RETRIES)
         why = " ".join(str(why).split())
         why = why if len(why) <= 200 else why[:199] + "…"
         if s[1] == "progress":
@@ -877,14 +912,16 @@ class Factory:
                 t["review_round"] -= 1
                 t.pop("reports", None)
                 t.pop("finished", None)
-            self.move(tid, (s[0], "pending"), "wonka", f"Retry {retries}/{MAX_RETRIES}: {why}")
+            self.move(tid, (s[0], "pending"), "wonka",
+                      f"Stuck: {why}" if final else f"Retry {retries}/{MAX_RETRIES}: {why}")
         t.pop("job_started_at", None)
         t["retries"] = retries
         if retries >= MAX_RETRIES:
             t["stuck"] = True
-            self.set_section(tid, "stuck", f"- [ ] Retry ({retries} tries failed, the last one: {why}. See ~/.wonka/factory.log)")
+            failed = "" if final else f"{retries} tries failed, the last one: "
+            self.set_section(tid, "stuck", f"- [ ] Retry ({failed}{why}. See ~/.wonka/factory.log)")
             notify(tid, "stuck: tick Retry when it's fixed")
-            return f"{tid}: stuck after {retries} tries"
+            return f"{tid}: stuck, needs a human" if final else f"{tid}: stuck after {retries} tries"
         return f"{tid}: back in the queue"
 
     def finished(self, tid, agent, dispatch=None):
