@@ -17,13 +17,22 @@ from .fixtures import RepoFixture
 class OpenPrefixTest(unittest.TestCase):
     def test_open(self):
         for p in ["python3", "python3 -c", "python3 -m", "/bin/sh -c", "bash", "bash -x", "node -e", "env", "npx",
-                  "uv run", "poetry run", "python3.12 -c"]:
+                  "uv run", "poetry run", "python3.12 -c",
+                  "python3 -W ignore", "python3 -X dev -W error", "python3.12 -W ignore -c", "node -r ./setup.js",
+                  "node --require ./setup.js -e", "env FOO=1", "env -u HOME FOO=1 BAR=2", "env -C /tmp",
+                  "bash -o pipefail", "timeout 600", "timeout -k 5 600", "nice -n 10", "sudo -u ci",
+                  "env FOO=1 python3 -c", "env bash", "timeout 600 sh -c", "uv run python3",
+                  "uv run --with pytest python3 -c", "env -- bash"]:
             with self.subTest(p):
                 self.assertTrue(testrun.open_prefix(p))
 
     def test_pinned(self):
         for p in ["python3 -m unittest", "python3 -m pytest", "bash ./test.sh", "sh -c pytest", "./test.sh",
-                  "make test", "pytest", "uv run pytest", "npm test", "npm run test"]:
+                  "make test", "pytest", "uv run pytest", "npm test", "npm run test",
+                  "python3 -W ignore -m pytest", "python3 -W ignore ./run_tests.py", "node -r ./setup.js ./test.js",
+                  "env FOO=1 pytest", "env FOO=1 python3 -m pytest", "timeout 600 ./test.sh",
+                  "timeout 600 sh -c pytest", "nice -n 10 make test", "uv run --with pytest pytest",
+                  "bash -o pipefail ./test.sh"]:
             with self.subTest(p):
                 self.assertFalse(testrun.open_prefix(p))
 

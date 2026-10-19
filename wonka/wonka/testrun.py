@@ -38,6 +38,29 @@ RUNNERS = frozenset(
 RUNNER_SUBCOMMANDS = frozenset({
     ("uv", "run"), ("poetry", "run"), ("pipenv", "run"), ("npm", "exec"), ("pnpm", "exec"), ("pnpm", "dlx"),
     ("yarn", "exec"), ("yarn", "dlx"), ("bundle", "exec"), ("hatch", "run"), ("pdm", "run")})
+# Runners whose first operand is another command.
+WRAPPERS = frozenset("env exec command xargs nice nohup timeout time sudo doas".split())
+# Options that take the next token as their value (not the program or code to run), by program.
+OPTION_VALUES = {
+    "python": frozenset({"-W", "-X"}),
+    "pypy": frozenset({"-W", "-X"}),
+    "node": frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader", "--title"}),
+    "sh": frozenset({"-o", "-O"}),
+    "bash": frozenset({"-o", "-O"}),
+    "zsh": frozenset({"-o", "-O"}),
+    "dash": frozenset({"-o", "-O"}),
+    "ksh": frozenset({"-o", "-O"}),
+    "env": frozenset({"-u", "--unset", "-C", "--chdir"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "timeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
+    "sudo": frozenset({"-u", "--user", "-g", "--group"}),
+    "doas": frozenset({"-u"}),
+    "xargs": frozenset({"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a"}),
+    "uv": frozenset({"--with", "--python", "-p", "--project", "--directory", "--package", "--extra", "--group"}),
+}
+# Positionals before the wrapped command (timeout DURATION COMMAND).
+LEADING_ARGS = {"timeout": 1}
+ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 OPEN_WARNING = ("lets an agent run any program or inline code outside the sandbox through wonka test; "
                 "pin it to a script or module (e.g. ./test.sh, python3 -m pytest)")
 
@@ -48,21 +71,54 @@ def _program(token):
     return re.sub(r"[\d.]+$", "", name) or name
 
 
+def _operands(program, tokens):
+    """tokens from the first operand on: leading options (with their values), `--` and, for env, assignments dropped."""
+    values = OPTION_VALUES.get(program, ())
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--":
+            i += 1
+            break
+        if t.startswith("-"):
+            i += 2 if t in values else 1
+        elif program == "env" and ENV_ASSIGNMENT.match(t):
+            i += 1
+        else:
+            break
+    rest = tokens[i:]
+    lead = LEADING_ARGS.get(program, 0)
+    if rest and lead:
+        rest = rest[lead:]
+    return rest
+
+
+def _open(tokens):
+    if len(tokens) >= 2 and (_program(tokens[0]), tokens[1]) in RUNNER_SUBCOMMANDS:
+        program, rest, wrapper = _program(tokens[0]), tokens[2:], True
+    elif _program(tokens[0]) in RUNNERS:
+        program, rest = _program(tokens[0]), tokens[1:]
+        wrapper = program in WRAPPERS
+    else:
+        return False
+    ops = _operands(program, rest)
+    if not ops:
+        return True
+    return wrapper and _open(ops)
+
+
 def open_prefix(prefix):
-    """True when prefix is a shell, interpreter or launcher with nothing pinned after it (python3 -c, bash, env)."""
+    """True when prefix is a shell, interpreter or launcher with nothing pinned after it (python3 -c, bash, env).
+
+    Option values (python3 -W ignore), env assignments (env FOO=1) and timeout's duration do not pin it; a
+    wrapper (env, timeout, uv run, ...) is open when the command it wraps is (env FOO=1 python3 -c)."""
     try:
         tokens = shlex.split(prefix)
     except ValueError:
         return False
     if not tokens:
         return False
-    if len(tokens) >= 2 and (_program(tokens[0]), tokens[1]) in RUNNER_SUBCOMMANDS:
-        n = 2
-    elif _program(tokens[0]) in RUNNERS:
-        n = 1
-    else:
-        return False
-    return not any(not t.startswith("-") for t in tokens[n:])
+    return _open(tokens)
 
 
 def open_prefixes(cfg, project=None):
