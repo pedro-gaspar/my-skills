@@ -618,6 +618,13 @@ class CliTest(unittest.TestCase):
         for field in ["ci_failures", "ci_fixes", "ci_handled_sha", "ci_handled_runs"]:
             self.assertIn(f"`{field}`", section)
 
+    def test_no_agent_has_web_tools(self):
+        """Every agent reads untrusted text (ideas, diffs, PR comments, CI logs) and none needs the web."""
+        agents = Path(cli.__file__).resolve().parent.parent / "agents"
+        for p in sorted(agents.glob("*.md")):
+            tools = re.search(r"^tools: (.*)$", p.read_text(), re.M).group(1)
+            self.assertNotRegex(tools, r"Web(Search|Fetch)", p.name)
+
     def test_squirrel_docs_differ_only_in_name_emoji_focus_and_model(self):
         """The squirrel agents share one body; only who they are, what they look at and their model may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"
