@@ -36,6 +36,18 @@ class BannerTest(unittest.TestCase):
         t["last_valid"] = {"status": "triage", "phase": "ready"}
         self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg), "Ready for the Inventing Room")
 
+    def test_blocked_headline_for_held_baking_pending(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "baking", "phase": "pending"}, "project": "app", "history": []}
+        w = ["WONKA-00001"]
+        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg, waiting=w), "⛓️ Blocked by WONKA-00001")
+        text = banner.render("WONKA-00002", t, {"size": "s"}, cfg, waiting=w)
+        self.assertIn("> [!info] ⛓️ Blocked by WONKA-00001", text)
+        text = banner.render("WONKA-00002", t, {"size": "s"}, cfg, waiting=w, dead=w)
+        self.assertIn("[!warning]", text)
+        self.assertIn("Won't do", text)
+        self.assertNotEqual(banner.headline("WONKA-00002", t, {}, cfg), "⛓️ Blocked by WONKA-00001")
+
     def test_log_is_newest_first_and_folded(self):
         t = {"history": [
             {"at": "2026-10-18T10:00:00+00:00", "from": "triage/pending", "to": "triage/ready", "by": "triage"},
