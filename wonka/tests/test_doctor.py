@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -340,13 +341,56 @@ class WorktreeFilesTest(unittest.TestCase):
     def test_checks_reads_tickets_from_state(self):
         home = self.tmp / "home"
         home.mkdir()
-        (home / doctor.store.STATE_FILE).write_text(json.dumps({"tickets": self.tickets}))
+        (home / doctor.store.STATE_FILE).write_text(json.dumps({"next_id": 2, "tickets": self.tickets}))
         cfg = {"vault": str(self.tmp), "folder": "wonka", "worktree_files": {"app": ["server/.env"]}}
         with mock.patch.dict(doctor.os.environ, {"WONKA_HOME": str(home)}), \
                 mock.patch.object(doctor.store, "load_config", return_value=cfg), \
                 mock.patch.object(doctor, "_permissions", return_value=([], [])):
             lines = [c for c in doctor.checks() if c[1].startswith("worktree files for app")]
         self.assertEqual([lv for lv, _ in lines], ["ok"])
+
+
+class BadConfigAndStateTest(unittest.TestCase):
+    """A config or state file of the wrong shape is a fail line and exit 1, never a traceback."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        for patcher in (mock.patch.dict(doctor.os.environ, {"WONKA_HOME": str(self.tmp), "WONKA_MDLINT": "off"}),
+                        mock.patch.object(doctor, "_ok", return_value=True),
+                        mock.patch.object(doctor, "_permissions", return_value=([], []))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_doctor(self, config, state=None):
+        (self.tmp / "config.json").write_text(json.dumps(config))
+        if state is not None:
+            (self.tmp / doctor.store.STATE_FILE).write_text(json.dumps(state))
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = doctor.doctor()
+        return code, out.getvalue()
+
+    def test_bad_config_fails(self):
+        for config, msg in (([], "must hold a JSON object"), ({"vault": None}, "vault must be"),
+                            ({"vault": str(self.tmp), "wip": None}, "wip must be"),
+                            ({"vault": str(self.tmp), "ci_log_command": ["beyond ci logs"]}, "ci_log_command must be")):
+            with self.subTest(config=config):
+                code, out = self.run_doctor(config)
+                self.assertEqual(code, 1)
+                self.assertIn(f"❌ {self.tmp / 'config.json'}", out)
+                self.assertIn(msg, out)
+
+    def test_bad_state_fails(self):
+        for state, msg in (([], "not a JSON object"), ({"next_id": 1, "tickets": []}, "tickets must be an object")):
+            with self.subTest(state=state):
+                code, out = self.run_doctor({"vault": str(self.tmp)}, state)
+                self.assertEqual(code, 1)
+                self.assertIn(f"❌ state {self.tmp / doctor.store.STATE_FILE} is unreadable: ", out)
+                self.assertIn(msg, out)
+
+    def test_good_state_is_ok(self):
+        code, out = self.run_doctor({"vault": str(self.tmp)}, {"next_id": 1, "tickets": {}})
+        self.assertIn(f"✅ state {self.tmp / doctor.store.STATE_FILE} (0 tickets)", out)
 
 
 class NpxCheckTest(unittest.TestCase):
