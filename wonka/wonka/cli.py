@@ -31,10 +31,9 @@ def ensure_link():
 
 
 def cmd_init(a):
-    try:
-        cfg = store.load_config()
-    except WonkaError:
-        cfg = copy.deepcopy(store.DEFAULT_CONFIG)
+    # an existing config keeps its settings: a broken one is refused, never silently replaced by the defaults
+    exists = (store.home() / "config.json").exists()
+    cfg = store.load_config() if exists else copy.deepcopy(store.DEFAULT_CONFIG)
     cfg["vault"], cfg["folder"] = str(Path(a.vault).expanduser().resolve()), a.folder
     for key, value in (("wip.triage", a.triage), ("wip.drafting", a.drafting), ("wip.baking", a.baking),
                        ("archive_after_days", a.archive_days), ("stale_hours", a.stale_hours),

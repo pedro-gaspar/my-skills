@@ -46,6 +46,17 @@ class CliTest(unittest.TestCase):
         self.assertTrue(cli.LINK.is_symlink())
         self.assertIn("🍫 baking at once   : 3", out)
 
+    def test_init_never_replaces_a_broken_config(self):
+        self.assertEqual(self.run_cli("init", "--vault", str(self.tmp / "vault"))[0], 0)
+        cfg_file = self.tmp / "home/config.json"
+        cfg = json.loads(cfg_file.read_text())
+        cfg["test_commands"], cfg["wip"] = {"app": ["./test.sh"]}, None
+        cfg_file.write_text(json.dumps(cfg))
+        code, _, err = self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        self.assertEqual(code, 1)
+        self.assertIn("wip", err)
+        self.assertEqual(json.loads(cfg_file.read_text())["test_commands"], {"app": ["./test.sh"]})
+
     def test_init_renames_old_wonka_base(self):
         board = self.tmp / "vault/wonka"
         board.mkdir(parents=True)

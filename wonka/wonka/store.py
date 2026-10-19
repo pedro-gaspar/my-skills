@@ -172,9 +172,9 @@ def load_config():
     try:
         data = json.loads(path.read_text())
     except ValueError as e:
-        raise CriticalError(f"{path} is not valid JSON ({e}): fix it or run wonka init again")
+        raise CriticalError(f"{path} is not valid JSON ({e}): fix it, or delete it and run wonka init to start over from the defaults")
     if not isinstance(data, dict):
-        raise CriticalError(f"{path} must hold a JSON object: fix it or run wonka init again")
+        raise CriticalError(f"{path} must hold a JSON object: fix it, or delete it and run wonka init to start over from the defaults")
     cfg = {**copy.deepcopy(DEFAULT_CONFIG), **data}
     _check_config(cfg, path)
     cfg["wip"] = {**DEFAULT_CONFIG["wip"], **cfg["wip"]}
@@ -189,7 +189,7 @@ def _check_config(cfg, path):
     """A hand edit gone wrong (null, a string for a list, a list for an object) is named here, not met as a
     traceback later. Settings Wonka reads with a fallback (worktree_files and the other per-project maps) may be null."""
     def bad(key, what):
-        return CriticalError(f"{path}: {key} must be {what}: fix it or run wonka init again")
+        return CriticalError(f"{path}: {key} must be {what}: fix it, or delete it and run wonka init to start over from the defaults")
 
     for key in ("vault", "folder"):
         if not isinstance(cfg[key], str) or not cfg[key].strip():
