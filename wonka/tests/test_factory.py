@@ -2862,8 +2862,53 @@ class FactoryTest(unittest.TestCase):
         self.upstream_change()
         self.fixer_job(tid)
         self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
-        self.assertEqual(len(sh("git", "stash", "list", cwd=wt).splitlines()), 1)
-        self.assertTrue(any("Stashed uncommitted leftovers" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+        self.assertEqual(sh("git", "stash", "list", cwd=wt), "")
+        refs = sh("git", "for-each-ref", "--format=%(refname)", f"refs/wonka/stash/{tid}/", cwd=wt).splitlines()
+        self.assertEqual(len(refs), 1)
+        self.assertTrue(any("Stashed uncommitted leftovers" in h.get("why", "") and refs[0] in h.get("why", "")
+                            for h in self.f_ticket(tid)["history"]))
+
+    def test_stashed_leftovers_can_be_applied_back(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        (wt / "hello.sh").write_text("echo edited by hand\n")
+        (wt / "scratch.txt").write_text("untracked\n")
+        self.upstream_change()
+        self.fixer_job(tid)
+        ref = sh("git", "for-each-ref", "--format=%(refname)", f"refs/wonka/stash/{tid}/", cwd=wt)
+        self.assertEqual(sh("git", "show", f"{ref}^3:scratch.txt", cwd=wt), "untracked")
+        self.assertIn("edited by hand", sh("git", "diff", f"{ref}^1", ref, "--", "hello.sh", cwd=wt))
+
+    def test_user_stash_is_left_alone(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        (wt / "hello.sh").write_text("echo edited by hand\n")
+        (self.repo / "README.md").write_text("user work in progress\n")
+        sh("git", "stash", "push", "-q", "-m", "mine", cwd=self.repo)
+        self.upstream_change()
+        self.fixer_job(tid)
+        entries = sh("git", "stash", "list", cwd=self.repo).splitlines()
+        self.assertEqual(len(entries), 1)
+        self.assertIn("mine", entries[0])
+
+    def test_drop_stash_entry_drops_only_the_given_one(self):
+        repo = self.tmp / "stashrepo"
+        repo.mkdir()
+        sh("git", "init", "-q", "-b", "main", cwd=repo)
+        (repo / "f.txt").write_text("base\n")
+        sh("git", "add", ".", cwd=repo)
+        sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init", cwd=repo)
+        shas = []
+        for name in ("A", "B"):
+            (repo / "f.txt").write_text(f"{name}\n")
+            sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "stash", "push", "-q", "-m", name, cwd=repo)
+            shas.append(sh("git", "rev-parse", "refs/stash", cwd=repo))
+        factory._drop_stash_entry(repo, "0" * 40)
+        self.assertEqual(len(sh("git", "stash", "list", cwd=repo).splitlines()), 2)
+        factory._drop_stash_entry(repo, shas[0])
+        left = sh("git", "stash", "list", cwd=repo).splitlines()
+        self.assertEqual(len(left), 1)
+        self.assertIn("B", left[0])
 
     def test_untracked_file_from_the_pr_branch_does_not_look_diverged(self):
         tid = self.add()
