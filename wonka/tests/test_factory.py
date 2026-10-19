@@ -3389,9 +3389,12 @@ class FactoryTest(unittest.TestCase):
     RUN_URL = "https://github.com/acme/app/actions/runs/123/job/9"
 
     @staticmethod
-    def check_run(name="build", conclusion="FAILURE", status="COMPLETED", workflow="wf", url=RUN_URL):
-        return {"__typename": "CheckRun", "name": name, "workflowName": workflow, "status": status,
+    def check_run(name="build", conclusion="FAILURE", status="COMPLETED", workflow="wf", url=RUN_URL, at=None):
+        item = {"__typename": "CheckRun", "name": name, "workflowName": workflow, "status": status,
                 "conclusion": conclusion, "detailsUrl": url}
+        if at:
+            item["completedAt"] = at
+        return item
 
     @staticmethod
     def status_ctx(context="ci/x", state="SUCCESS"):
@@ -3418,7 +3421,10 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(checks([self.status_ctx(state="EXPECTED")])[1])
         red, pending, total = checks(["junk", 3, None, self.check_run()])
         self.assertEqual(total, 1)
-        self.assertEqual(red[0], {"name": "wf / build", "result": "FAILURE", "url": self.RUN_URL})
+        self.assertEqual(red[0], {"name": "wf / build", "result": "FAILURE", "url": self.RUN_URL, "at": ""})
+        red = checks([self.check_run(at="2026-01-01T00:00:00Z"),
+                      {**self.status_ctx(state="FAILURE"), "startedAt": "2026-01-02T00:00:00Z"}])[0]
+        self.assertEqual([c["at"] for c in red], ["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"])
         self.assertEqual(checks("nope"), ([], False, 0))
 
     def test_run_id_only_for_the_pr_repo(self):
@@ -3480,6 +3486,8 @@ class FactoryTest(unittest.TestCase):
         t = self.f_ticket(tid)
         self.assertEqual((t["ci_handled_sha"], t["review_round"], t["ci_failures"]), (self.HEAD, 0, 1))
         self.assertTrue(t["fixing_ci"])
+        self.assertEqual(t["ci_red_checks"], ["wf / build"])
+        self.assertTrue(t["ci_handled_runs"])
         last = [h for h in self.history(tid) if h.get("to") == "baking/pending"][-1]
         self.assertEqual(last["by"], "github")
         self.assertIn("CI failed", last["why"])
@@ -3525,9 +3533,129 @@ class FactoryTest(unittest.TestCase):
         self.red_round(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertNotIn("CI failure", self.plan_text(tid))
+        self.assertTrue(self.f_ticket(tid).get("ci_handled_runs"), "a legacy ticket adopts the signature")
         self.red_round(tid, head="b" * 40)
         self.assertEqual(self.state(tid), ("baking", "progress"))
         self.assertIn("## 🔴 CI failure 1", self.plan_text(tid))
+
+    # -- flaky CI ---------------------------------------------------------
+
+    def flaky_round(self, tid):
+        """To awaiting, then a red round whose handled head is the worktree's real HEAD. Returns the worktree."""
+        wt, _ = self.to_awaiting_merge(tid)
+        head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.red_round(tid, head=head)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), head)
+        return wt, head
+
+    def baked_flaky(self, tid, why="runner lost"):
+        with self.f() as f:
+            return f.baked(tid, flaky=why)
+
+    def test_flaky_is_refused_outside_a_ci_round(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.tick()
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        with self.assertRaisesRegex(WonkaError, "CI fix round"):
+            self.baked_flaky(tid)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        tid2 = self.add()
+        self.to_awaiting_merge(tid2)
+        self.request_changes(tid2, "rename it")
+        self.assertEqual(self.state(tid2), ("baking", "progress"))
+        with self.assertRaisesRegex(WonkaError, "CI fix round"):
+            self.baked_flaky(tid2)
+
+    def test_flaky_is_refused_with_requested_changes_or_no_reason(self):
+        tid = self.add()
+        wt, head = self.to_awaiting_merge(tid)[0], None
+        head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.ci_state([self.check_run()], head)
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.assertTrue(self.f_ticket(tid)["fixing_ci"])
+        with self.assertRaisesRegex(WonkaError, "requested changes"):
+            self.baked_flaky(tid)
+
+    def test_flaky_needs_a_reason(self):
+        tid = self.add()
+        self.flaky_round(tid)
+        with self.assertRaisesRegex(WonkaError, "needs the reason"):
+            self.baked_flaky(tid, "  ")
+
+    def test_flaky_ci_round_goes_back_to_the_pr_without_commits(self):
+        tid = self.add()
+        self.flaky_round(tid)
+        creates = Path(f"{self.pr_state}.creates").read_text()
+        out = self.baked_flaky(tid, "runner\nlost")
+        self.assertIn("re-run wf / build", out)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        last = self.history(tid)[-1]
+        self.assertEqual((last["from"], last["to"], last["by"]), ("baking/progress", "shipped/awaiting", "builder"))
+        self.assertEqual(last["why"], "CI judged flaky: runner lost; re-run wf / build")
+        t = self.f_ticket(tid)
+        self.assertNotIn("fixing_ci", t)
+        self.assertNotIn("ci_red_checks", t)
+        self.assertEqual(t["ci_flaky"], {"why": "runner lost", "checks": "wf / build"})
+        self.assertEqual(note.get_section(self.note(tid)[1], "changes"), note.CHANGES_BOX)
+        self.assertIn("re-run the flaky CI checks", self.note(tid)[1])
+        self.assertNotIn("reviewing", [h["to"].split("/")[0] for h in self.history(tid)[-3:]])
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text(), creates, "no new PR")
+
+    def test_flaky_is_refused_with_new_commits_or_a_dirty_worktree(self):
+        tid = self.add()
+        wt, _ = self.flaky_round(tid)
+        (wt / "dirty.txt").write_text("x\n")
+        with self.assertRaisesRegex(WonkaError, "uncommitted"):
+            self.baked_flaky(tid)
+        (wt / "dirty.txt").unlink()
+        self.commit_and_bake(wt, "fix.sh")
+        with self.assertRaisesRegex(WonkaError, "not the red PR head"):
+            self.baked_flaky(tid)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_red_rerun_on_the_same_head_starts_a_new_round(self):
+        tid = self.add()
+        _, head = self.flaky_round(tid)
+        self.baked_flaky(tid)
+        self.red_round(tid, head=head)
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("CI failure 2", self.plan_text(tid))
+        self.red_round(tid, head=head, items=[self.check_run(status="IN_PROGRESS", conclusion="")])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        rerun = self.check_run(url="https://github.com/acme/app/actions/runs/123/job/10", at="2026-01-01T00:00:00Z")
+        self.red_round(tid, head=head, items=[rerun])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        self.assertIn("## 🔴 Earlier CI failure 1", plan)
+        self.assertIn("## 🔴 CI failure 2", plan)
+        t = self.f_ticket(tid)
+        self.assertEqual(t["ci_fixes"], 2)
+        self.assertNotIn("ci_flaky", t)
+
+    def test_flaky_reruns_stop_at_the_ci_cap(self):
+        tid = self.add()
+        _, head = self.flaky_round(tid)
+        with self.f() as f:
+            f.ticket(tid)["ci_fixes"] = factory.MAX_CI_FIXES
+        self.baked_flaky(tid)
+        rerun = self.check_run(url="https://github.com/acme/app/actions/runs/123/job/10", at="2026-01-01T00:00:00Z")
+        self.red_round(tid, head=head, items=[rerun])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertTrue(self.f_ticket(tid).get("ci_stuck"))
+        self.assertIn("stuck, needs a human", self.note(tid)[1])
+
+    def test_green_after_flaky_clears_it(self):
+        tid = self.add()
+        _, head = self.flaky_round(tid)
+        self.baked_flaky(tid)
+        self.red_round(tid, head=head, items=[self.check_run(conclusion="SUCCESS")])
+        t = self.f_ticket(tid)
+        self.assertNotIn("ci_flaky", t)
+        self.assertNotIn("ci_fixes", t)
+        self.assertIn("green again", self.note(tid)[1])
 
     def test_second_ci_failure_ages_the_first(self):
         tid = self.add()

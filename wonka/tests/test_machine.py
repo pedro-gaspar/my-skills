@@ -13,6 +13,10 @@ class MachineTest(unittest.TestCase):
         self.assertTrue(machine.allowed(("baking", "progress"), machine.KILLED))
         self.assertFalse(machine.allowed(machine.KILLED, machine.KILLED))
 
+    def test_flaky_ci_edge(self):
+        self.assertTrue(machine.allowed(("baking", "progress"), ("shipped", "awaiting")))
+        self.assertFalse(machine.allowed(("baking", "pending"), ("shipped", "awaiting")))
+
     def test_skipping_columns_is_illegal(self):
         self.assertFalse(machine.allowed(("triage", "pending"), ("baking", "pending")))
         self.assertFalse(machine.allowed(("triage", "awaiting"), ("drafting", "pending")))
