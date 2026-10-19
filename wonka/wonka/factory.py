@@ -925,7 +925,10 @@ class Factory:
         if not merged:
             raise WonkaError(f"{t['merge_ref']} is not merged into {t['branch']} yet")
         git("push", "origin", t["branch"], cwd=wt)
-        # move() by the fixer resets retries, so this count is what bounds a PR that GitHub keeps calling conflicting
+        # the fix landed: the next conflict episode gets the full start budget and no stale warning
+        t.pop("retries", None)
+        t.pop("conflict_error", None)
+        # retries is reset here on purpose, so this count is what bounds a PR that GitHub keeps calling conflicting
         n = t["conflict_fixes"] = t.get("conflict_fixes", 0) + 1
         self.move(tid, ("shipped", "awaiting"), "fixer", f"Merge conflicts fixed and pushed (fix {n}/{MAX_CONFLICT_FIXES})")
 
