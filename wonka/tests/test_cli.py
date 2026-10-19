@@ -203,7 +203,7 @@ class CliTest(unittest.TestCase):
         self.assertIsNone(cli.parser().parse_args(["baked", "WONKA-00001", "--dispatch", "3"]).flaky)
 
     def test_finished_needs_an_agent(self):
-        a =cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend", "--dispatch", "3"])
+        a = cli.parser().parse_args(["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend", "--dispatch", "3"])
         self.assertEqual((a.cmd, a.id, a.agent, a.dispatch),
                          ("finished", "WONKA-00001", "wonka:squirrel-backend", 3))
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
