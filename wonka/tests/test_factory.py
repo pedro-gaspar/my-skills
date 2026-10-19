@@ -1419,6 +1419,7 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(t["changes_cutoff"])
         api = Path(f"{self.pr_state}.api").read_text()
         self.assertIn("repos/acme/app/pulls/7/comments", api)
+        self.assertIn("--paginate", api)
 
         plan = self.plan_text(tid)
         req = plan[plan.index("## 🔁 Change request 1"):]
@@ -1449,6 +1450,31 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(note.get_section(self.note(tid)[1], "changes"), note.CHANGES_BOX)
         self.assertEqual(self.ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
         self.assertEqual(self.ticket(tid)["review_round"], 1)
+
+    def test_json_pages_reads_one_or_several_concatenated_arrays(self):
+        self.assertEqual(factory._json_pages(""), [])
+        self.assertEqual(factory._json_pages("[]"), [])
+        self.assertEqual(factory._json_pages('[{"a": 1}]'), [{"a": 1}])
+        self.assertEqual(factory._json_pages('[{"a": 1}]\n[{"a": 2}][]'), [{"a": 1}, {"a": 2}])
+
+    def test_request_changes_reads_every_page_of_inline_comments(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_feedback()
+        def inline(body, minute):
+            return {"user": {"login": "bob"}, "author_association": "COLLABORATOR", "body": body,
+                    "path": "hello.sh", "line": 1, "created_at": f"2026-01-01T{minute // 60:02d}:{minute % 60:02d}:00Z"}
+        page1 = [inline(f"c{i}", i) for i in range(100)]
+        page2 = [inline("newest on page two", 100)]
+        Path(f"{self.pr_state}.inline").write_text(json.dumps(page1) + "\n" + json.dumps(page2))
+        self.request_changes(tid)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        req = plan[plan.index("## 🔁 Change request 1"):]
+        self.assertIn("newest on page two", req)
+        self.assertIn(": c0\n", req)
+        why = [h for h in self.history(tid) if h.get("to") == "baking/pending"][-1]["why"]
+        self.assertIn("101 PR comment(s)", why)
 
     def test_request_changes_with_nothing_to_change_stays_put(self):
         tid = self.add()
