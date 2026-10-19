@@ -29,6 +29,11 @@ JOB_AGENTS = {"oompa-loompa-triage": ("triage", "pending"), "oompa-loompa-analys
 # the in-progress states whose job runs inside the ticket's worktree, and the agent that runs it
 # (reviewing/progress is handled apart: it has several squirrels)
 WORKTREE_JOBS = {("baking", "progress"): "oompa-loompa-builder", ("shipped", "progress"): "oompa-loompa-fixer"}
+# the states a ticket with a PR is in while Wonka is not waiting on that PR (a fix round, a fixer, a retried or stuck
+# ship): reconcile() asks GitHub each tick, so a PR merged or closed meanwhile is recorded at once
+OFF_PR = frozenset({("baking", "pending"), ("baking", "progress"), ("baking", "ready"), ("reviewing", "pending"),
+                    ("reviewing", "progress"), ("reviewing", "awaiting"), ("reviewing", "ready"),
+                    ("shipped", "pending"), ("shipped", "progress")})
 REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?:Earlier change|Change) request"
                         r"|🔴 (?:Earlier CI|CI) failure) \d+", re.M)
 # PR comments by anyone else are not copied into the plan: the builder runs unattended and would read them as instructions
@@ -329,10 +334,6 @@ class _PushRejected(WonkaError):
 
 class _Diverged(WonkaError):
     """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must rebase."""
-
-
-class _Merged(WonkaError):
-    """The ticket's PR was merged while a fix round ran: a new PR would repeat its commits, a human must decide."""
 
 
 class _NotOurs(WonkaError):
@@ -706,8 +707,8 @@ class Factory:
         t["last_valid"] = {"status": dst[0], "phase": dst[1]}
         t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
                              **({"why": why} if why else {})})
-        if dst == KILLED:
-            self._hold_for_live_job(tid, src)
+        if final:
+            self._hold_for_live_job(tid, src)  # killed, or merged while an agent still worked on a fix round
         t.pop("job_started_at", None)
         if dst != ("shipped", "progress"):
             # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through
@@ -1211,8 +1212,8 @@ class Factory:
         return True
 
     def _hold_for_live_job(self, tid, src):
-        """Just before a ticket is killed: if an agent is still at work in its worktree, hold the worktree for it
-        until it ends (finished()) or its job goes stale."""
+        """Just before a ticket is finished (killed, or its PR merged during a fix round): if an agent is still at work
+        in its worktree, hold the worktree for it until it ends (finished()) or its job goes stale."""
         t = self.ticket(tid)
         if not t.get("job_started_at") or not t.get("worktree"):
             return
@@ -1250,7 +1251,7 @@ class Factory:
         """After a merged PR: delete the local branch. Best effort, only once the worktree is gone.
         Returns whether the branch is gone; a kept one flags the ticket for cleanup."""
         t = self.ticket(tid)
-        if not t.get("branch"):
+        if not t.get("branch") or t.get("keep_branch"):  # keep_branch: it holds commits the merged PR never got
             return True
         if t.get("worktree"):
             t["cleanup"] = True  # the worktree was kept (it still has the branch checked out)
@@ -1276,7 +1277,8 @@ class Factory:
         had_wt = bool(t.get("worktree"))
         if not self.drop_worktree(tid, quiet=True):
             return None
-        had_branch = (s == ("shipped", "ready") and bool(t.get("branch")) and Path(t["repo"]).is_dir()
+        had_branch = (s == ("shipped", "ready") and bool(t.get("branch")) and not t.get("keep_branch")
+                      and Path(t["repo"]).is_dir()
                       and _ref_exists(t["repo"], f"refs/heads/{t['branch']}"))
         if s == ("shipped", "ready") and not self.drop_branch(tid, quiet=True):
             return None
@@ -1497,20 +1499,75 @@ class Factory:
 
     # -- shipping ---------------------------------------------------------
 
-    def ship(self, tid):
-        self.expect(tid, ("shipped", "pending"))
+    def _pr_state(self, tid):
+        """The ticket's PR state on GitHub: OPEN, MERGED or CLOSED."""
+        return (gh("pr", "view", self.ticket(tid)["pr_url"], "--json", "state", "-q", ".state").split() or [""])[0]
+
+    def _pr_left(self, tid, state):
+        """The PR was merged or closed on GitHub while the ticket was not waiting on it (a fix round, a fixer, a
+        retried or stuck ship): record it, which also stops the agents at work on it (their results and git writes
+        are refused once the ticket has moved on). Returns the event, or None while the PR is open."""
         t = self.ticket(tid)
+        if state == "CLOSED":
+            self.move(tid, KILLED, "github", "PR closed without merging")
+            return f"{tid}: PR closed"
+        if state != "MERGED":
+            return None
+        why = "PR merged 🎉"
+        if not t.get("conflicts") and self._unpushed(tid):  # a fixer's rebased copies are not worth keeping
+            t["keep_branch"] = True
+            why += (f" during a fix round: {t['branch']} has commits the PR never got, so the branch is kept: "
+                    "open a PR for them by hand")
+        self.move(tid, machine.MERGED, "github", why)
+        return f"{tid}: shipped" + (", the fix round's new commits are kept on its branch" if t.get("keep_branch") else "")
+
+    def _unpushed(self, tid):
+        """True when the local branch has commits the PR branch on origin lacks, or when that cannot be told."""
+        t = self.ticket(tid)
+        branch = t.get("branch")
+        if not branch or not Path(t["repo"]).is_dir() or not _ref_exists(t["repo"], f"refs/heads/{branch}"):
+            return False
+        code, out, _ = _exec(["git", "rev-list", "--count", f"refs/remotes/origin/{branch}..refs/heads/{branch}"],
+                             cwd=t["repo"])
+        return code != 0 or out.strip() != "0"
+
+    def ship(self, tid):
+        """Push the branch and open (or update) the PR. Always ends where the factory goes on from: the PR waiting
+        on the human, finished, or back in shipped/pending (retried, or stuck), never left in shipped/progress."""
+        self.expect(tid, ("shipped", "pending"))
         self.move(tid, ("shipped", "progress"), "wonka")
+        try:
+            return self._ship(tid)
+        except Exception as e:  # anything else (a crash, a note that cannot be written): never strand the ticket
+            return self._ship_crashed(tid, e)
+
+    def _ship_crashed(self, tid, exc):
+        """ship() failed outside its own error handling: put the ticket back in the queue (retry() counts it)."""
+        err = " ".join(str(exc).split()) or type(exc).__name__
+        store.log(f"{tid} wonka: shipping failed: {type(exc).__name__}: {err}")
+        if self.state(tid) != ("shipped", "progress"):
+            return f"{tid}: ⚠️ {err}"
+        try:
+            outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
+        except Exception as e2:  # the note cannot be written either: fix the state, the note follows next tick
+            t = self.ticket(tid)
+            if self.state(tid) == ("shipped", "progress"):
+                t["last_valid"] = {"status": "shipped", "phase": "pending"}
+                t["history"].append({"at": _iso(now()), "from": "shipped/progress", "to": "shipped/pending",
+                                     "by": "wonka", "why": f"Retry: could not open the PR: {err}"})
+            t.pop("job_started_at", None)
+            store.log(f"{tid} wonka: could not record the failed ship either: {e2}")
+            outcome = "back in the queue"
+        return f"{tid}: PR failed: {err}; {outcome}"
+
+    def _ship(self, tid):
+        t = self.ticket(tid)
         try:
             if not t["pr_repo"]:
                 raise WonkaError("no pr_repo: set it with `wonka set ID pr_repo owner/name`")
-            if t.get("pr_url"):  # a retry or a fix round: the human may have closed the PR meanwhile
-                state = (gh("pr", "view", t["pr_url"], "--json", "state", "-q", ".state").split() or [""])[0]
-                if state == "CLOSED":
-                    self.move(tid, KILLED, "github", "PR closed without merging")
-                    return f"{tid}: PR closed"
-                if state == "MERGED":
-                    raise _Merged(f"{t['pr_url']} was merged while the fix round ran")
+            if t.get("pr_url"):  # a retry or a fix round: the human may have merged or closed the PR meanwhile
+                if (gone := self._pr_left(tid, self._pr_state(tid))) is not None:
+                    return gone  # never a second PR with the merged commits in it
             check_branch(t)
             ours = self._own_prs(tid)  # before the push: pushing the branch changes every PR opened from it
             try:
@@ -1534,18 +1591,14 @@ class Factory:
                 out = gh("pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
                          "--title", pr_title(tid, meta),
                          "--body", pr_text)
+                if not out.strip():  # the next try finds the PR, if it was opened, by its marker
+                    raise WonkaError("gh pr create printed no PR URL")
                 t["pr_body_sha"] = _body_sha(pr_text)
         except (WonkaError, OSError) as e:
             err = " ".join(str(e).split())
             if isinstance(e, _NotOurs):  # someone else's PR is on the branch: never touch it, a human decides
                 why = (f"an open PR on {t['branch']} was not opened by Wonka, so Wonka will not push to it: close it "
                        "or move it off the branch, then tick Retry")
-                outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
-                self.log_event(tid, err)
-                return f"{tid}: PR failed: {why}; {outcome}"
-            if isinstance(e, _Merged):  # never open a second PR with the merged commits in it
-                why = (f"the PR was merged while the fix round ran: the new commits are only on {t['branch']}. "
-                       "Open a PR for them by hand, then drag the card to Wont-Do")
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
                 self.log_event(tid, err)
                 return f"{tid}: PR failed: {why}; {outcome}"
@@ -1556,7 +1609,7 @@ class Factory:
                 return f"{tid}: PR failed: {why}; {outcome}"
             outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
-        t["pr_url"] = out.splitlines()[-1]
+        t["pr_url"] = out.strip().splitlines()[-1]
         self.set_section(tid, "changes", note.CHANGES_BOX)
         if reused:
             self._refresh_pr_body(tid, mine["body"], pr_text)
@@ -1952,6 +2005,14 @@ class Factory:
             # silent migration of old labels (🌟-Done, 🎫-Ready, ✉️-Inbox) and hand-typed names
             meta["status"], meta["phase"] = machine.label(last)
             self.write(tid, meta, body)
+        if last in OFF_PR and t.get("pr_url"):
+            try:
+                pr = self._pr_state(tid)
+            except (WonkaError, OSError) as e:  # offline: the fix round goes on, the next tick asks again
+                store.log(f"{tid} wonka: could not check the PR ({' '.join(str(e).split())})")
+                pr = None
+            if (gone := self._pr_left(tid, pr)) is not None:
+                return gone
         if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
             t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
             if t.pop("ci_stuck", None):  # a fresh budget of CI fix rounds
@@ -2257,10 +2318,11 @@ class Factory:
         if (held and name in held.get("agents", [])
                 and (dispatch is None or held.get("dispatch") is None or held["dispatch"] == dispatch)):
             held["agents"].remove(name)
+            ended = "merged" if s == machine.MERGED else "killed"
             if held["agents"]:
-                return f"{tid}: {agent} ended, the ticket is killed; its worktree waits for {', '.join(held['agents'])}"
+                return f"{tid}: {agent} ended, the ticket is {ended}; its worktree waits for {', '.join(held['agents'])}"
             t.pop("held_by")
-            return f"{tid}: {agent} ended, the ticket is killed; its worktree is cleaned up next tick"
+            return f"{tid}: {agent} ended, the ticket is {ended}; its worktree is cleaned up next tick"
         if t.get("stuck"):
             return f"{tid}: stuck, waiting for a human to tick Retry"
         if s != expected or not t.get("job_started_at"):

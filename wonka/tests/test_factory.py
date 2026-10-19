@@ -5025,9 +5025,14 @@ class FactoryTest(unittest.TestCase):
 
     # -- a PR merged while its fix round ran ------------------------------
 
-    def test_pr_merged_during_a_fix_round_is_stuck_not_reopened(self):
+    def merge_on_github(self):
+        self.pr_state.write_text("MERGED")
+        Path(f"{self.pr_state}.open").unlink(missing_ok=True)  # `pr list --state open` finds nothing once it is merged
+
+    def test_pr_merged_during_a_fix_round_is_recorded_as_merged(self):
         tid = self.add()
-        self.to_awaiting_merge(tid)
+        blocked = self.add("needs the first one", blocked_by=[tid])
+        _, branch = self.to_awaiting_merge(tid)
         tick = self.request_changes(tid, "Please also add a test")
         wt = Path([j for j in tick["jobs"] if j["id"] == tid][0]["worktree"])
         self.commit_and_bake(wt, "test.sh")
@@ -5035,15 +5040,140 @@ class FactoryTest(unittest.TestCase):
             f.baked(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        self.pr_state.write_text("MERGED")
-        Path(f"{self.pr_state}.open").unlink()  # `pr list --state open` finds nothing once it is merged
+        self.merge_on_github()
         events = self.tick()["events"]
-        self.assertTrue(any("merged while the fix round ran" in e for e in events), events)
-        t = self.f_ticket(tid)
-        self.assertTrue(t["stuck"])
-        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertIn(f"{tid}: shipped, the fix round's new commits are kept on its branch", events)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertEqual(Path(f"{self.pr_state}.creates").read_text(), "x\n", "no second PR")
-        self.assertIn("Open a PR for them by hand", note.get_section(self.note(tid)[1], "stuck"))
+        last = self.history(tid)[-1]
+        self.assertEqual(last["by"], "github")
+        self.assertIn("open a PR for them by hand", last["why"])
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "its new commits are kept")
+        self.tick()
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "cleanup keeps it too")
+        with self.f() as f:
+            self.assertEqual(f.metrics()[0]["outcome"], "merged")
+            self.assertEqual(f.waiting_on(blocked), [], "its dependents are unblocked")
+
+    def test_pr_merged_while_the_builder_works_stops_it(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.merge_on_github()
+        self.assertIn(f"{tid}: shipped", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        wt = Path(job["worktree"])
+        self.assertTrue(wt.exists(), "the builder is still in it")
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["oompa-loompa-builder"])
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "expected"):
+            f.baked(tid, dispatch=job["dispatch"])
+        msg = self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"])
+        self.assertEqual(msg, f"{tid}: wonka:oompa-loompa-builder ended, the ticket is merged; "
+                              "its worktree is cleaned up next tick")
+        self.tick()
+        self.assertFalse(wt.exists())
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "nothing new on it: deleted")
+
+    def test_pr_merged_while_the_fixer_works_is_recorded_as_merged(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(Path(job["worktree"]), job["base_ref"])
+        self.merge_on_github()
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertNotIn("keep_branch", self.f_ticket(tid), "a fixer's rebased copies are not kept")
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["oompa-loompa-fixer"])
+
+    def test_human_merge_unsticks_a_stuck_ship(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "fix.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        with self.f() as f:
+            f.retry(tid, "push rejected", final=True)  # what a rejected push does
+        self.assertTrue(self.f_ticket(tid)["stuck"])
+        sh("git", "push", "-q", "origin", self.f_ticket(tid)["branch"], cwd=self.repo)  # the human pushes, then merges
+        self.merge_on_github()
+        self.assertIn(f"{tid}: shipped", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+        self.assertNotIn("keep_branch", self.f_ticket(tid), "everything reached the PR")
+
+    def test_pr_closed_during_a_fix_round_is_killed_at_once(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.close_pr()
+        self.assertIn(f"{tid}: PR closed", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
+
+    def test_fix_round_goes_on_when_github_cannot_be_asked(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.request_changes(tid, "rename it")
+        self.set_gh(FAILING_GH)
+        events = self.tick()["events"]
+        self.assertFalse([e for e in events if e.startswith(tid)], events)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    # -- ship() never strands a ticket in shipped/progress -------------------
+
+    def shipping(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        return tid
+
+    def test_gh_printing_no_url_is_retried(self):
+        tid = self.shipping()
+        self.set_gh(FAKE_GH.replace('echo "https://github.com/acme/app/pull/7" ;;', ';;'))
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: PR failed: gh pr create printed no PR URL; back in the queue", events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.set_gh(FAKE_GH)
+        Path(f"{self.pr_state}.list").write_text(json.dumps([{"url": "https://github.com/acme/app/pull/7",
+                                                              "body": f"<!-- wonka:{tid} -->\n\nAdd hello.sh"}]))
+        self.tick()  # the PR was opened: found by its marker, not opened twice
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text(), "x\n")
+        self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
+
+    def test_an_unexpected_ship_failure_goes_back_in_the_queue(self):
+        tid = self.shipping()
+        real = Factory.set_section
+
+        def broken(f, tid_, key, *a, **kw):
+            if key == "changes":
+                raise IndexError("boom")
+            return real(f, tid_, key, *a, **kw)
+
+        with mock.patch.object(Factory, "set_section", broken):
+            events = self.tick()["events"]
+        self.assertIn(f"{tid}: PR failed: boom; back in the queue", events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_ship_failure_is_recovered_even_when_retry_fails(self):
+        tid = self.shipping()
+        with mock.patch.object(Factory, "_own_prs", side_effect=IndexError("boom")), \
+                mock.patch.object(Factory, "retry", side_effect=OSError("disk full")):
+            events = self.tick()["events"]
+        self.assertIn(f"{tid}: PR failed: boom; back in the queue", events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
 
     # -- limits on work nobody asked for ----------------------------------
 

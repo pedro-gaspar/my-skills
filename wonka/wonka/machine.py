@@ -53,6 +53,7 @@ VALID = {
 }
 
 KILLED = ("wontdo", "ready")
+MERGED = ("shipped", "ready")
 
 _EDGES = [
     ("idea/awaiting", "triage/pending"),  # a human started the idea
@@ -88,6 +89,10 @@ _EDGES = [
     ("shipped/awaiting", "baking/pending"),  # the human requested changes on the PR
     ("shipped/awaiting", "shipped/progress"),  # fixing merge conflicts
 ]
+# the PR was merged on GitHub while Wonka was not waiting on it: a fix round, a fixer, a retried or stuck ship
+_EDGES += [(src, "shipped/ready") for src in ("baking/pending", "baking/progress", "baking/ready", "reviewing/pending",
+                                              "reviewing/progress", "reviewing/awaiting", "reviewing/ready",
+                                              "shipped/pending", "shipped/progress")]
 EDGES = {tuple(tuple(side.split("/")) for side in edge) for edge in _EDGES}
 
 
