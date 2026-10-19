@@ -439,7 +439,7 @@ class FactoryTest(unittest.TestCase):
             f.add("App part", title="App part", repo=str(self.repo), parent=tid)
             f.add("Lib part", title="Lib part", repo=str(lib), parent=tid)
             f.drafted(tid, "m", split=True)
-        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
         self.assertEqual(note.get_section(self.note(tid)[1], "split"),
                          "- [[WONKA-00002]] App part · app\n- [[WONKA-00003]] Lib part · lib")
         kid = self.f_ticket("WONKA-00003")
