@@ -263,6 +263,10 @@ cd wonka && python3 -m unittest                  # from wonka/
 python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (what plans use)
 ```
 
+Before a commit, run `./check.sh` (from `wonka/`): the unit tests, then `ruff check` with `ruff.toml` (pyflakes and
+a few pycodestyle error rules, no formatting) when ruff is installed; without ruff it says so and skips the lint.
+There is no hosted CI: this is the check.
+
 A bare `python3 -m unittest` from the repo root finds no tests (`NO TESTS RAN`, exit code 5). If a run reports 0
 tests, the command is wrong, not passing.
 

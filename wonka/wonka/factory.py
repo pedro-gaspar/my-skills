@@ -1472,7 +1472,6 @@ class Factory:
 
     def _log_decisions(self, tid, section):
         """Append the human's answers to the squirrels' questions to the plan, under this round's review heading."""
-        t = self.ticket(tid)
         body = note.decisions(section, skip_no=(note.CLOSE_Q, note.DRAFT_Q))
         if body:
             self._append_to_round(tid, f"### Decisions\n{body}\n")
