@@ -53,11 +53,12 @@ class CheckTest(unittest.TestCase):
                 check("merge", args)
 
     def test_command_pins_path_and_global_options(self):
-        self.assertEqual(command("/w", "diff", ["x"]),
-                         ["git", "--no-pager", "-C", "/w", "-c", "core.fsmonitor=false", "diff", "--no-ext-diff",
-                          "--no-textconv", "x"])
-        self.assertEqual(command("/w", "status", []),
-                         ["git", "--no-pager", "-C", "/w", "-c", "core.fsmonitor=false", "status"])
+        self.assertEqual(command("/w", "/r/.git/worktrees/w", "diff", ["x"]),
+                         ["git", "--no-pager", "-C", "/w", "--git-dir=/r/.git/worktrees/w", "--work-tree=/w",
+                          "-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv", "x"])
+        self.assertEqual(command("/w", "/r/.git/worktrees/w", "status", []),
+                         ["git", "--no-pager", "-C", "/w", "--git-dir=/r/.git/worktrees/w", "--work-tree=/w",
+                          "-c", "core.fsmonitor=false", "status"])
 
     def test_env_is_scrubbed(self):
         out = env({"PATH": "/bin", "GIT_DIR": "/x", "GIT_EXTERNAL_DIFF": "sh",
@@ -76,6 +77,12 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(target({"worktree": str(tmp / "gone"), "repo": str(repo)}, baking, "log"), repo)
         self.assertEqual(target({"worktree": None, "scout": str(scout), "repo": str(repo)},
                                 ("drafting", "progress"), "log"), scout)
+        # a re-drafted ticket keeps its old worktree: reads go to the fresh scout the analyst's job reads
+        self.assertEqual(target({"worktree": str(wt), "scout": str(scout), "repo": str(repo)},
+                                ("drafting", "progress"), "log"), scout)
+        self.assertEqual(target({"worktree": str(wt), "scout": str(tmp / "gone"), "repo": str(repo)},
+                                ("reviewing", "progress"), "log"), wt)
+        self.assertEqual(target({"worktree": str(wt), "scout": str(scout), "repo": str(repo)}, baking, "commit"), wt)
         self.assertEqual(target({"worktree": str(wt), "repo": str(repo)}, baking, "commit"), wt)
         self.assertEqual(target({"worktree": str(wt), "repo": str(repo)}, ("shipped", "progress"), "merge"), wt)
         for state in (("reviewing", "progress"), ("drafting", "progress"), ("shipped", "awaiting")):
@@ -198,6 +205,45 @@ class WrapperTest(unittest.TestCase):
         code, err = self.git("WONKA-09999", "status")
         self.assertEqual(code, 1)
         self.assertIn("No ticket", err)
+
+    def test_git_dir_is_found_from_the_repo_side(self):
+        tid = self.add()
+        wt = self.to_baking(tid)
+        real = gitwrap.git_dir(self.repo, wt)
+        self.assertEqual(real.parent, (self.repo / ".git" / "worktrees").resolve())
+        self.assertEqual(gitwrap.git_dir(self.repo, self.repo), (self.repo / ".git").resolve())
+        stray = self.tmp / "stray"
+        stray.mkdir()
+        sh("git", "init", "-q", cwd=stray)
+        with self.assertRaises(WonkaError):
+            gitwrap.git_dir(self.repo, stray)
+
+    def test_rewritten_dot_git_file_is_ignored(self):
+        """An agent repoints <wt>/.git at a git dir it planted (here: one whose clean filter writes a file).
+        wonka git keeps using the worktree's registered git dir, so the planted config never runs."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        evil = wt / "evil.gitdir"
+        sh("git", "clone", "-q", "--bare", str(self.repo), str(evil), cwd=self.tmp)
+        pwned = self.tmp / "pwned"
+        for key, value in (("core.bare", "false"), ("core.worktree", str(wt)),
+                           ("filter.x.clean", f"touch {pwned}; cat")):
+            sh("git", "config", "-f", str(evil / "config"), key, value, cwd=self.tmp)
+        sh("git", "--git-dir", str(evil), "read-tree", "HEAD", cwd=self.tmp)
+        (wt / ".gitattributes").write_text("* filter=x\n")
+        (wt / ".git").write_text(f"gitdir: {evil}\n")
+        (wt / "README.md").write_text("changed\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.git(tid, "diff", "--stat")[0], 0)
+            self.assertEqual(self.git(tid, "status")[0], 0)
+        self.assertFalse(pwned.exists())
+        with mock.patch.object(gitwrap.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            self.git(tid, "rev-parse", "HEAD")
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[argv.index("-C") + 1], str(wt))
+        self.assertIn(f"--git-dir={gitwrap.git_dir(self.repo, wt)}", argv)
+        self.assertEqual(sh("git", "--git-dir", str(gitwrap.git_dir(self.repo, wt)), "rev-parse", "HEAD", cwd=wt), head)
 
     def test_injected_flags_work_with_real_git(self):
         tid = self.add()

@@ -19,10 +19,10 @@ Then run `/wonka init`. It asks for your vault and how many tickets to draft and
 `~/.wonka/config.json`, creates `<vault>/wonka/{golden-tickets,plans,archive}` and `Wonka.base`, links `wonka` into
 `~/.local/bin`, and runs `wonka doctor`. The doctor prints the permission snippet that lets background agents run
 unattended (`Bash(wonka *)`, plus the worktree and board folders as `additionalDirectories`). Agents run git only
-through `wonka git <id> <subcommand>`, which pins it to the ticket's worktree and allows only status, diff, log, show,
-rev-parse, ls-files, blame, add and commit (plus the fixer's `merge --no-edit <ref>` and `merge --abort`; no `-c`,
-config, push or options that run programs), so no git permission rule is needed; the doctor warns if an old
-`Bash(git *)` rule is still there.
+through `wonka git <id> <subcommand>`, which pins it to the ticket's worktree and that worktree's registered git dir
+(a rewritten `.git` file is ignored) and allows only status, diff, log, show, rev-parse, ls-files, blame, add and
+commit (plus the fixer's `merge --no-edit <ref>` and `merge --abort`; no `-c`, config, push or options that run
+programs), so no git permission rule is needed; the doctor warns if an old `Bash(git *)` rule is still there.
 
 ## Use
 

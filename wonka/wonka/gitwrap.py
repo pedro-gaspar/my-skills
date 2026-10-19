@@ -69,9 +69,12 @@ def check(sub, args):
     return None
 
 
-def command(path, sub, args):
+def command(path, git_dir, sub, args):
+    """git dir and work tree are both pinned, so git never reads the `.git` file inside the tree (an agent can
+    rewrite it to point at a git dir it planted, with filters, hooks or core.worktree in its config)."""
     injected = ["--no-ext-diff", "--no-textconv"] if sub in NO_EXTERNAL else []
-    return ["git", "--no-pager", "-C", str(path), "-c", "core.fsmonitor=false", sub, *injected, *args]
+    return ["git", "--no-pager", "-C", str(path), f"--git-dir={git_dir}", f"--work-tree={path}",
+            "-c", "core.fsmonitor=false", sub, *injected, *args]
 
 
 def env(base=None):
@@ -81,9 +84,37 @@ def env(base=None):
     return out
 
 
+def git_dir(repo, path):
+    """The git dir for path (the repo itself, or one of its linked worktrees), found from the repo's side: the
+    worktree whose registered `gitdir` file points back at <path>/.git. The `.git` file inside the tree is never read.
+    """
+    repo, path = Path(repo).resolve(), Path(path).resolve()
+    common = repo / ".git"
+    if not common.is_dir():
+        try:
+            out = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                 env=env(), stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            raise WonkaError(f"{repo} is not a git repository")
+        common = Path(out.stdout.strip())
+    if path == repo:
+        return common
+    wts = common / "worktrees"
+    for d in sorted(wts.iterdir()) if wts.is_dir() else ():
+        try:
+            back = Path((d / "gitdir").read_text().strip())
+        except OSError:
+            continue
+        back = back if back.is_absolute() else d / back
+        if back.name == ".git" and back.parent.resolve() == path:
+            return d
+    raise WonkaError(f"{path} is not a registered worktree of {repo}")
+
+
 def target(t, state, sub):
-    """The directory git runs in: writes only in the worktree while its job runs; reads in the worktree, else the
-    scout (the analyst's fresh checkout of the base), else the repo."""
+    """The directory git runs in: writes only in the worktree while its job runs; reads in the scout (the fresh
+    checkout of the base that a triage or draft job reads, so it wins over an older worktree of a re-drafted
+    ticket), else the worktree, else the repo."""
     wt = t.get("worktree")
     has_wt = bool(wt) and Path(wt).is_dir()
     if sub in WRITES:
@@ -93,11 +124,11 @@ def target(t, state, sub):
         if not has_wt:
             raise WonkaError(f"no worktree for this ticket: git {sub} only runs in its worktree")
         return Path(wt)
-    if has_wt:
-        return Path(wt)
     scout = t.get("scout")
     if scout and Path(scout).is_dir():
         return Path(scout)
+    if has_wt:
+        return Path(wt)
     return Path(t["repo"])
 
 
@@ -110,9 +141,12 @@ def main(argv):
     cfg = store.load_config()
     with store.state() as db:
         f = Factory(cfg, db)
-        path = target(f.ticket(tid), f.state(tid), sub)
+        t = f.ticket(tid)
+        path = target(t, f.state(tid), sub)
+        repo = t["repo"]
     # the state lock is released: a commit hook may run for minutes
     try:
-        return subprocess.run(command(path, sub, args), env=env(), stdin=subprocess.DEVNULL).returncode
+        gd = git_dir(repo, path)
+        return subprocess.run(command(path, gd, sub, args), env=env(), stdin=subprocess.DEVNULL).returncode
     except FileNotFoundError:
         raise WonkaError("git is not installed")
