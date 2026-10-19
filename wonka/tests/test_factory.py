@@ -960,6 +960,44 @@ class FactoryTest(unittest.TestCase):
             self.assertIsNone(f.drafted(tid, "s", ["architect"], d3))
         self.assertEqual(self.state(tid), ("ready", "pending"))
 
+    def test_late_analyst_writes_from_an_earlier_dispatch_are_ignored(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        d1 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
+        with self.f() as f:
+            f.retry(tid)
+        d2 = [j for j in self.tick()["jobs"] if j["id"] == tid][0]["dispatch"]
+        question = {"q": "Which? ", "options": ["a", "b"], "recommended": 0}
+        with self.f() as f:
+            self.assertIsNone(f.write_plan(tid, "# new\n", d2))
+            plan = f.plan_path(tid)
+            self.assertEqual(f.write_plan(tid, "# stale\n", d1),
+                             f"{tid}: analyst plan is from an earlier dispatch ({d1}, now {d2}), ignored")
+            self.assertIn("# new", plan.read_text())
+            self.assertNotIn("# stale", plan.read_text())
+            self.assertIsNone(f.set_section(tid, "spec", "live spec", d2))
+            self.assertIn("earlier dispatch", f.set_section(tid, "spec", "stale spec", d1))
+            body = f.read(tid)[1]
+            self.assertIn("live spec", body)
+            self.assertNotIn("stale spec", body)
+            self.assertIn("earlier dispatch", f.ask(tid, [question], d1))
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        self.assertNotIn("Which?", self.note(tid)[1])
+        with self.f() as f:
+            f.retry(tid)
+        self.assertEqual(self.state(tid), ("drafting", "pending"))
+        with self.f() as f:
+            self.assertIn("earlier dispatch", f.ask(tid, [question], d1))
+            self.assertIn("earlier dispatch", f.write_plan(tid, "# stale\n", d1))
+        self.tick()
+        with self.f() as f:
+            f.write_plan(tid, "# plain\n")
+            self.assertIn("# plain", f.plan_path(tid).read_text())
+            self.assertIsNone(f.ask(tid, [question]))
+        self.assertEqual(self.state(tid), ("drafting", "awaiting"))
+
     def test_late_baked_from_an_earlier_dispatch_is_ignored(self):
         tid = self.add()
         self.to_ready(tid)
@@ -2235,6 +2273,28 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "rev-parse", branch, cwd=self.tmp / "origin.git"), sh("git", "rev-parse", "HEAD", cwd=wt))
         self.pr_state.write_text("OPEN MERGEABLE")
         self.assertEqual([j for j in self.tick()["jobs"] if j["id"] == tid], [])
+
+    def test_late_resolved_from_an_earlier_dispatch_is_ignored(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        d = job["dispatch"]
+        origin = self.tmp / "origin.git"
+        before = sh("git", "rev-parse", branch, cwd=origin)
+        subprocess.run(["git", "merge", "--no-edit", job["base_ref"]], cwd=wt, capture_output=True, text=True)
+        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
+        sh("git", "add", "hello.sh", cwd=wt)
+        sh("git", "commit", "-q", "--no-edit", cwd=wt)
+        with self.f() as f:
+            msg = f.resolved(tid, d - 1)
+        self.assertEqual(msg, f"{tid}: fixer result is from an earlier dispatch ({d - 1}, now {d}), ignored")
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+        self.assertNotIn("conflict_fixes", self.f_ticket(tid))
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=origin), before)
+        with self.f() as f:
+            self.assertIsNone(f.resolved(tid, d))
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
 
     def test_fixer_starts_from_the_pr_branch_on_origin(self):
         tid = self.add()

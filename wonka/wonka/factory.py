@@ -350,13 +350,21 @@ class Factory:
 
     # -- drafting ---------------------------------------------------------
 
-    def set_section(self, tid, key, content):
+    def _stale_msg(self, tid, what, dispatch):
+        return (f"{tid}: {what} is from an earlier dispatch "
+                f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+
+    def set_section(self, tid, key, content, dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, f"analyst {key} section", dispatch)
         if key in LINTED:
             content = mdlint.guard(content)
         meta, body = self.read(tid)
         self.write(tid, meta, note.set_section(body, key, content))
 
-    def ask(self, tid, questions):
+    def ask(self, tid, questions, dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "analyst questions", dispatch)
         self.expect(tid, ("drafting", "progress"))
         meta, body = self.read(tid)
         self.write(tid, meta, note.new_questions(body, note.render_questions(questions)))
@@ -366,7 +374,9 @@ class Factory:
         folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
         return folder(self.cfg) / f"{tid}-plan.md"
 
-    def write_plan(self, tid, text):
+    def write_plan(self, tid, text, dispatch=None):
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "analyst plan", dispatch)
         self.expect(tid, ("drafting", "progress"))
         path = self.plan_path(tid)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -899,8 +909,11 @@ class Factory:
             return f"{tid}: ⚠️ fixer could not start, stuck: {err}"
         return f"{tid}: ⚠️ fixer could not start ({tries}), retried next tick: {err}"
 
-    def resolved(self, tid):
-        """The fixer committed the merge: check it, push the branch (never force) and wait for the human again."""
+    def resolved(self, tid, dispatch=None):
+        """The fixer committed the merge: check it, push the branch (never force) and wait for the human again.
+        A call from an earlier dispatch is ignored."""
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "fixer result", dispatch)
         self.expect(tid, ("shipped", "progress"))
         t = self.ticket(tid)
         if not t.get("conflicts"):

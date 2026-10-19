@@ -116,6 +116,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual(cli.parser().parse_args(["baked", "WONKA-00001", "--dispatch", "3"]).dispatch, 3)
         self.assertIsNone(cli.parser().parse_args(["baked", "WONKA-00001"]).dispatch)
 
+    def test_ask_plan_section_resolved_take_a_dispatch_number(self):
+        for argv in (["ask", "WONKA-00001", "--question", "Q? | a | *b"], ["plan", "WONKA-00001"],
+                     ["section", "WONKA-00001", "spec"], ["resolved", "WONKA-00001"]):
+            self.assertIsNone(cli.parser().parse_args(argv).dispatch, argv)
+            self.assertEqual(cli.parser().parse_args(argv + ["--dispatch", "3"]).dispatch, 3, argv)
+
+    def test_agent_docs_pass_the_dispatch(self):
+        root = Path(cli.__file__).resolve().parent.parent
+        for name, verbs in (("oompa-loompa-analyst", ("ask", "plan", "section", "drafted")),
+                            ("oompa-loompa-fixer", ("resolved",))):
+            lines = (root / "agents" / f"{name}.md").read_text().splitlines()
+            for verb in verbs:
+                cmds = [ln for ln in lines if f"wonka {verb} <id>" in ln]
+                self.assertTrue(cmds, (name, verb))
+                for ln in cmds:
+                    self.assertIn("--dispatch <dispatch>", ln, (name, verb))
+
     def test_resolved_takes_an_id(self):
         a = cli.parser().parse_args(["resolved", "WONKA-00001"])
         self.assertEqual((a.cmd, a.id), ("resolved", "WONKA-00001"))

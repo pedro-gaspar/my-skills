@@ -114,21 +114,22 @@ def run(a, f):
         qs = _questions(a)
         if not qs:
             raise WonkaError("ask needs at least one --question")
-        f.ask(a.id, qs)
-        print(f.summary(a.id))
+        msg = f.ask(a.id, qs, a.dispatch)
+        print(msg or f.summary(a.id))
     elif c == "section":
-        f.set_section(a.id, a.key, sys.stdin.read())
+        msg = f.set_section(a.id, a.key, sys.stdin.read(), a.dispatch)
+        if msg:
+            print(msg)
     elif c == "plan":
-        f.write_plan(a.id, sys.stdin.read())
-        print(f"📋 {f.plan_path(a.id)}")
+        msg = f.write_plan(a.id, sys.stdin.read(), a.dispatch)
+        print(msg or f"📋 {f.plan_path(a.id)}")
     elif c == "drafted":
         msg = f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r], a.dispatch)
         print(msg or f.summary(a.id))
     elif c == "baked":
         print(f.baked(a.id, a.dispatch) or f.summary(a.id))
     elif c == "resolved":
-        f.resolved(a.id)
-        print(f.summary(a.id))
+        print(f.resolved(a.id, a.dispatch) or f.summary(a.id))
     elif c == "report":
         if not a.stdin and not a.verdict:
             raise WonkaError("report needs --verdict good|bad")
@@ -198,11 +199,14 @@ def parser():
     s.add_argument("id")
     s.add_argument("--question", action="append", help='"Question? | option | *recommended option" (repeatable)')
     s.add_argument("--stdin", action="store_true", help="also read questions as JSON from stdin")
+    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("section", help="write a ## section from stdin (e.g. spec)")
     s.add_argument("id")
     s.add_argument("key")
+    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("plan", help="analyst: the detailed plan (markdown) on stdin")
     s.add_argument("id")
+    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("drafted", help="analyst: spec and plan are done")
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
@@ -213,6 +217,7 @@ def parser():
     s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("resolved", help="fixer: the merge conflicts are committed")
     s.add_argument("id")
+    s.add_argument("--dispatch", type=int, help="the dispatch number from the job JSON")
     s = sub.add_parser("report", help="squirrel: file a review verdict")
     s.add_argument("id")
     s.add_argument("--squirrel", required=True)
