@@ -37,6 +37,9 @@ def command():
     return shlex.split(value)
 
 
+_RULE = re.compile(r"\bMD\d{3}\b")  # what every markdownlint finding names: MD032/blanks-around-lists ...
+
+
 def _problem(line):
     line = line.strip()
     if line.startswith("stdin:"):
@@ -46,7 +49,8 @@ def _problem(line):
 
 
 def problems(text):
-    """The violations markdownlint reports ([] when clean), or None when it could not check."""
+    """The violations markdownlint reports ([] when clean), or None when it could not check: it is missing, timed
+    out, or failed without naming a rule (npx/npm errors exit 1 too)."""
     cmd = command()
     if cmd is None:
         return None
@@ -58,10 +62,13 @@ def problems(text):
         return None
     if out.returncode == 0:
         return []
+    output = (out.stderr + "\n" + out.stdout).splitlines()
     if out.returncode == 1:
-        lines = [_problem(l) for l in (out.stderr + "\n" + out.stdout).splitlines() if l.strip()]
-        return lines or ["markdownlint failed without details"]
-    first = next((l for l in out.stderr.splitlines() if l.strip()), f"exit code {out.returncode}")
+        # npx and npm exit 1 too (offline, E404, a cache it cannot write): only rule lines are findings
+        found = [_problem(l) for l in output if _RULE.search(l)]
+        if found:
+            return found
+    first = next((l for l in output if l.strip()), f"exit code {out.returncode}")
     store.log(f"markdownlint skipped: {first.strip()}")
     return None
 
@@ -96,23 +103,8 @@ def _item(line):
     return len(m.group(1)), m.group(2), m.group(3) or ""
 
 
-_OPENER = re.compile(r"(`{3,}|~{3,})(.*)")
-
-
-def fence_opener(s):
-    """The fence marker (3+ backticks or tildes) when `s`, a line with its indent removed, opens a fenced code
-    block, else None. A backtick fence's info string may not contain backticks (CommonMark), so ```x``` is inline
-    code, not a fence."""
-    m = _OPENER.match(s)
-    if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
-        return None
-    return m.group(1)
-
-
-def closes_fence(fence, s):
-    """True when line `s` closes the block `fence` opened: the same character, at least as many, nothing else
-    but surrounding whitespace."""
-    return re.fullmatch(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*" % len(fence), s) is not None
+# fenced code blocks are told apart the same way everywhere a note is read
+fence_opener, closes_fence = note.fence_opener, note.closes_fence
 
 
 def _fence_end(lines, start, fence):
@@ -121,6 +113,21 @@ def _fence_end(lines, start, fence):
         if closes_fence(fence, lines[i]):
             return i
     return len(lines) - 1
+
+
+_INTERRUPT = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>)")  # a heading or blockquote ends a paragraph, lazy or not
+
+
+def _lazy(lines, i):
+    """True when lines[i], unindented text right after a list line, is a lazy continuation of that item: the list
+    goes on (an item or an indented line) after it before any blank line or block that ends a paragraph. Text that
+    ends the list instead is taken as a paragraph after it."""
+    for line in lines[i:]:
+        if not line.strip() or _INTERRUPT.match(line) or _BREAK.match(line) or fence_opener(line.lstrip()):
+            return False
+        if line[0] in " \t" or _item(line):
+            return True
+    return False
 
 
 def space_lists(text):
@@ -137,7 +144,7 @@ def space_lists(text):
             continue
         item = _item(line)
         if in_list:
-            if line[0] in " \t" or item:
+            if line[0] in " \t" or item or (prev == "list" and _lazy(lines, i)):
                 prev = "list"
             else:
                 if prev == "list":

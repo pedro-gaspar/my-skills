@@ -1125,7 +1125,8 @@ class FactoryTest(unittest.TestCase):
         self.clean_rebake(tid, "f2.sh")
         self.review(tid, architect={"verdict": "bad nut", "issues": ["still wrong"]})
         self.assertEqual(self.state(tid), ("wontdo", "ready"))
-        self.assertIn("3 review rounds", self.note(tid)[1])
+        self.assertIn("Bad nut: 4 review rounds", self.note(tid)[1], "the budget with the extra round granted")
+        self.assertNotIn("3 review rounds", self.note(tid)[1])
 
     def test_early_clean_rebake_does_not_shorten_the_budget(self):
         tid = self.add()
@@ -2560,6 +2561,21 @@ class FactoryTest(unittest.TestCase):
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertEqual(job["job"], "bake")
         return job, Path(job["worktree"])
+
+    def test_a_merged_ticket_dragged_to_wont_do_is_put_back(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        done_at = self.f_ticket(tid)["entered_done_at"]
+        self.edit_note(tid, lambda t: t.replace("status: 🚢-Shipped", "status: 🗑️-Wont-Do", 1))
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: reverted illegal 🗑️-Wont-Do/🌟-Ready", events)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertEqual(self.note(tid)[0]["status"], "🚢-Shipped")
+        self.assertEqual(self.f_ticket(tid)["entered_done_at"], done_at)
+        with self.f() as f:
+            self.assertEqual(f.metrics()[0]["outcome"], "merged")
 
     def test_killed_while_baking_keeps_clean_worktree_until_builder_ends(self):
         tid = self.add()
@@ -4335,6 +4351,56 @@ class FactoryTest(unittest.TestCase):
         self.assertNotRegex(plan, r"(?m)^## 🔴 CI failure")
         self.assertNotIn("pasted", plan)
 
+    # -- plan writes: atomic, and never twice -------------------------------
+
+    def test_review_round_is_logged_once_when_the_report_is_rerun(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.tick()
+        rep = {"verdict": "bad nut", "issues": ["no shebang"]}
+        with mock.patch.object(Factory, "_back_to_baking", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError), self.f() as f:  # the command fails: its state is not saved
+                f.report(tid, "architect", rep)
+        self.assertEqual(self.plan_text(tid).count("## 🐿️ Review round 1"), 1)
+        with self.f() as f:
+            f.report(tid, "architect", rep)
+        self.assertEqual(self.plan_text(tid).count("## 🐿️ Review round 1"), 1)
+        self.assertEqual(self.plan_text(tid).count("- no shebang"), 1)
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+
+    def test_ci_failure_is_logged_once_after_a_failed_tick(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        with mock.patch.object(Factory, "_mark_ci_round", side_effect=OSError("disk full")):
+            self.tick()
+        self.assertEqual(self.plan_text(tid).count("## 🔴 CI failure 1"), 1)
+        self.tick()
+        plan = self.plan_text(tid)
+        self.assertEqual(plan.count("CI failure 1"), 1, plan)
+        self.assertNotIn("Earlier CI failure", plan)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    def test_decisions_are_logged_once(self):
+        tid = self.add()
+        self.to_planned(tid)
+        with self.f() as f:
+            f.ticket(tid)["review_round"] = 1
+            f._append_to_round(tid, "### Decisions\n- Rename? → Yes\n")
+            f._append_to_round(tid, "### Decisions\n- Rename? → Yes\n")
+        self.assertEqual(self.plan_text(tid).count("### Decisions"), 1)
+
+    def test_plan_files_are_written_atomically(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        with mock.patch.object(store, "write_atomic", wraps=store.write_atomic) as w, self.f() as f:
+            f.write_plan(tid, "# plan\n")
+        self.assertIn(f"{tid}-plan.md", [Path(c.args[0]).name for c in w.call_args_list])
+
     # -- merge conflicts on an open PR ------------------------------------
 
     def upstream_change(self, filename="hello.sh", text="echo upstream\n"):
@@ -5016,6 +5082,38 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("triage", "pending"))
         self.assertFalse([e for e in events if "not a Wonka ticket" in e])
 
+    def test_deleted_note_of_a_merged_ticket_archives_it_as_merged(self):
+        tid = self.add()
+        blocked = self.add("needs the first one", blocked_by=[tid])
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        with self.f() as f:
+            f.path(tid).unlink()
+            plan = f.plan_path(tid)
+        self.assertIn(f"{tid}: note was deleted, archived as merged", self.tick()["events"])
+        t = self.f_ticket(tid)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertTrue(t["archived"])
+        self.assertNotIn("lost", t)
+        self.assertFalse(plan.exists())
+        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive" / plan.name).exists())
+        with self.f() as f:
+            self.assertEqual(f.waiting_on(blocked), [])
+        self.assertEqual(self.tick()["events"], [], "nothing more to do")
+
+    def test_note_moved_into_a_subfolder_is_moved_back(self):
+        tid = self.add()
+        with self.f() as f:
+            path = f.path(tid)
+        sub = path.parent / "later" / "deeper"
+        sub.mkdir(parents=True)
+        path.rename(sub / path.name)
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: note was moved to later/deeper/{path.name}, moved back", events)
+        self.assertTrue(path.exists())
+        self.assertEqual(self.state(tid), ("triage", "pending"))
+
     def test_note_writes_leave_no_temp_file(self):
         tid = self.add()
         with self.f() as f:
@@ -5024,9 +5122,14 @@ class FactoryTest(unittest.TestCase):
 
     # -- a PR merged while its fix round ran ------------------------------
 
-    def test_pr_merged_during_a_fix_round_is_stuck_not_reopened(self):
+    def merge_on_github(self):
+        self.pr_state.write_text("MERGED")
+        Path(f"{self.pr_state}.open").unlink(missing_ok=True)  # `pr list --state open` finds nothing once it is merged
+
+    def test_pr_merged_during_a_fix_round_is_recorded_as_merged(self):
         tid = self.add()
-        self.to_awaiting_merge(tid)
+        blocked = self.add("needs the first one", blocked_by=[tid])
+        _, branch = self.to_awaiting_merge(tid)
         tick = self.request_changes(tid, "Please also add a test")
         wt = Path([j for j in tick["jobs"] if j["id"] == tid][0]["worktree"])
         self.commit_and_bake(wt, "test.sh")
@@ -5034,15 +5137,140 @@ class FactoryTest(unittest.TestCase):
             f.baked(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.assertEqual(self.state(tid), ("shipped", "pending"))
-        self.pr_state.write_text("MERGED")
-        Path(f"{self.pr_state}.open").unlink()  # `pr list --state open` finds nothing once it is merged
+        self.merge_on_github()
         events = self.tick()["events"]
-        self.assertTrue(any("merged while the fix round ran" in e for e in events), events)
-        t = self.f_ticket(tid)
-        self.assertTrue(t["stuck"])
-        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertIn(f"{tid}: shipped, the fix round's new commits are kept on its branch", events)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
         self.assertEqual(Path(f"{self.pr_state}.creates").read_text(), "x\n", "no second PR")
-        self.assertIn("Open a PR for them by hand", note.get_section(self.note(tid)[1], "stuck"))
+        last = self.history(tid)[-1]
+        self.assertEqual(last["by"], "github")
+        self.assertIn("open a PR for them by hand", last["why"])
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "its new commits are kept")
+        self.tick()
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "cleanup keeps it too")
+        with self.f() as f:
+            self.assertEqual(f.metrics()[0]["outcome"], "merged")
+            self.assertEqual(f.waiting_on(blocked), [], "its dependents are unblocked")
+
+    def test_pr_merged_while_the_builder_works_stops_it(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.merge_on_github()
+        self.assertIn(f"{tid}: shipped", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        wt = Path(job["worktree"])
+        self.assertTrue(wt.exists(), "the builder is still in it")
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["oompa-loompa-builder"])
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "expected"):
+            f.baked(tid, dispatch=job["dispatch"])
+        msg = self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"])
+        self.assertEqual(msg, f"{tid}: wonka:oompa-loompa-builder ended, the ticket is merged; "
+                              "its worktree is cleaned up next tick")
+        self.tick()
+        self.assertFalse(wt.exists())
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "nothing new on it: deleted")
+
+    def test_pr_merged_while_the_fixer_works_is_recorded_as_merged(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(Path(job["worktree"]), job["base_ref"])
+        self.merge_on_github()
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertNotIn("keep_branch", self.f_ticket(tid), "a fixer's rebased copies are not kept")
+        self.assertEqual(self.f_ticket(tid)["held_by"]["agents"], ["oompa-loompa-fixer"])
+
+    def test_human_merge_unsticks_a_stuck_ship(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "fix.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        with self.f() as f:
+            f.retry(tid, "push rejected", final=True)  # what a rejected push does
+        self.assertTrue(self.f_ticket(tid)["stuck"])
+        sh("git", "push", "-q", "origin", self.f_ticket(tid)["branch"], cwd=self.repo)  # the human pushes, then merges
+        self.merge_on_github()
+        self.assertIn(f"{tid}: shipped", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+        self.assertNotIn("keep_branch", self.f_ticket(tid), "everything reached the PR")
+
+    def test_pr_closed_during_a_fix_round_is_killed_at_once(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.close_pr()
+        self.assertIn(f"{tid}: PR closed", self.tick()["events"])
+        self.assertEqual(self.state(tid), ("wontdo", "ready"))
+
+    def test_fix_round_goes_on_when_github_cannot_be_asked(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.request_changes(tid, "rename it")
+        self.set_gh(FAILING_GH)
+        events = self.tick()["events"]
+        self.assertFalse([e for e in events if e.startswith(tid)], events)
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+
+    # -- ship() never strands a ticket in shipped/progress -------------------
+
+    def shipping(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        return tid
+
+    def test_gh_printing_no_url_is_retried(self):
+        tid = self.shipping()
+        self.set_gh(FAKE_GH.replace('echo "https://github.com/acme/app/pull/7" ;;', ';;'))
+        events = self.tick()["events"]
+        self.assertIn(f"{tid}: PR failed: gh pr create printed no PR URL; back in the queue", events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.set_gh(FAKE_GH)
+        Path(f"{self.pr_state}.list").write_text(json.dumps([{"url": "https://github.com/acme/app/pull/7",
+                                                              "body": f"<!-- wonka:{tid} -->\n\nAdd hello.sh"}]))
+        self.tick()  # the PR was opened: found by its marker, not opened twice
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text(), "x\n")
+        self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
+
+    def test_an_unexpected_ship_failure_goes_back_in_the_queue(self):
+        tid = self.shipping()
+        real = Factory.set_section
+
+        def broken(f, tid_, key, *a, **kw):
+            if key == "changes":
+                raise IndexError("boom")
+            return real(f, tid_, key, *a, **kw)
+
+        with mock.patch.object(Factory, "set_section", broken):
+            events = self.tick()["events"]
+        self.assertIn(f"{tid}: PR failed: boom; back in the queue", events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertEqual(self.f_ticket(tid)["retries"], 1)
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_ship_failure_is_recovered_even_when_retry_fails(self):
+        tid = self.shipping()
+        with mock.patch.object(Factory, "_own_prs", side_effect=IndexError("boom")), \
+                mock.patch.object(Factory, "retry", side_effect=OSError("disk full")):
+            events = self.tick()["events"]
+        self.assertIn(f"{tid}: PR failed: boom; back in the queue", events)
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
 
     # -- limits on work nobody asked for ----------------------------------
 
@@ -5503,6 +5731,61 @@ class FactoryTest(unittest.TestCase):
     def f_path(self, tid):
         with self.f() as f:
             return f.path(tid)
+
+    # -- a fixer that stopped after its rebase ------------------------------
+
+    def test_fixer_that_stops_after_rebasing_is_reset_and_called_again(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        pr_head = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.rebase_onto(wt, job["base_ref"])  # the rebase is done, then the tests stay busy: the fixer stops
+        rebased = sh("git", "rev-parse", "HEAD", cwd=wt)
+        out = self.finished(tid, "wonka:oompa-loompa-fixer", job["dispatch"])
+        self.assertIn("left no result, back in the queue", out)
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), pr_head, "back where the PR is")
+        self.assertEqual(sh("git", "symbolic-ref", "--short", "HEAD", cwd=wt), branch)
+        refs = sh("git", "for-each-ref", "--format=%(objectname)", f"refs/wonka/rebased/{tid}", cwd=self.repo)
+        self.assertEqual(refs, rebased, "the fixer's rebase is kept")
+        self.assertTrue(any("is back at" in h.get("why", "") for h in self.history(tid)))
+        self.tick()  # ship() pushes nothing new: no rejected push, no stuck
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        again = self.fixer_job(tid)  # still conflicting: a fixer again, from a clean branch
+        self.assertEqual(again["job"], "conflicts")
+        self.rebase_onto(wt, again["base_ref"])
+        with self.f() as f:
+            f.resolved(tid, dispatch=again["dispatch"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_resolved_checks_the_base_sha_the_fixer_was_given(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.rebase_onto(wt, job["base_ref"])
+        self.upstream_change("other.txt", "later\n")  # another ticket's fetch moves origin/main meanwhile
+        sh("git", "fetch", "-q", "origin", "main", cwd=self.repo)
+        with self.f() as f:
+            f.resolved(tid, dispatch=job["dispatch"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+
+    def test_resolved_accepts_a_rebase_onto_a_newer_base_but_not_an_older_one(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        old = sh("git", "rev-parse", "origin/main", cwd=self.repo)
+        self.upstream_change()
+        job = self.fixer_job(tid)
+        self.assertEqual(self.f_ticket(tid)["merge_sha"], sh("git", "rev-parse", "origin/main", cwd=self.repo))
+        sh("git", "rebase", "-q", old, cwd=wt)  # a no-op: still on the old base
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "is not rebased onto origin/main yet"):
+            f.resolved(tid, dispatch=job["dispatch"])
+        self.upstream_change("other.txt", "later\n")
+        sh("git", "fetch", "-q", "origin", "main", cwd=self.repo)
+        self.rebase_onto(wt, "origin/main")
+        with self.f() as f:
+            f.resolved(tid, dispatch=job["dispatch"])
 
 
 if __name__ == "__main__":

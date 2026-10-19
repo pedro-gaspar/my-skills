@@ -43,6 +43,14 @@ class SpaceListsTest(unittest.TestCase):
         t = "- a\n  ```\n  code\n  ```\n- b"
         self.assertEqual(mdlint.space_lists(t), t)
 
+    def test_lazy_continuation_lines_keep_the_list_whole(self):
+        for t in ["- a\nlazy text\n- b", "Intro:\n\n- a\nlazy\nmore lazy\n- b\n\nAfter", "1. a\nlazy\n2. b",
+                  "- a\nlazy\n  indented\n- b"]:
+            with self.subTest(text=t):
+                self.assertEqual(mdlint.space_lists(t), t)
+        self.assertEqual(mdlint.space_lists("- a\nAfter\n### H\n- b"), "- a\n\nAfter\n### H\n\n- b")
+        self.assertEqual(mdlint.space_lists("- a\nAfter\n\n- b"), "- a\n\nAfter\n\n- b")
+
     def test_already_correct_markdown_is_unchanged(self):
         for t in SAMPLES:
             with self.subTest(text=t):
@@ -176,9 +184,27 @@ class MdlintTest(unittest.TestCase):
         with mock.patch.object(mdlint, "TIMEOUT", 0.1):
             self.assertEqual(mdlint.guard(text), text)
 
-    def test_exit_1_without_output_still_isolates(self):
+    def test_exit_1_without_a_rule_is_a_linter_failure(self):
         self.linter("exit 1\n")
-        self.assertIn("> - markdownlint failed without details", mdlint.guard("x"))
+        self.assertEqual(mdlint.guard("x"), "x")
+        self.assertIn("markdownlint skipped: exit code 1", (self.tmp / "home" / "factory.log").read_text())
+
+    def test_npm_errors_leave_the_section_unchecked(self):
+        for err in ("npm error code ECONNREFUSED\nnpm error errno ECONNREFUSED",
+                    "npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/markdownlint-cli",
+                    "npm error code EACCES\nnpm error Your cache folder contains root-owned files"):
+            with self.subTest(err=err):
+                self.linter(f"cat > /dev/null\nprintf '%s\\n' '{err}' >&2\nexit 1\n")
+                self.assertEqual(mdlint.guard("Some text"), "Some text")
+                self.assertIn(f"markdownlint skipped: {err.splitlines()[0]}",
+                              (self.tmp / "home" / "factory.log").read_text())
+
+    def test_only_rule_lines_are_listed(self):
+        self.linter(f'echo "npm warn exec The following package was not found and will be installed" >&2\n'
+                    f'echo "{MD041}" >&2\nexit 1\n')
+        out = mdlint.guard("Some text")
+        self.assertIn("> - line 1: MD041/first-line-heading", out)
+        self.assertNotIn("npm warn", out)
 
     def test_long_problem_lists_are_cut(self):
         n = mdlint.MAX_SHOWN + 3
