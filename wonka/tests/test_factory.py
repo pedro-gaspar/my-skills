@@ -1949,6 +1949,22 @@ class FactoryTest(unittest.TestCase):
         r = self.tick()
         self.assertEqual(self.jobs_for(r, t), [])
 
+    def test_blocked_baking_pending_ticket_is_held(self):
+        # legacy data: blocked_by set before block() refused tickets past Planned
+        a, t = self.add(), self.add()
+        self.to_planned(t)
+        with self.f() as f:
+            f.move(t, ("baking", "pending"), "wonka")
+            f.ticket(t)["blocked_by"] = [a]
+        r = self.tick()
+        self.assertEqual(self.jobs_for(r, t), [])
+        self.assertEqual(self.state(t), ("baking", "pending"))
+        self.assertFalse(self.f_ticket(t).get("job_started_at"))
+        self.merge(a)
+        r = self.tick()
+        self.assertEqual([j["job"] for j in self.jobs_for(r, t)], ["bake"])
+        self.assertEqual(self.state(t), ("baking", "progress"))
+
     def test_blocked_ticket_uses_no_wip_slot(self):
         a = self.add()
         b = self.add(blocked_by=[a])
