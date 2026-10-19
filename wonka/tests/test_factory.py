@@ -3608,6 +3608,41 @@ class FactoryTest(unittest.TestCase):
             f.ensure_worktree(tid)
         self.assertEqual(copy.read_text(), "SECRET=1\n")
 
+    def commit_symlinked_server(self):
+        """Commit server as a symlink to an empty dir outside the repo, keep a real server/.env in the main checkout."""
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (self.repo / ".gitignore").write_text("server/.env\n")
+        (self.repo / "server").symlink_to(outside)
+        sh("git", "add", ".gitignore", "server", cwd=self.repo)
+        sh("git", "commit", "-qm", "server is a symlink", cwd=self.repo)
+        sh("git", "push", "-q", "origin", "main", cwd=self.repo)
+        (self.repo / "server").unlink()  # the main checkout holds a real dir there (an uncommitted typechange)
+        (self.repo / "server").mkdir()
+        (self.repo / "server/.env").write_text("SECRET=1\n")
+        self.cfg["worktree_files"] = {"app": ["server/.env"]}
+        return outside
+
+    def assert_symlink_not_written(self, tid, outside, root):
+        self.assertTrue((Path(root) / "server").is_symlink())
+        self.assertEqual(list(outside.iterdir()), [], "nothing written through the symlink")
+        self.assertTrue(any("server/.env" in str(h) and "does not ignore" in str(h) for h in self.history(tid)))
+
+    def test_symlinked_dir_in_a_worktree_never_receives_a_copy(self):
+        outside = self.commit_symlinked_server()
+        tid = self.add()
+        self.to_planned(tid)
+        job = self.tick()["jobs"][0]
+        self.assertEqual(job["job"], "bake")
+        self.assert_symlink_not_written(tid, outside, job["worktree"])
+
+    def test_symlinked_dir_in_the_scout_never_receives_a_copy(self):
+        outside = self.commit_symlinked_server()
+        tid = self.add()
+        job = self.tick()["jobs"][0]
+        self.assertEqual(job["job"], "triage")
+        self.assert_symlink_not_written(tid, outside, job["code"])
+
     def test_failed_archive_keeps_the_ticket_live(self):
         tid = self.add()
         with self.f() as f:
