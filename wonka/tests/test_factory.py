@@ -3257,6 +3257,34 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "rev-parse", branch, cwd=origin), sh("git", "rev-parse", "HEAD", cwd=wt))
         sh("git", "merge-base", "--is-ancestor", suggestion, branch, cwd=origin)
 
+    def test_fully_disputed_round_on_an_open_pr_ships_the_unpushed_fix(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        self.pr_feedback()
+        job = [j for j in self.request_changes(tid, "add a test")["jobs"] if j["id"] == tid][0]
+        wt = Path(job["worktree"])
+        self.commit_and_bake(wt, "test.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["a", "b"]})
+        self.assertEqual([j["job"] for j in self.tick()["jobs"] if j["id"] == tid], ["bake"])
+        origin, head = self.tmp / "origin.git", sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.assertNotEqual(sh("git", "rev-parse", branch, cwd=origin), head, "the fix commit is not pushed yet")
+        with self.f() as f:
+            f.baked(tid, disputes=["a :: r1", "b :: r2"])
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), head, "the disputed round adds no commit")
+        self.review(tid, architect={"verdict": "good nut"})
+        events = self.tick()["events"]
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertIn(f"{tid}: PR updated https://github.com/acme/app/pull/7", events)
+        self.assertTrue(self.history(tid)[-1]["why"].startswith(
+            "PR updated with the requested changes, review and merge it: "))
+        self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "the open PR is reused")
+        t = self.f_ticket(tid)
+        self.assertNotIn("retries", t)
+        self.assertFalse(t.get("stuck"))
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=origin), head, "the push carried the fix commit")
+
     def test_rejected_push_is_stuck_at_once_with_a_reason(self):
         tid = self.add()
         _, branch = self.to_awaiting_merge(tid)
