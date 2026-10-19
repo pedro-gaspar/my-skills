@@ -128,6 +128,11 @@ the holder. The exit code is the command's. `wonka config` and `wonka doctor` wa
 program or code to the caller (a shell, interpreter or launcher with nothing pinned after it, like `python3 -c`,
 `sh -c`, `bash`, `env`, `npx`), since it allows any command outside the sandbox.
 
+Every job JSON carries the project's `test_commands` (`[]` when none). The analyst, builder, fixer and squirrels run a
+test command that starts with one of them through `wonka test <id> --dispatch <n> -- <command>` with a 10-minute Bash
+timeout, run it again on exit 75 (up to 5 tries), and run anything else as before. So two tickets of one project never
+run its tests at the same time.
+
 Phases: 🕰️-Pending · 🙋-Awaiting-Human · 🎩-In-Progress · 🌟-Ready. Finished tickets (Shipped or Wont-Do) and their plans move to
 `wonka/archive/` after 7 days. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) are
 migrated automatically on the next tick.

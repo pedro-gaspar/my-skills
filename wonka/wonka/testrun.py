@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from . import gitwrap, store
-from .factory import Factory
+from .factory import Factory, test_prefixes
 from .store import WonkaError
 
 USAGE = "usage: wonka test <id> [--dispatch <n>] -- <command> [args...]"
@@ -27,10 +27,6 @@ def _parse(argv):
     if rest[:1] != ["--"] or len(rest) < 2:
         raise WonkaError(USAGE)
     return tid, dispatch, rest[1:]
-
-
-def prefixes(cfg, project):
-    return (cfg.get("test_commands") or {}).get(project, [])
 
 
 # Programs that run whatever code or program they are given.
@@ -134,7 +130,7 @@ def main(argv):
     f = Factory(cfg, store.snapshot())
     t = f.ticket(tid)
     project = t["project"]
-    check(cmd, prefixes(cfg, project), project)
+    check(cmd, test_prefixes(cfg, project), project)
     path = gitwrap.target(t, f.state(tid), "status")
     if Path(path).resolve() == Path(t["repo"]).resolve():
         raise WonkaError(f"no worktree or scout for {tid}: wonka test only runs in a ticket's worktree or scout")

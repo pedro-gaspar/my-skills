@@ -381,6 +381,24 @@ class FactoryTest(unittest.TestCase):
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         self.assertIsNone(job["pr_template"])
 
+    def test_jobs_carry_the_projects_test_commands(self):
+        self.cfg["test_commands"] = {"app": ["./test.sh", "make test"], "other": ["x"]}
+        tid = self.add()
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["test_commands"], ["./test.sh", "make test"])
+        self.to_planned(tid)
+        bake = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(bake["test_commands"], ["./test.sh", "make test"])
+
+    def test_jobs_carry_no_test_commands_without_config(self):
+        tid = self.add()
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        self.assertEqual(job["test_commands"], [])
+        self.cfg["test_commands"] = {"other": ["./t.sh"]}
+        self.assertEqual(factory.test_prefixes(self.cfg, "app"), [])
+        self.assertEqual(factory.test_prefixes({"test_commands": None}, "p"), [])
+        self.assertEqual(factory.test_prefixes({"test_commands": {"p": ["./t.sh"]}}, "p"), ["./t.sh"])
+
     def test_pr_body_is_archived_with_the_plan(self):
         tid = self.ship_with_template()
         self.pr_state.write_text("MERGED")
