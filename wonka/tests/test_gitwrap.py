@@ -18,7 +18,7 @@ from wonka.gitwrap import _parse, check, command, env, target
 from wonka.store import WonkaError
 
 from . import GIT_CONFIG, GIT_HOME, REAL_PASSWD_HOME
-from .fixtures import RepoFixture, sh
+from .fixtures import RepoFixture, quiet_output, sh
 
 
 class CheckTest(unittest.TestCase):
@@ -187,9 +187,10 @@ class WrapperTest(RepoFixture, unittest.TestCase):
     """wonka git end to end against the RepoFixture repo."""
 
     def git(self, *argv):
-        """cli.main(["git", ...]) with stderr captured: (exit code, stderr)."""
+        """cli.main(["git", ...]) with stderr captured: (exit code, stderr). git's own output goes to the real fds 1
+        and 2, not sys.stdout/stderr, so it is silenced at the fd level."""
         err = io.StringIO()
-        with contextlib.redirect_stderr(err):
+        with contextlib.redirect_stderr(err), quiet_output():
             code = cli.main(["git", *argv])
         return code, err.getvalue()
 
