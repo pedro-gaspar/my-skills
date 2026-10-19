@@ -1253,8 +1253,9 @@ class Factory:
         return held["agents"]
 
     def drop_branch(self, tid, quiet=False):
-        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone.
-        Returns whether the branch is gone; a kept one flags the ticket for cleanup."""
+        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone, and only when
+        everything on it was pushed: a branch with local commits the PR never got is kept (keep_branch) and logged.
+        Returns whether Wonka is done with the branch; one it could not delete flags the ticket for cleanup."""
         t = self.ticket(tid)
         if not t.get("branch") or t.get("keep_branch"):  # keep_branch: it holds commits the merged PR never got
             return True
@@ -1262,6 +1263,11 @@ class Factory:
             t["cleanup"] = True  # the worktree was kept (it still has the branch checked out)
             return False
         if not Path(t["repo"]).is_dir() or not _ref_exists(t["repo"], f"refs/heads/{t['branch']}"):
+            return True
+        if self._unpushed(tid):  # -D would lose them: commits made after the last push (or it cannot be told)
+            t["keep_branch"] = True
+            self.log_event(tid, f"Branch kept: {t['branch']} has commits that were never pushed to the PR. Open a PR "
+                                "for them by hand, or delete the branch yourself")
             return True
         try:
             git("branch", "-D", t["branch"], cwd=t["repo"])
@@ -1287,6 +1293,7 @@ class Factory:
                       and _ref_exists(t["repo"], f"refs/heads/{t['branch']}"))
         if s == ("shipped", "ready") and not self.drop_branch(tid, quiet=True):
             return None
+        had_branch = had_branch and not t.get("keep_branch")  # kept just now: it has commits that were never pushed
         t.pop("cleanup", None)
         if not had_wt and not had_branch:
             return None  # nothing was left after all

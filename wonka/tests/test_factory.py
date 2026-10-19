@@ -2382,6 +2382,38 @@ class FactoryTest(unittest.TestCase):
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         self.assertTrue(any(h.get("why", "").startswith("Branch kept") for h in self.history(tid)))
 
+    def test_merge_keeps_a_branch_with_commits_never_pushed(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        (wt / "later.sh").write_text("echo later\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "made by hand after the last push", cwd=wt)
+        local = sh("git", "rev-parse", branch, cwd=self.repo)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertFalse(wt.exists(), "the worktree is clean: it goes")
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.repo), local, "the local commit is never lost")
+        self.assertTrue(self.f_ticket(tid)["keep_branch"])
+        self.assertNotIn("cleanup", self.f_ticket(tid))
+        self.assertEqual(self.whys(tid, "Branch kept"), 1)
+        self.tick()
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.repo), local)
+        self.assertEqual(self.whys(tid, "Branch kept"), 1, "logged once")
+
+    def test_cleanup_keeps_a_branch_with_commits_never_pushed(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        (wt / "scratch.txt").unlink()
+        (wt / "later.sh").write_text("echo later\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "made by hand after the merge", cwd=wt)
+        events = self.tick()["events"]
+        self.assertFalse(wt.exists())
+        self.assertIn(f"{tid}: cleaned up the kept worktree", events)
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "its local commit is kept")
+        self.assertTrue(self.f_ticket(tid)["keep_branch"])
+
     # -- cleanup of what done tickets kept ---------------------------------
 
     def whys(self, tid, prefix):
