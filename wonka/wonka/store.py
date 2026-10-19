@@ -36,6 +36,8 @@ SETTINGS = {  # wonka config <key> <value>
     "max_review_rounds": int, "max_followup_depth": int,
     "test_lock_wait_minutes": float,
 }
+CI_LOG_OPEN_WARNING = ("lets an agent run any program outside the sandbox through wonka ci-logs; "
+                       "pin it to the log tool (e.g. beyond ci logs)")
 LOCK_TIMEOUT = 600  # seconds a command waits for the state lock before giving up
 
 
@@ -120,8 +122,7 @@ def set_setting(cfg, key, raw):
         if value:
             from .testrun import open_prefix  # lazily: testrun imports store
             if open_prefix(value):
-                raise WonkaError(f"{value} lets an agent run any program outside the sandbox through "
-                                 "wonka ci-logs; pin it to the log tool (e.g. beyond ci logs)")
+                raise WonkaError(f"{value} {CI_LOG_OPEN_WARNING}")
         cur = dict(cfg.get("ci_log_command") or {})
         if value:
             cur[project] = value

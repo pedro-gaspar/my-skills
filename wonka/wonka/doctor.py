@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import note, store, testrun
+from . import cilogs, note, store, testrun
 from .factory import notifier
 
 SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
@@ -158,7 +158,13 @@ def _ci_log_checks(cfg, allow):
             clean = False
             yield "warn", (f"ci_log_command.{p} needs ci_hosts.{p} (and the reverse): "
                            "wonka ci-logs refuses until both are set")
-    bypass = [r for r in allow for c in cmds.values()
+    for p in sorted(cmds):
+        problem = cmds[p] and cilogs.command_problem(cmds[p])
+        if problem:
+            clean = False
+            yield "warn", (f"ci_log_command.{p} {problem}; wonka ci-logs refuses to run it until a human sets it "
+                           f"with wonka config ci_log_command.{p} <command>")
+    bypass = [r for r in allow for c in cmds.values() if isinstance(c, str)
               if r.startswith(f"Bash({c}") and r[len(f"Bash({c}"):][:1] in (" ", ":", ")")]
     if bypass:
         clean = False

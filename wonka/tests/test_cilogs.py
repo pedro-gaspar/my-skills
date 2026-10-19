@@ -67,6 +67,30 @@ class RunTest(RepoFixture, unittest.TestCase):
         self.assertTrue((wt / "args.txt").read_text().endswith(" " + self.URL))
         self.assertFalse((self.repo / "args.txt").exists())
 
+    def test_open_command_is_refused(self):
+        tid = self.add()
+        self.to_baking(tid)
+        for cmd in ("bash", "sh -c", "env", "python3 -c", "env FOO=1 bash"):
+            with self.subTest(cmd=cmd):
+                store.save_config({**self.cfg, "ci_log_command": {"app": cmd}})
+                with mock.patch("wonka.cilogs.subprocess.run") as run:
+                    code, err = self.run_logs(tid, self.URL)
+                self.assertEqual(code, 1)
+                self.assertIn("outside the sandbox", err)
+                run.assert_not_called()
+
+    def test_non_string_and_unparseable_commands_are_refused(self):
+        tid = self.add()
+        self.to_baking(tid)
+        for cmd in (123, ["beyond"], '"oops'):
+            with self.subTest(cmd=cmd):
+                store.save_config({**self.cfg, "ci_log_command": {"app": cmd}})
+                with mock.patch("wonka.cilogs.subprocess.run") as run:
+                    code, err = self.run_logs(tid, self.URL)
+                self.assertEqual(code, 1)
+                self.assertNotIn("Traceback", err)
+                run.assert_not_called()
+
     def test_disallowed_url_never_runs(self):
         tid = self.add()
         self.to_baking(tid)
