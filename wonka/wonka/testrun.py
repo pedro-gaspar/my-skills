@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -151,7 +152,28 @@ def check(argv, allowed, project):
 
 
 def lock_path(project):
-    return store.home() / "locks" / f"{project}-tests.lock"
+    """In the worktrees folder, never elsewhere in ~/.wonka: wonka test must be able to run inside the sandbox, which
+    can write only there, so the test command it starts is confined too."""
+    return store.test_locks_dir() / f"{project}-tests.lock"
+
+
+def _open_lock(path):
+    """The lock file for reading and writing, created if missing and never truncated (that would wipe the current
+    holder's info before we even try to lock). Sandboxed test code can write the locks folder, so a symlink or hard
+    link planted there is refused: a wonka test run outside the sandbox must never write through it into another file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    refusal = WonkaError(f"{path} is not a plain lock file: delete it and run again")
+    if path.parent.is_symlink():
+        raise refusal
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:  # ELOOP for a symlink
+        raise refusal
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        os.close(fd)
+        raise refusal
+    return os.fdopen(fd, "r+")
 
 
 def _holder(fh):
@@ -197,12 +219,10 @@ def main(argv):
     path = gitwrap.target(t, f.state(tid), "status")
     if Path(path).resolve() == Path(t["repo"]).resolve():
         raise WonkaError(f"no worktree or scout for {tid}: wonka test only runs in a ticket's worktree or scout")
-    lp = lock_path(project)
-    lp.parent.mkdir(parents=True, exist_ok=True)
-    with open(lp, "a+") as fh:  # never "w": that would wipe the current holder's info before we even try to lock
+    with _open_lock(lock_path(project)) as fh:
         if not acquire(fh, float(cfg["test_lock_wait_minutes"]) * 60):
             msg = _busy_message(_holder(fh))
-            store.log(f"test {tid}: {msg}")
+            store.try_log(f"test {tid}: {msg}")  # inside the sandbox ~/.wonka is read-only: no log line then
             print(f"🗑️ wonka: {msg}", file=sys.stderr)
             return EX_TEMPFAIL
         fh.seek(0)

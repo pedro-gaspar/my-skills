@@ -201,6 +201,59 @@ class RunTest(RepoFixture, unittest.TestCase):
             fcntl.flock(held, fcntl.LOCK_EX)
             self.assertEqual(self.wtest(tid, "--", *self.py, "import sys; sys.exit(5)")[0], 5)
 
+    def test_lock_lives_in_the_worktrees_folder(self):
+        """The sandbox may write the worktrees folder only, never the rest of ~/.wonka."""
+        self.assertEqual(testrun.lock_path("app"), store.worktrees_dir() / ".locks" / "app-tests.lock")
+
+    def test_runs_when_the_wonka_home_is_read_only(self):
+        """As inside the sandbox: only the worktrees folder is writable. A busy lock still exits 75, unlogged."""
+        tid = self.add()
+        wt = self.to_baking(tid)
+        home, log = store.home(), store.home() / "factory.log"
+        log.touch()
+        for path, mode in ((home, 0o555), (log, 0o444)):
+            path.chmod(mode)
+            self.addCleanup(path.chmod, 0o755)
+        code, _ = self.wtest(tid, "--", *self.py, "open('ran.txt','w')")
+        self.assertEqual(code, 0)
+        self.assertTrue((wt / "ran.txt").exists())
+        with open(testrun.lock_path("app")) as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            code, err = self.wtest(tid, "--", *self.py, "pass")
+        self.assertEqual(code, 75)
+        self.assertIn("tests busy", err)
+        code, err = self.wtest("WONKA-00099", "--", "./t.sh")  # an error is reported, its log line skipped
+        self.assertEqual(code, 1)
+        self.assertIn("No ticket WONKA-00099", err)
+        self.assertNotIn("WONKA-00099", log.read_text())
+
+    def test_planted_links_in_the_locks_folder_are_refused(self):
+        """Sandboxed test code can write the locks folder: wonka test never writes through a link it planted there."""
+        tid = self.add()
+        self.to_baking(tid)
+        victim = self.tmp / "victim.txt"
+        lp = testrun.lock_path("app")
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        for plant in (lambda: lp.symlink_to(victim), lambda: lp.hardlink_to(victim)):
+            victim.write_text("keep me")
+            lp.unlink(missing_ok=True)
+            plant()
+            with self.subTest(plant=plant), mock.patch.object(testrun.subprocess, "run") as run:
+                code, err = self.wtest(tid, "--", "./t.sh")
+            self.assertEqual(code, 1)
+            self.assertIn("not a plain lock file", err)
+            run.assert_not_called()
+            self.assertEqual(victim.read_text(), "keep me")
+        lp.unlink()
+        lp.parent.rmdir()
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        lp.parent.symlink_to(elsewhere)
+        code, err = self.wtest(tid, "--", "./t.sh")
+        self.assertEqual(code, 1)
+        self.assertIn("not a plain lock file", err)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
     def test_signal_exit_maps_to_128_plus_n(self):
         tid = self.add()
         self.to_baking(tid)

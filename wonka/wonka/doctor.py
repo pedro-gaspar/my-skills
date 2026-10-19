@@ -28,12 +28,8 @@ def _permissions(paths=None):
     an allow/additionalDirectories that is not a list, and non-string items.
     """
     allow, dirs = [], []
-    for path in paths or SETTINGS:
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        perms = data.get("permissions") if isinstance(data, dict) else None
+    for data in _settings(paths):
+        perms = data.get("permissions")
         if not isinstance(perms, dict):
             continue
         allow += _strings(perms.get("allow"))
@@ -41,18 +37,41 @@ def _permissions(paths=None):
     return allow, dirs
 
 
-def _sandbox_writes(paths=None):
-    """sandbox.filesystem.allowWrite from every settings file that exists (odd shapes skipped)."""
-    writes = []
+def _settings(paths=None):
+    """The JSON object of every settings file that exists, in order; unreadable files and other shapes are skipped."""
     for path in paths or SETTINGS:
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        box = data.get("sandbox") if isinstance(data, dict) else None
-        fs = box.get("filesystem") if isinstance(box, dict) else None
+        if isinstance(data, dict):
+            yield data
+
+
+def _sandbox(data):
+    box = data.get("sandbox")
+    return box if isinstance(box, dict) else {}
+
+
+def _sandbox_writes(paths=None):
+    """sandbox.filesystem.allowWrite from every settings file that exists (odd shapes skipped)."""
+    writes = []
+    for data in _settings(paths):
+        fs = _sandbox(data).get("filesystem")
         writes += _strings(fs.get("allowWrite")) if isinstance(fs, dict) else []
     return writes
+
+
+def _sandbox_mode(paths=None):
+    """(enabled, excludedCommands) from the same settings files: sandbox.enabled from the last file that sets it (a
+    later file wins, as in Claude Code), the excluded commands merged (odd shapes skipped)."""
+    enabled, excluded = False, []
+    for data in _settings(paths):
+        box = _sandbox(data)
+        if isinstance(box.get("enabled"), bool):
+            enabled = box["enabled"]
+        excluded += _strings(box.get("excludedCommands"))
+    return enabled, excluded
 
 
 def _strings(value):
@@ -132,6 +151,12 @@ def _worktree_file_checks(cfg, tickets):
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
 AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "baked",
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "tick", "finished", "retry")
+HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor")
+# Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
+# repo's git dir, and talk to GitHub. wonka test needs none of that (its lock is in the worktrees folder), so it stays
+# inside, and the test command it starts, a script the builder can edit, is confined with it.
+SANDBOX_EXCLUDED = tuple(f"wonka {c} *" for c in (*AGENT_COMMANDS, *HUMAN_COMMANDS) if c != "test")
+WIDE_EXCLUSIONS = ("wonka", "wonka *", "wonka:*", "wonka test", "wonka test *", "wonka test:*")
 BROAD = ("Bash(wonka)", "Bash(wonka *)", "Bash(wonka:*)")
 
 
@@ -171,7 +196,35 @@ def sandbox_checks(writes):
     if bad:
         yield "warn", (f"sandbox.filesystem.allowWrite lets sandboxed commands (any test code) edit {home}, "
                        "Wonka's config and state, and so turn off the sandbox for wonka test; remove "
-                       + ", ".join(bad) + " (agents now hand text over with --file, so wonka never runs sandboxed)")
+                       + ", ".join(bad) + " (agents hand text over with --file, and the one wonka command that runs sandboxed, wonka test, "
+                       "writes only the worktrees folder)")
+
+
+def _sandbox_snippet():
+    return json.dumps({"sandbox": {"enabled": True, "allowUnsandboxedCommands": False,
+                                   "excludedCommands": list(SANDBOX_EXCLUDED)}}, indent=2)
+
+
+def sandbox_mode_checks(enabled, excluded):
+    """Yield (level, message) for sandbox.enabled and sandbox.excludedCommands: wonka test must run inside the
+    sandbox (so the test command is confined to the worktree) and every other wonka command outside it."""
+    if not enabled:
+        yield "warn", ("Claude Code's sandbox is off, so test commands (wonka test) and every agent's shell command run "
+                       "unconfined; turn it on in ~/.claude/settings.json (on Linux it needs bubblewrap and socat):\n"
+                       + _sandbox_snippet())
+        return
+    wide = [e for e in excluded if " ".join(e.split()) in WIDE_EXCLUSIONS]
+    if wide:
+        yield "warn", ("test commands run outside the sandbox: sandbox.excludedCommands lets wonka test, and the test "
+                       "script a builder can edit, run unconfined; replace " + ", ".join(wide)
+                       + " with one entry per command, all but test:\n" + _sandbox_snippet())
+    everything = any(" ".join(e.split()) in ("wonka *", "wonka:*") for e in wide)
+    missing = [e for e in SANDBOX_EXCLUDED if e not in excluded and e[:-2] + ":*" not in excluded]
+    if missing and not everything:
+        yield "warn", ("these wonka commands run inside the sandbox, where they fail (they write Wonka's state and the "
+                       "repo's git dir); add them to sandbox.excludedCommands: " + ", ".join(missing))
+    if not wide and not missing:
+        yield "ok", "sandbox on: wonka test runs inside it (test commands are confined), every other wonka command outside"
 
 
 def _notifier_checks():
@@ -278,6 +331,7 @@ def checks():
     yield from _ci_log_checks(cfg, allow)
     yield from permission_checks(allow, dirs, [str(store.worktrees_dir()), str(board)])
     yield from sandbox_checks(_sandbox_writes())
+    yield from sandbox_mode_checks(*_sandbox_mode())
 
 
 def doctor():

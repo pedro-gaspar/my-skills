@@ -277,6 +277,12 @@ def worktrees_dir():
     return home() / "worktrees"
 
 
+def test_locks_dir():
+    """Where `wonka test` keeps its per-project locks: inside the worktrees folder, which sandboxed commands may write,
+    so `wonka test` can run inside the sandbox and confine the test command it starts."""
+    return worktrees_dir() / ".locks"
+
+
 def drafts_dir():
     """Where agents put the markdown they hand to `wonka plan|section|pr-body --file`: inside the worktrees folder,
     which sandboxed commands may write, unlike the rest of ~/.wonka (config and state)."""
@@ -291,6 +297,13 @@ def log(*lines):
     stamp = datetime.datetime.now().isoformat(timespec="seconds")
     with open(home() / "factory.log", "a") as fh:
         fh.writelines(f"{stamp} {line}\n" for line in lines)
+
+
+def try_log(*lines):
+    """log, skipped silently when ~/.wonka is not writable: `wonka test` runs inside the sandbox, which never may write
+    there (it holds the config and the state)."""
+    with contextlib.suppress(OSError):
+        log(*lines)
 
 
 def _load(text):

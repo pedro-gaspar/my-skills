@@ -548,9 +548,13 @@ class CliTest(unittest.TestCase):
         readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
         self.assertLess(readme.index("## Sandbox boundary"), readme.index("\n## Use"))
         section = readme.split("## Sandbox boundary", 1)[1].split("\n## ", 1)[0]
-        for text in ["not a sandbox", "--repo", "/sandbox", '"wonka *"', "allowUnsandboxedCommands", "allowWrite",
-                     "denyRead"]:
+        for text in ["not a sandbox", "--repo", "/sandbox", "allowUnsandboxedCommands", "allowWrite",
+                     "denyRead", "allowedDomains"]:
             self.assertIn(text, section)
+        # the settings exclude every wonka command but test, as the doctor recommends
+        from wonka import doctor
+        settings = json.loads(section.split("```json", 1)[1].split("```", 1)[0])
+        self.assertEqual(settings["sandbox"]["excludedCommands"], list(doctor.SANDBOX_EXCLUDED))
 
     def test_readme_documents_the_ci_state_fields(self):
         readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()

@@ -170,6 +170,60 @@ class SandboxChecksTest(unittest.TestCase):
             self.assertEqual(doctor._sandbox_writes([a, b, c, Path(d, "missing.json")]), ["~/.wonka"])
 
 
+class SandboxModeTest(unittest.TestCase):
+    """wonka test runs inside Claude Code's sandbox, so the test command is confined; every other command outside."""
+    RIGHT = list(doctor.SANDBOX_EXCLUDED)
+
+    def levels(self, enabled, excluded):
+        return [lv for lv, _ in doctor.sandbox_mode_checks(enabled, excluded)]
+
+    def test_every_command_but_test_is_excluded(self):
+        from wonka import cli
+        subs = next(a for a in cli.parser()._actions if a.dest == "cmd").choices
+        self.assertEqual(sorted({*doctor.AGENT_COMMANDS, *doctor.HUMAN_COMMANDS}), sorted(subs))
+        self.assertEqual(sorted(self.RIGHT), sorted(f"wonka {c} *" for c in subs if c != "test"))
+
+    def test_recommended_settings_are_ok(self):
+        self.assertEqual(self.levels(True, self.RIGHT), ["ok"])
+        self.assertEqual(self.levels(True, [e[:-2] + ":*" for e in self.RIGHT]), ["ok"])
+
+    def test_sandbox_off_warns_with_the_settings(self):
+        (level, msg), = doctor.sandbox_mode_checks(False, self.RIGHT)
+        self.assertEqual(level, "warn")
+        self.assertIn("sandbox is off", msg)
+        box = json.loads(msg.split("\n", 1)[1])["sandbox"]
+        self.assertEqual(box["excludedCommands"], self.RIGHT)
+        self.assertNotIn("wonka test *", box["excludedCommands"])
+
+    def test_excluding_wonka_test_warns(self):
+        for wide in ("wonka *", "wonka:*", "wonka  *", "wonka test *", "wonka test:*", "wonka"):
+            with self.subTest(wide=wide):
+                result = list(doctor.sandbox_mode_checks(True, self.RIGHT + [wide]))
+                self.assertEqual([lv for lv, _ in result], ["warn"])
+                self.assertIn("test commands run outside the sandbox", result[0][1])
+                self.assertIn(wide, result[0][1])
+        # wonka * alone covers the others, so only the test warning
+        self.assertEqual(self.levels(True, ["wonka *"]), ["warn"])
+
+    def test_missing_exclusions_warn(self):
+        result = list(doctor.sandbox_mode_checks(True, self.RIGHT[1:]))
+        self.assertEqual([lv for lv, _ in result], ["warn"])
+        self.assertIn(self.RIGHT[0], result[0][1])
+        self.assertEqual(self.levels(True, []), ["warn"])
+
+    def test_reads_enabled_and_exclusions_from_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b, c = Path(d, "a.json"), Path(d, "b.json"), Path(d, "c.json")
+            a.write_text(json.dumps({"sandbox": {"enabled": True, "excludedCommands": ["wonka git *", 3]}}))
+            b.write_text(json.dumps({"sandbox": {"enabled": "yes", "excludedCommands": "wonka *"}}))
+            c.write_text(json.dumps({"sandbox": {"excludedCommands": ["wonka tick *"]}}))
+            self.assertEqual(doctor._sandbox_mode([a, b, c, Path(d, "missing.json")]),
+                             (True, ["wonka git *", "wonka tick *"]))
+            c.write_text(json.dumps({"sandbox": {"enabled": False}}))
+            self.assertEqual(doctor._sandbox_mode([a, c]), (False, ["wonka git *"]))
+            self.assertEqual(doctor._sandbox_mode([Path(d, "missing.json")]), (False, []))
+
+
 class OkTest(unittest.TestCase):
     def test_a_timeout_is_not_ok(self):
         with mock.patch.object(doctor.subprocess, "run", side_effect=doctor.subprocess.TimeoutExpired("gh", 30)):

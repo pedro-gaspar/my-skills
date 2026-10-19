@@ -412,7 +412,7 @@ def main(argv=None):
             run_main = importlib.import_module(f".{PASSTHROUGH[argv[0]]}", __package__).main
             return run_main(argv[1:])
         except WonkaError as e:
-            store.log(f"{argv[0]} {' '.join(argv[1:3])}: {e}")
+            store.try_log(f"{argv[0]} {' '.join(argv[1:3])}: {e}")  # wonka test runs sandboxed, ~/.wonka read-only
             print(f"🗑️ wonka: {e}", file=sys.stderr)
             if isinstance(e, store.CriticalError):
                 alert(str(e))
