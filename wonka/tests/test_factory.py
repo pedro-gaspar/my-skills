@@ -1094,6 +1094,121 @@ class FactoryTest(unittest.TestCase):
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         self.assertTrue(any(h.get("why", "").startswith("Branch kept") for h in self.history(tid)))
 
+    # -- cleanup of what done tickets kept ---------------------------------
+
+    def whys(self, tid, prefix):
+        return sum(1 for h in self.history(tid) if h.get("why", "").startswith(prefix))
+
+    def kept_after(self, tid, pr):
+        """Open the PR, dirty the worktree, then let the PR close as `pr`: the worktree (and branch) are kept."""
+        wt, branch = self.to_awaiting_merge(tid)
+        (wt / "scratch.txt").write_text("wip\n")
+        self.pr_state.write_text(pr)
+        self.tick()
+        self.assertTrue(wt.exists())
+        return wt, branch
+
+    def test_kept_worktree_and_branch_are_cleaned_once_clean(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        self.assertEqual(self.state(tid), ("shipped", "done"))
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        with self.f() as f:
+            self.assertTrue(f.ticket(tid).get("cleanup"))
+        kept = self.whys(tid, "Worktree kept")
+        self.assertEqual(kept, 1)
+
+        self.tick()  # still dirty: kept, and quiet about it
+        self.assertTrue(wt.exists())
+        self.assertEqual(self.whys(tid, "Worktree kept"), kept)
+        self.assertEqual(self.whys(tid, "Cleaned up"), 0)
+
+        (wt / "scratch.txt").unlink()
+        events = self.tick()["events"]
+        self.assertFalse(wt.exists())
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        with self.f() as f:
+            t = f.ticket(tid)
+            self.assertIsNone(t["worktree"])
+            self.assertNotIn("cleanup", t)
+        self.assertEqual(self.whys(tid, "Cleaned up"), 1)
+        self.assertIn(f"{tid}: cleaned up the kept worktree and branch", events)
+
+        self.tick()
+        self.assertEqual(self.whys(tid, "Cleaned up"), 1)
+
+    def test_kept_worktree_deleted_by_hand_is_forgotten(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        sh("git", "worktree", "remove", "--force", str(wt), cwd=self.repo)
+        self.tick()
+        with self.f() as f:
+            self.assertIsNone(f.ticket(tid)["worktree"])
+            self.assertNotIn("cleanup", f.ticket(tid))
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+
+    def test_killed_ticket_kept_worktree_cleanup_keeps_branch(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "CLOSED")
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        (wt / "scratch.txt").unlink()
+        events = self.tick()["events"]
+        self.assertFalse(wt.exists())
+        self.assertIn(f"{tid}: cleaned up the kept worktree", events)
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "a closed PR keeps its branch")
+
+    def test_branch_delete_retried(self):
+        tid = self.add()
+        _, branch = self.to_awaiting_merge(tid)
+        real_git = factory.git
+
+        def fake(*args, cwd):
+            if args[:2] == ("branch", "-D"):
+                raise WonkaError("boom")
+            return real_git(*args, cwd=cwd)
+
+        self.pr_state.write_text("MERGED")
+        with mock.patch.object(factory, "git", fake):
+            self.tick()
+            self.tick()  # retry fails quietly
+        self.assertEqual(self.whys(tid, "Branch kept"), 1)
+        with self.f() as f:
+            self.assertTrue(f.ticket(tid).get("cleanup"))
+        events = self.tick()["events"]
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+        self.assertIn(f"{tid}: cleaned up the kept branch", events)
+        with self.f() as f:
+            self.assertNotIn("cleanup", f.ticket(tid))
+
+    def test_cleanup_covers_archived_tickets(self):
+        tid = self.add()
+        self.to_ready(tid)
+        job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
+        wt = Path(job["worktree"])
+        (wt / "scratch.txt").write_text("wip\n")
+        with self.f() as f:
+            path = f.path(tid)
+        path.unlink()
+        self.tick()
+        with self.f() as f:
+            self.assertTrue(f.ticket(tid).get("archived"))
+        self.assertTrue(wt.exists())
+        (wt / "scratch.txt").unlink()
+        self.tick()
+        self.assertFalse(wt.exists())
+        with self.f() as f:
+            self.assertIsNone(f.ticket(tid)["worktree"])
+
+    def test_legacy_kept_worktree_without_flag_is_retried(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        with self.f() as f:
+            f.ticket(tid).pop("cleanup")
+        (wt / "scratch.txt").unlink()
+        self.tick()
+        self.assertFalse(wt.exists())
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
+
     # -- notifications ----------------------------------------------------
 
     def notify_env(self, **extra):
