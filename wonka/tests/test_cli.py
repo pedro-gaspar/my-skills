@@ -85,6 +85,14 @@ class CliTest(unittest.TestCase):
         self.assertIn("too small", err)
         self.assertEqual(self.run_cli("config", "max_review_rounds", "x")[0], 1)
 
+    def test_config_shows_factory_folder_and_log(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        _, out, _ = self.run_cli("config")
+        self.assertIn("factory folder", out)
+        self.assertIn(str(self.tmp / "vault" / "wonka"), out)
+        self.assertIn("factory log", out)
+        self.assertIn(str(self.tmp / "home" / "factory.log"), out)
+
     def test_config_worktree_files_round_trip(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         cfg_file = self.tmp / "home/config.json"
@@ -336,6 +344,34 @@ class CliTest(unittest.TestCase):
         root = Path(cli.__file__).resolve().parent.parent
         for doc in sorted((root / "agents").glob("*.md")) + [root / "skills/wonka/SKILL.md"]:
             self.assertNotIn('{"', doc.read_text(), doc.name)
+
+    def test_inspector_doc_is_read_only_opus(self):
+        text = (Path(cli.__file__).resolve().parent.parent / "agents/oompa-loompa-inspector.md").read_text()
+        head, body = text.split("---\n", 2)[1:]
+        self.assertIn("name: oompa-loompa-inspector", head)
+        self.assertIn("model: opus", head)
+        self.assertIn("tools: Read, Grep, Glob, Bash\n", head)
+        for want in ("## Flow", "## Recurring issues", "## Squirrel quality", "## Planning quality",
+                     '"target"', '"repo"', '"file"', '"change"', '"evidence"', "AGENTS.md", "~/.claude/plugins",
+                     "wonka metrics", "gh"):
+            self.assertIn(want, body)
+        self.assertNotIn("wonka add", body)
+        self.assertNotIn("oompa-loompa-inspector", factory.JOB_AGENTS)
+
+    def test_skill_documents_retro(self):
+        text = (Path(cli.__file__).resolve().parent.parent / "skills/wonka/SKILL.md").read_text()
+        section = text.split("## retro", 1)[1].split("\n## ", 1)[0]
+        for want in ("wonka metrics --since", "wonka:oompa-loompa-inspector", "AskUserQuestion",
+                     "wonka add --repo", "--triage", "~/.claude/plugins"):
+            self.assertIn(want, section)
+        self.assertNotIn("run_in_background: true", section)
+        hint = next(l for l in text.splitlines() if l.startswith("argument-hint"))
+        self.assertIn("retro", hint)
+
+    def test_readme_documents_retro(self):
+        text = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
+        self.assertIn("/wonka retro", text)
+        self.assertIn("oompa-loompa-inspector", text)
 
     def test_suite_is_discoverable_by_path(self):
         """Squirrels run tests path-only (no cd), so discovery from the package dir must find them."""

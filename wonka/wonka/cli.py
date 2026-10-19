@@ -70,7 +70,9 @@ def show_config(cfg):
           f"🌱 follow-up depth  : {cfg['max_followup_depth']}\n"
           f"📄 worktree files   : {files}\n"
           f"🧪 test commands    : {tests}\n"
-          f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes")
+          f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
+          f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
+          f"📜 factory log      : {store.home() / 'factory.log'}")
 
 
 def cmd_config(a):
