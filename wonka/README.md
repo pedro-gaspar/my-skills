@@ -18,7 +18,11 @@ claude plugin install wonka@my-skills
 Then run `/wonka init`. It asks for your vault and how many tickets to draft and bake at once. It writes
 `~/.wonka/config.json`, creates `<vault>/wonka/{golden-tickets,plans,archive}` and `Wonka.base`, links `wonka` into
 `~/.local/bin`, and runs `wonka doctor`. The doctor prints the permission snippet that lets background agents run
-unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders as `additionalDirectories`).
+unattended (`Bash(wonka *)`, plus the worktree and board folders as `additionalDirectories`). Agents run git only
+through `wonka git <id> <subcommand>`, which pins it to the ticket's worktree and that worktree's registered git dir
+(a rewritten `.git` file is ignored) and allows only status, diff, log, show, rev-parse, ls-files, blame, add and
+commit (plus the fixer's `merge --no-edit <ref>` and `merge --abort`; no `-c`, config, push or options that run
+programs), so no git permission rule is needed; the doctor warns if an old `Bash(git *)` rule is still there.
 
 ## Use
 
@@ -29,6 +33,7 @@ unattended (`Bash(wonka *)`, `Bash(git *)`, plus the worktree and board folders 
 | `/loop /wonka tick` | keep the factory running |
 | `/wonka status` | one line per ticket |
 | `wonka config [key value]` | show or change settings: `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds` |
+| `wonka git <id> <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka doctor` | check git, gh, npx (markdownlint), board, state, Claude Code permissions and notes with stray ## sections |
 
 ## The floor

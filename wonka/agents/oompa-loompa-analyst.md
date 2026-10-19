@@ -14,7 +14,7 @@ work, so never read it: it is only for `wonka add --repo <repo>`. In the plan, c
 not the absolute `code` path: the builder works in a different worktree.
 
 **Shell rules** (background agents run on a strict allowlist):
-- git: always `git -C <code> ...`, never `cd ... && git ...` (that is blocked).
+- git: only as `wonka git <id> <subcommand> ...` (it runs in `code`), read-only: status, diff, log, show, rev-parse, ls-files, blame. Plain `git` is blocked.
 - tests and tools: one command per call, as `cd <code> && <command>`.
 - reading code: use the Read, Grep and Glob tools, not `cat`, `ls` or shell loops.
 - in heredoc text (plan, spec) never write `{` directly followed by `"`: write `{ "` (with a space) instead.

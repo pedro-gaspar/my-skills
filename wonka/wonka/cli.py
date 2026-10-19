@@ -239,10 +239,21 @@ def parser():
     s.add_argument("id")
     sub.add_parser("status", help="one line per live ticket")
     sub.add_parser("doctor", help="check the factory's setup")
+    sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> "
+                               "status|diff|log|show|rev-parse|ls-files|blame|add|commit|merge ...")
     return p
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["git"]:  # by hand: argparse would mangle `--` and the options meant for git
+        try:
+            from .gitwrap import main as git_main
+            return git_main(argv[1:])
+        except WonkaError as e:
+            store.log(f"git {' '.join(argv[1:3])}: {e}")
+            print(f"🫐 wonka: {e}", file=sys.stderr)
+            return 1
     a = parser().parse_args(argv)
     try:
         if a.cmd == "init":
