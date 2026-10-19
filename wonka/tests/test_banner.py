@@ -63,7 +63,15 @@ class BannerTest(unittest.TestCase):
         self.assertIn("Merging origin/main into `wonka/x`", text)
         self.assertIn(banner.QUIPS[("shipped", "progress")], text)
         t["last_valid"]["phase"] = "awaiting"
-        self.assertIn("The PR has merge conflicts", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("The PR has merge conflicts", text)
+        self.assertIn("picks it up on this tick", text)
+        t["conflict_error"] = "try 2/3: boom"
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("[!warning]", text)
+        self.assertIn("could not start", text)
+        self.assertIn("try 2/3: boom", text)
+        t.pop("conflict_error")
         t.pop("conflicts")
         self.assertIn("merge the PR", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 

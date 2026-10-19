@@ -144,6 +144,10 @@ class _PushRejected(WonkaError):
     """git push was rejected as not a fast-forward: retrying cannot help, a human must merge."""
 
 
+class _Diverged(WonkaError):
+    """The local PR branch has commits origin lacks and vice versa: retrying cannot help, a human must merge."""
+
+
 def pr_body(tid, meta, spec):
     ids = [f"🎫 **Golden ticket:** {tid}"]
     if meta.get("jira"):
@@ -246,12 +250,15 @@ class Factory:
             # ship(), killed, merged) starts clean and the next tick re-detects conflicts
             t.pop("conflicts", None)
             t.pop("merge_ref", None)
+        t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
         if dst[1] == "done" and dst[0] in ("shipped", "wontdo"):
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
         if dst in (("shipped", "done"), KILLED):
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
+        if by != "wonka" and t.pop("stuck", None):
+            body = note.drop_section(body, "stuck")  # merged, closed or moved by a human: nothing left to retry
         self.write(tid, meta, body)
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
         if by != "wonka":
@@ -761,7 +768,35 @@ class Factory:
         try:
             git("merge", "--ff-only", "--quiet", f"origin/{branch}", cwd=wt)
         except WonkaError as e:
-            raise WonkaError(f"{branch} has diverged from origin/{branch}: {' '.join(str(e).split())}") from e
+            raise _Diverged(f"{branch} has diverged from origin/{branch}: {' '.join(str(e).split())}") from e
+
+    def _stash_leftovers(self, tid):
+        """Put uncommitted changes and untracked files in the worktree aside (git stash, never lost), so the
+        ff-only sync and the fixer's merge start from a clean tree. Ignored files are left alone."""
+        wt = self.ticket(tid)["worktree"]
+        if not git("status", "--porcelain", cwd=wt):
+            return
+        git("stash", "push", "--include-untracked", "--quiet", "-m",
+            f"wonka: leftovers before fixing conflicts on {tid}", cwd=wt)
+        self.log_event(tid, f"Stashed uncommitted leftovers in {wt} before the conflict fix "
+                            "(git stash list there to get them back)")
+
+    def _fixer_failed_to_start(self, tid, exc):
+        """The fixer could not be dispatched: count it like a retry, stuck after MAX_RETRIES (at once if diverged)."""
+        t = self.ticket(tid)
+        err = " ".join(str(exc).split())
+        err = err if len(err) <= 200 else err[:199] + "…"
+        final = isinstance(exc, _Diverged)
+        why = (f"{t['branch']} has diverged from the PR branch on GitHub. In the worktree {t['worktree']} run "
+               f"git pull --no-rebase origin {t['branch']} and git push origin {t['branch']}, then tick Retry"
+               if final else f"the fixer could not start: {err}")
+        retries, stuck = self._count_failure(tid, why, final=final)
+        tries = f"try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}"
+        t["conflict_error"] = f"{tries}: {err}"
+        self.log_event(tid, f"Fixer could not start ({tries}): {err}")
+        if stuck:
+            return f"{tid}: ⚠️ fixer could not start, stuck: {err}"
+        return f"{tid}: ⚠️ fixer could not start ({tries}), retried next tick: {err}"
 
     def resolved(self, tid):
         """The fixer committed the merge: check it, push the branch (never force) and wait for the human again."""
@@ -855,7 +890,12 @@ class Factory:
                 self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
                 return f"{tid}: PR has merge conflicts"
             if pr == "OPEN" and mergeable == "MERGEABLE" and t.pop("conflicts", None):
-                self.write(tid, meta, body)  # fixed by hand before a fixer ran: drop the banner's warning
+                # fixed by hand before a fixer ran (or while it could not start): drop the warning and the stuck state
+                t.pop("conflict_error", None)
+                t.pop("retries", None)
+                if t.pop("stuck", None):
+                    body = note.drop_section(body, "stuck")
+                self.write(tid, meta, body)
             changes = note.get_section(body, "changes")
             if changes is None:  # a PR opened before change requests existed gets the box too
                 self.set_section(tid, "changes", note.CHANGES_BOX)
@@ -907,14 +947,18 @@ class Factory:
             t["finished"] = []
             self.move(tid, ("reviewing", "progress"), "wonka")
         elif s == ("shipped", "awaiting"):
-            self.ensure_worktree(tid)
-            if _ref_exists(t["worktree"], "MERGE_HEAD"):
-                try:
-                    git("merge", "--abort", cwd=t["worktree"])  # a half-done earlier attempt
-                except WonkaError:
-                    pass
-            self._sync_pr_branch(tid)  # before moving: a failed fetch or a diverged branch is retried next tick
-            base_ref = t["merge_ref"] = self._fetch_pr_base(tid)  # before moving: a failed fetch is retried next tick
+            try:  # all before moving: a failure is counted like a retry and the ticket stays awaiting
+                self.ensure_worktree(tid)
+                if _ref_exists(t["worktree"], "MERGE_HEAD"):
+                    try:
+                        git("merge", "--abort", cwd=t["worktree"])  # a half-done earlier attempt
+                    except WonkaError:
+                        pass
+                self._stash_leftovers(tid)
+                self._sync_pr_branch(tid)
+                base_ref = t["merge_ref"] = self._fetch_pr_base(tid)
+            except (WonkaError, OSError) as e:
+                return self._fixer_failed_to_start(tid, e)
             self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
         code, ref = t["worktree"], base_ref or self.base_ref(tid)
         if job in ("triage", "draft"):
@@ -952,14 +996,26 @@ class Factory:
             self.move(tid, (s[0], "pending"), "wonka",
                       f"Stuck: {why}" if final else f"Retry {retries}/{MAX_RETRIES}: {why}")
         t.pop("job_started_at", None)
-        t["retries"] = retries
-        if retries >= MAX_RETRIES:
-            t["stuck"] = True
-            failed = "" if final else f"{retries} tries failed, the last one: "
-            self.set_section(tid, "stuck", f"- [ ] Retry ({failed}{why}. See ~/.wonka/factory.log)")
-            notify(tid, "stuck: tick Retry when it's fixed")
+        retries, stuck = self._count_failure(tid, why, final=final)
+        if stuck:
             return f"{tid}: stuck, needs a human" if final else f"{tid}: stuck after {retries} tries"
         return f"{tid}: back in the queue"
+
+    def _count_failure(self, tid, why, final=False):
+        """Bump the retry count; at MAX_RETRIES (at once when `final`) mark the ticket stuck with a Retry checkbox.
+        Returns (retries, stuck)."""
+        t = self.ticket(tid)
+        retries = t.get("retries", 0) + 1
+        if final:
+            retries = max(retries, MAX_RETRIES)
+        t["retries"] = retries
+        if retries < MAX_RETRIES:
+            return retries, False
+        t["stuck"] = True
+        failed = "" if final else f"{retries} tries failed, the last one: "
+        self.set_section(tid, "stuck", f"- [ ] Retry ({failed}{why}. See ~/.wonka/factory.log)")
+        notify(tid, "stuck: tick Retry when it's fixed")
+        return retries, True
 
     def finished(self, tid, agent, dispatch=None):
         """An agent finished: retry its job only if it left no result, else do nothing. Says which."""
