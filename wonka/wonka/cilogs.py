@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import gitwrap, store
+from . import gitwrap, store, testrun
 from .factory import Factory
 from .store import WonkaError
 
@@ -42,6 +42,19 @@ def check_url(url, hosts, project):
         raise refusal
 
 
+def command_problem(command):
+    """Why a configured ci_log_command (non-empty) must not run, or None when it is fine."""
+    if not isinstance(command, str):
+        return "is not a string command"
+    try:
+        shlex.split(command)
+    except ValueError as e:
+        return f"is not a valid command prefix ({e})"
+    if testrun.open_prefix(command):
+        return f"is {command!r}, which {store.CI_LOG_OPEN_WARNING}"
+    return None
+
+
 def main(argv):
     """argv is everything after `wonka ci-logs`; returns the log tool's exit code."""
     tid, _dispatch, url = _parse(argv)
@@ -53,12 +66,16 @@ def main(argv):
     if not command:
         raise WonkaError(f'{project} has no CI log command: a human sets it with '
                          f'wonka config ci_log_command.{project} "beyond ci logs"')
+    problem = command_problem(command)
+    if problem:
+        raise WonkaError(f'ci_log_command.{project} {problem}; refusing to run it. '
+                         f'A human fixes it with wonka config ci_log_command.{project} "beyond ci logs"')
     check_url(url, (cfg.get("ci_hosts") or {}).get(project) or [], project)
     path = gitwrap.target(t, f.state(tid), "status")
     if Path(path).resolve() == Path(t["repo"]).resolve():
         raise WonkaError(f"no worktree or scout for {tid}: wonka ci-logs only runs in a ticket's worktree or scout")
     store.log(f"ci-logs {tid}: {url[:200]}")
-    cmd = shlex.split(command) + [url]
+    cmd = shlex.split(command) + [url]  # command_problem already checked it parses
     try:
         rc = subprocess.run(cmd, cwd=path, stdin=subprocess.DEVNULL).returncode
     except FileNotFoundError:

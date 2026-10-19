@@ -68,6 +68,20 @@ class CiLogChecksTest(unittest.TestCase):
         result = list(doctor._ci_log_checks(self.CFG, ["Bash(beyond ci logsx *)"]))
         self.assertEqual([lv for lv, _ in result], ["ok"])
 
+    def test_open_command_warns(self):
+        for cmd in ("bash", "python3 -c"):
+            with self.subTest(cmd=cmd):
+                cfg = {"ci_log_command": {"p": cmd}, "ci_hosts": {"p": ["ci.example.com"]}}
+                result = list(doctor._ci_log_checks(cfg, []))
+                self.assertEqual([lv for lv, _ in result], ["warn"])
+                self.assertIn("ci_log_command.p", result[0][1])
+                self.assertIn("outside the sandbox", result[0][1])
+
+    def test_non_string_command_warns(self):
+        cfg = {"ci_log_command": {"p": 123}, "ci_hosts": {"p": ["ci.example.com"]}}
+        result = list(doctor._ci_log_checks(cfg, ["Bash(wonka *)"]))
+        self.assertEqual([lv for lv, _ in result], ["warn"])
+
     def test_command_without_hosts_warns(self):
         result = list(doctor._ci_log_checks({"ci_log_command": {"p": "beyond ci logs"}}, []))
         self.assertEqual([lv for lv, _ in result], ["warn"])
