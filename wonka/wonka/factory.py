@@ -509,7 +509,7 @@ def _default_title(idea):
     return idea.strip().splitlines()[0][:60]
 
 
-def test_prefixes(cfg, project):
+def project_test_prefixes(cfg, project):
     """The command prefixes `wonka test` may run for a project (config test_commands.<project>), or []."""
     return list((cfg.get("test_commands") or {}).get(project) or [])
 
@@ -2130,7 +2130,7 @@ class Factory:
         return {"id": tid, "job": job, "agents": agents, "note": str(self.path(tid)), "plan": str(self.plan_path(tid)),
                 "repo": t["repo"], "code": code, "worktree": t["worktree"], "branch": t["branch"], "base_ref": ref,
                 "review_round": t["review_round"], "dispatch": t["dispatch"],
-                "test_commands": test_prefixes(self.cfg, t["project"]),
+                "test_commands": project_test_prefixes(self.cfg, t["project"]),
                 "pr_template": str(tpl) if job == "bake" and (tpl := find_pr_template(Path(t["worktree"]))) else None,
                 "jira": self._jira_of(tid) if job == "bake" else None}
 

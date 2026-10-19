@@ -47,6 +47,8 @@ class OpenPrefixTest(unittest.TestCase):
         self.assertEqual(testrun.open_prefixes(cfg, "zzz"), [])
         self.assertEqual(testrun.open_prefixes({}), [])
         self.assertEqual(testrun.open_prefixes({"test_commands": None}), [])
+        self.assertEqual(testrun.open_prefixes({"test_commands": {"p": None}}, "p"), [])
+        self.assertEqual(testrun.open_prefixes({"test_commands": {"p": None}}), [])
 
 
 class ParseTest(unittest.TestCase):
