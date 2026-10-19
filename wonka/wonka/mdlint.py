@@ -1,4 +1,5 @@
 """markdownlint for note sections: a section it flags is kept as raw text so it can't break the rest of the note.
+Only rules that can change the note's structure are checked.
 
 Blank lines around lists (MD032) are inserted first, so the common "list right after a paragraph" is fixed, not flagged.
 """
@@ -10,7 +11,16 @@ import subprocess
 
 from . import note, store
 
-RELAXED = ("MD013", "MD041")  # line-length, first-line-h1: noisy on note sections, no effect on rendering
+# Style-only rules, disabled because they cannot change the note's block structure. The rules still checked (list
+# indent, headings, blockquotes, fences, lists, inline HTML, tables) can make a section spill into the rest of the note.
+RELAXED = (
+    "MD001", "MD003", "MD004", "MD007", "MD009", "MD010", "MD011", "MD012",
+    "MD013", "MD014", "MD018", "MD019", "MD020", "MD021", "MD024", "MD026",
+    "MD027", "MD029", "MD030", "MD034", "MD035", "MD036", "MD037", "MD038",
+    "MD039", "MD040", "MD041", "MD042", "MD045", "MD046", "MD047", "MD048",
+    "MD049", "MD050", "MD051", "MD052", "MD053", "MD054", "MD055", "MD059",
+    "MD060",
+)
 DEFAULT = "npx --yes markdownlint-cli@0.49.1 --stdin --disable " + " ".join(RELAXED)
 TIMEOUT = 60
 MARK = "> [!warning] markdownlint flagged this section"
@@ -20,7 +30,7 @@ _ISOLATED = re.compile(r"\A" + re.escape(HEADER) + r"\n(?:> - [^\n]*\n)*\n(`{3,}
 
 
 def command():
-    """The linter argv from WONKA_MDLINT (default: markdownlint-cli via npx, skipping MD013 and MD041), or None when disabled."""
+    """The linter argv from WONKA_MDLINT (default: markdownlint-cli via npx, skipping the style-only rules in RELAXED), or None when disabled."""
     value = os.environ.get("WONKA_MDLINT", DEFAULT)
     if not value.strip() or value.strip().lower() == "off":
         return None
