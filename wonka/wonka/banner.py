@@ -64,7 +64,8 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
         return "warning", "🙋 Your turn: the factory is stuck", (
             "The last jobs for this ticket did not finish (details in `~/.wonka/factory.log`). "
             "Fix the cause, then tick **Retry** in 🎩 Stuck below.")
-    s_blocked = s in (("triage", "ready"), ("drafting", "pending"), ("planned", "pending")) \
+    s_blocked = s in (("triage", "ready"), ("drafting", "pending"), ("planned", "pending"),
+                 ("baking", "pending")) \
         or (s == ("drafting", "progress") and t.get("resume"))
     if waiting and s_blocked:
         if dead:
