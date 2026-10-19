@@ -29,7 +29,7 @@ not the absolute `code` path: the builder works in a different worktree.
 2. Study the code in `code` until you know exactly what to build: files, functions, data, tests, edge cases.
 3. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash
-   wonka ask <id> --question "Store sessions in Redis or Postgres? | Redis | *Postgres, already in the stack" \
+   wonka ask <id> --dispatch <dispatch> --question "Store sessions in Redis or Postgres? | Redis | *Postgres, already in the stack" \
                   --question "..."
    ```
    Options are separated by `|`; mark the one you recommend with a leading `*` (always recommend one). You will be re-dispatched when every question is ticked.
@@ -50,13 +50,13 @@ not the absolute `code` path: the builder works in a different worktree.
      means the command is wrong), risks. A builder Oompa-Loompa with no other context builds from this alone.
      `wonka plan` writes it to the job's `plan` path (it need not exist yet):
      ```bash
-     wonka plan <id> <<'EOF'
+     wonka plan <id> --dispatch <dispatch> <<'EOF'
      ...plan...
      EOF
      ```
    - Write the spec summary (5–15 lines, for a human skimming the factory):
      ```bash
-     wonka section <id> spec <<'EOF'
+     wonka section <id> spec --dispatch <dispatch> <<'EOF'
      ...summary...
      EOF
      ```
@@ -64,6 +64,6 @@ not the absolute `code` path: the builder works in a different worktree.
      input handling, secrets or permissions are involved; `spark` for Spark jobs; `airflow` for Airflow DAGs. For a tiny xs/s change leave `--reviewers` out: the
      architect squirrel checks it by default. Then:
      `wonka drafted <id> --size <size> --reviewers architect,backend --dispatch <dispatch>`
-     `--dispatch` is the `dispatch` number from your job JSON; it lets the factory ignore you if your job was re-dispatched.
+     `--dispatch` (on `ask`, `plan`, `section` and `drafted`) is the `dispatch` number from your job JSON; it lets the factory ignore you if your job was re-dispatched.
 
 Finish with one line: what you decided.
