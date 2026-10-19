@@ -5883,6 +5883,59 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.resolved(tid, dispatch=job["dispatch"])
 
+    # -- the flags each move clears (FLAG_LIFE) -----------------------------
+
+    @staticmethod
+    def old_cleared(dst, by):
+        """What move() cleared before FLAG_LIFE, written out as it was: the table must say exactly this."""
+        final = dst in (machine.MERGED, KILLED)
+        out = {"job_started_at", "conflict_error"}
+        if dst != ("shipped", "progress"):
+            out |= {"conflicts", "merge_ref", "merge_sha", "fix_head", "lease"}
+        if dst != ("drafting", "awaiting"):
+            out.add("spec_review_pending")
+        if dst[0] != "reviewing":
+            out.add("round_kind")
+        if dst[0] != "shipped" or dst[1] == "ready":
+            out |= {"conflict_fixes", "ci_flaky"}
+        if by != "wonka" or final:
+            out |= {"ci_stuck", "stuck", "retries"}
+        if final:
+            out |= {"ci_fixes", "cleanup"}
+        if dst[1] == "ready":
+            out.add("pr_base")
+        if dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
+            out.add("scout")
+        return out
+
+    def legal_edges(self):
+        edges = set(machine.EDGES)
+        edges |= {(s, KILLED) for s in factory._ALL if machine.allowed(s, KILLED)}
+        return sorted(edges)
+
+    def test_flag_table_clears_what_move_always_cleared(self):
+        for src, dst in self.legal_edges():
+            for by in ("wonka", "human", "github", "builder", "fixer"):
+                self.assertEqual(factory.cleared_flags(dst, by), self.old_cleared(dst, by), (src, dst, by))
+
+    def test_move_clears_the_flags_of_the_table_and_keeps_the_rest(self):
+        tid = self.add()
+        flags = sorted(factory.FLAG_LIFE)
+        for src, dst in self.legal_edges():
+            for by in ("wonka", "human"):
+                with self.f() as f:
+                    t = f.ticket(tid)
+                    t["last_valid"] = {"status": src[0], "phase": src[1]}
+                    for k in flags:
+                        t[k] = {"scout": str(self.tmp / "no-scout"), "ci_flaky": {"why": "w", "checks": "c"},
+                                "conflict_error": "e", "job_started_at": factory._iso(factory.now())}.get(k, 1)
+                    t.pop("held_by", None)
+                    f.move(tid, dst, by)
+                    left = {k for k in flags if k in t}
+                    if dst in (machine.MERGED, KILLED):
+                        t.pop("entered_done_at", None)
+                self.assertEqual(left, set(flags) - self.old_cleared(dst, by), (src, dst, by))
+
 
 class GhCommandTest(unittest.TestCase):
     def test_wonka_gh_in_the_environment_is_ignored(self):

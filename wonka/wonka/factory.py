@@ -34,6 +34,43 @@ WORKTREE_JOBS = {("baking", "progress"): "oompa-loompa-builder", ("shipped", "pr
 OFF_PR = frozenset({("baking", "pending"), ("baking", "progress"), ("baking", "ready"), ("reviewing", "pending"),
                     ("reviewing", "progress"), ("reviewing", "awaiting"), ("reviewing", "ready"),
                     ("shipped", "pending"), ("shipped", "progress")})
+_ALL = frozenset((status, phase) for status, phases in machine.VALID.items() for phase in phases)
+_UNFINISHED = _ALL - {machine.MERGED, KILLED}
+_PR_WAITS = frozenset({("shipped", "pending"), ("shipped", "progress"), ("shipped", "awaiting")})
+# Per-ticket flags tied to where the ticket is: flag -> (the states it lives in, cleared by any move Wonka itself did not
+# make). move() clears a flag whenever the ticket moves outside its states, and also, when the second field is set, on
+# any move by a human, an agent or GitHub. A flag set just before a move to one of its states survives it.
+FLAG_LIFE = {
+    "job_started_at": (frozenset(), False),  # every move ends the job; start() stamps the new one after its move
+    "conflict_error": (frozenset(), False),  # a fixer that started, or any other move, ends the failed-start episode
+    # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through ship(), killed,
+    # merged) starts clean and the next tick re-detects conflicts
+    **dict.fromkeys(("conflicts", "merge_ref", "merge_sha", "fix_head", "lease"),
+                    (frozenset({("shipped", "progress")}), False)),
+    "spec_review_pending": (frozenset({("drafting", "awaiting")}), False),  # only drafting/awaiting waits on it
+    # left Reviewing without a verdict: a stale ci/change kind must not label the next round
+    "round_kind": (frozenset(s for s in _ALL if s[0] == "reviewing"), False),
+    # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a merge starts
+    # clean (kept through pending/progress so a failed fixer's retry does not reset it)
+    "conflict_fixes": (_PR_WAITS, False),
+    "ci_flaky": (_PR_WAITS, False),  # only lives while the PR waits in the shipped states
+    "ci_fixes": (_UNFINISHED, False),  # merged or killed: the CI fix count dies with the PR
+    "cleanup": (_UNFINISHED, False),  # the flag reflects only this attempt
+    # finished, or moved by anyone but Wonka (a human, an agent's result, GitHub): nothing left to retry
+    "stuck": (_UNFINISHED, True),
+    "ci_stuck": (_UNFINISHED, True),  # goes with stuck
+    "retries": (_UNFINISHED, True),
+    "pr_base": (frozenset(s for s in _ALL if s[1] != "ready"), False),
+    # the scout checkout, removed by drop_scout(): no triage or draft job is left to read it anywhere else
+    "scout": (frozenset({("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")}), False),
+}
+
+
+def cleared_flags(dst, by):
+    """The FLAG_LIFE flags that a move to dst made by `by` clears."""
+    return {k for k, (lives, by_hand) in FLAG_LIFE.items() if dst not in lives or (by_hand and by != "wonka")}
+
+
 REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?:Earlier change|Change) request"
                         r"|🔴 (?:Earlier CI|CI) failure) \d+", re.M)
 # PR comments by anyone else are not copied into the plan: the builder runs unattended and would read them as instructions
@@ -711,51 +748,26 @@ class Factory:
                              **({"why": why} if why else {})})
         if final:
             self._hold_for_live_job(tid, src)  # killed, or merged while an agent still worked on a fix round
-        t.pop("job_started_at", None)
-        if dst != ("shipped", "progress"):
-            # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through
-            # ship(), killed, merged) starts clean and the next tick re-detects conflicts
-            t.pop("conflicts", None)
-            t.pop("merge_ref", None)
-            t.pop("merge_sha", None)
-            t.pop("fix_head", None)
-            t.pop("lease", None)
-        if dst != ("drafting", "awaiting"):
-            t.pop("spec_review_pending", None)  # only a drafting/awaiting ticket can wait on the spec review
-        if dst[0] != "reviewing":
-            t.pop("round_kind", None)  # left Reviewing without a verdict: a stale ci/change kind must not label the next round
-        t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
-        if dst[0] != "shipped" or dst[1] == "ready":
-            # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
-            # merge starts clean (kept through pending/progress so a failed fixer's retry does not reset it)
-            t.pop("conflict_fixes", None)
-        if by != "wonka" or final:
-            t.pop("ci_stuck", None)  # goes with the stuck flag below
-        if final:
-            t.pop("ci_fixes", None)  # merged or killed: the CI fix count dies with the PR
-        if dst[0] != "shipped" or dst[1] == "ready":
-            t.pop("ci_flaky", None)  # only lives while the PR waits in the shipped states
-        if dst[1] == "ready":
-            t.pop("pr_base", None)
+        cleared = cleared_flags(dst, by)  # see FLAG_LIFE
+        stuck = "stuck" in cleared and t.get("stuck")
+        for k in cleared - {"scout"}:  # the scout is a checkout: drop_scout() removes it below
+            t.pop(k, None)
         if final:
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
         if final:
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
-        if (by != "wonka" or final) and t.pop("stuck", None):
-            body = note.drop_section(body, "stuck")  # finished, or moved by a human: nothing left to retry
+        if stuck:
+            body = note.drop_section(body, "stuck")
         self.write(tid, meta, body)
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
-        if by != "wonka" or final:
-            t.pop("retries", None)
         if final:
-            t.pop("cleanup", None)  # the flag reflects only this attempt
             self.drop_worktree(tid)
             if dst == ("shipped", "ready"):
                 self.drop_branch(tid)
-        if t.get("scout") and dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
-            self.drop_scout(tid)  # no triage or draft job left to read it
+        if "scout" in cleared and t.get("scout"):
+            self.drop_scout(tid)
         if dst[1] == "awaiting":
             notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
 
@@ -1953,10 +1965,9 @@ class Factory:
         # a fixer started before rebasing existed has no lease; its merge is a fast-forward, pushed without force
         lease = [f"--force-with-lease={t['branch']}:{t['lease']}"] if t.get("lease") else []
         git("push", *lease, "origin", t["branch"], cwd=wt)
-        # the fix landed: the next conflict episode gets the full start budget and no stale warning
-        t.pop("retries", None)
-        t.pop("conflict_error", None)
-        # retries is reset here on purpose, so this count is what bounds a PR that GitHub keeps calling conflicting
+        # the fix landed: the fixer's move below clears retries and conflict_error (FLAG_LIFE), so the next conflict
+        # episode gets the full start budget and no stale warning, and this count is what bounds a PR that GitHub
+        # keeps calling conflicting
         n = t["conflict_fixes"] = t.get("conflict_fixes", 0) + 1
         _bump_stat(t, "conflict_fixes")
         self.move(tid, ("shipped", "awaiting"), "fixer", f"Merge conflicts fixed and pushed (fix {n}/{MAX_CONFLICT_FIXES})")
