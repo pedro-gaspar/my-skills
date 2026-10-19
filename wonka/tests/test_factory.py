@@ -4040,6 +4040,9 @@ class FactoryTest(unittest.TestCase):
         sec = self.stuck_section(tid)
         self.assertIn("- [ ] Retry", sec)
         self.assertIn("CI still red after 3 fix rounds: wf / build, fix by hand then tick Retry", sec)
+        self.assertEqual(t["stats"]["stuck"], 1)
+        self.red_round(tid, head="d" * 40)  # already stuck: not counted again
+        self.assertEqual(self.f_ticket(tid)["stats"]["stuck"], 1)
 
     def test_fourth_red_head_goes_stuck(self):
         tid = self.add()
@@ -4187,6 +4190,7 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(t["stuck"] and t["ci_stuck"])
         self.assertFalse([j for j in tick["jobs"] if j["id"] == tid and j["job"] == "bake"])
         self.assertNotIn("## 🔴 CI failure", self.plan_text(tid))
+        self.assertEqual(t["stats"]["stuck"], 2)  # two episodes, a fixer ran in between
 
     def test_rebased_head_green_after_ci_stuck_resets_ci_fixes(self):
         tid = self.add()
@@ -4207,8 +4211,10 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(t["stuck"])
         self.assertNotIn("ci_stuck", t)
         self.assertIn("as conflicting with", self.stuck_section(tid))
+        self.assertEqual(t["stats"]["stuck"], 1)  # counted by the CI stuck, not again by the conflict stuck
         self.assertFalse([j for j in tick["jobs"] if j["id"] == tid])
         again = self.tick()
+        self.assertEqual(self.f_ticket(tid)["stats"]["stuck"], 1)
         self.assertFalse([e for e in again["events"] if e.startswith(tid)])
 
     def test_merged_pr_ignores_red_ci(self):
@@ -4794,6 +4800,7 @@ class FactoryTest(unittest.TestCase):
         self.to_conflict_stuck(tid)
         t = self.f_ticket(tid)
         self.assertTrue(t["stuck"])
+        self.assertEqual(t["stats"]["stuck"], 1)
         self.assertNotIn("conflicts", t)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         stuck = note.get_section(self.note(tid)[1], "stuck")
