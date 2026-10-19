@@ -32,10 +32,10 @@ Arguments: `$ARGUMENTS`
 `~/.claude/settings.json`.
 
 ## add
-`wonka add "<idea, verbatim>"` from the repo the ticket is for. When the session runs elsewhere (a neutral loop directory, see the README's
-Sandbox boundary), always pass `--repo <path>`. Pass `--repo <path>`, `--pr-repo owner/name`,
-`--jira KEY-1` or `--title` when the user gives them. With `--parent <id>` the repo, PR repo and Jira key default
-to the parent's (the PR repo only when the child builds in the parent's repo). Then run a tick.
+`wonka add "<idea, verbatim>"` from the repo the ticket is for. Pass `--repo <path>` when the session runs elsewhere
+(always, from a neutral loop directory: see the README's Sandbox boundary) or when the user gives it, and
+`--pr-repo owner/name`, `--jira KEY-1` or `--title` when the user gives them. With `--parent <id>` the repo, PR repo
+and Jira key default to the parent's (the PR repo only when the child builds in the parent's repo). Then run a tick.
 
 ## status
 `wonka status` and show the lines as they are.
