@@ -62,6 +62,7 @@ _EDGES = [
     ("baking/pending", "baking/progress"),
     ("baking/progress", "baking/pending"),  # retry
     ("baking/progress", "baking/ready"),
+    ("baking/progress", "shipped/awaiting"),  # the builder judged a red CI flaky: no new code, back to the open PR
     ("baking/ready", "reviewing/pending"),
     ("reviewing/pending", "reviewing/progress"),
     ("reviewing/progress", "reviewing/pending"),  # retry

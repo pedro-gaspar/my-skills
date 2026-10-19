@@ -50,7 +50,7 @@ def _age_log(text):
 
 def _ci_checks(rollup):
     """Read a PR's statusCheckRollup (a decoded list). Returns (red, pending, total): the failed checks as
-    name/result/url dicts, whether any check has not finished, and how many checks there are."""
+    name/result/url/at dicts (at: the completion stamp), whether any check has not finished, and how many checks there are."""
     red, pending, total = [], False, 0
     for item in rollup if isinstance(rollup, list) else []:
         if not isinstance(item, dict):
@@ -58,16 +58,18 @@ def _ci_checks(rollup):
         total += 1
         if "state" in item or item.get("__typename") == "StatusContext":
             name, url, result = item.get("context"), item.get("targetUrl"), item.get("state")
+            at = item.get("startedAt") or item.get("createdAt") or ""
             if result in ("PENDING", "EXPECTED"):
                 pending = True
         else:
             name, url, result = item.get("name"), item.get("detailsUrl"), item.get("conclusion")
+            at = item.get("completedAt") or item.get("startedAt") or ""
             if item.get("workflowName"):
                 name = f"{item['workflowName']} / {name}"
             if item.get("status") != "COMPLETED":
                 pending = True
         if result in CI_RED:
-            red.append({"name": name or "?", "result": result, "url": url or ""})
+            red.append({"name": name or "?", "result": result, "url": url or "", "at": at or ""})
     return red, pending, total
 
 
@@ -86,6 +88,12 @@ def _run_id(url, repo):
     if not m or not repo or f"{m.group(1)}/{m.group(2)}".lower() != repo.lower():
         return None
     return m.group(3)
+
+
+def _ci_signature(red):
+    """What identifies one set of red check runs: a re-run of a check on the same head changes its url or stamp."""
+    key = json.dumps(sorted([c["name"], c["url"], c.get("at", "")] for c in red))
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 def now():
@@ -700,6 +708,8 @@ class Factory:
             t.pop("ci_stuck", None)  # goes with the stuck flag below
         if final:
             t.pop("ci_fixes", None)  # merged or killed: the CI fix count dies with the PR
+        if dst[0] != "shipped" or dst[1] == "ready":
+            t.pop("ci_flaky", None)  # only lives while the PR waits in the shipped states
         if dst[1] == "ready":
             t.pop("pr_base", None)
         if final:
@@ -1207,12 +1217,14 @@ class Factory:
         self.log_event(tid, f"Cleaned up the kept {what}")
         return f"{tid}: cleaned up the kept {what}"
 
-    def baked(self, tid, dispatch=None):
+    def baked(self, tid, dispatch=None, flaky=None):
         if self._stale_dispatch(tid, dispatch):
             return (f"{tid}: builder result is from an earlier dispatch "
                     f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
         self.expect(tid, ("baking", "progress"))
         t = self.ticket(tid)
+        if flaky is not None:
+            return self._baked_flaky(tid, flaky)
         if git("status", "--porcelain", cwd=t["worktree"]):
             raise WonkaError("the worktree has uncommitted changes: commit them first")
         if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
@@ -1225,6 +1237,30 @@ class Factory:
                              f"with wonka pr-body {tid} --dispatch {t.get('dispatch')} first")
         self.move(tid, ("baking", "ready"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
+
+    def _baked_flaky(self, tid, flaky):
+        """The builder judged a CI fix round's red checks flaky: no new code, back to the open PR."""
+        t = self.ticket(tid)
+        why = " ".join(flaky.split())[:300]
+        if not why:
+            raise WonkaError("--flaky needs the reason the checks failed (a lost runner, the network, preemption)")
+        if not t.get("fixing_ci"):
+            raise WonkaError("--flaky is only for a CI fix round (a 🔴 CI failure in the plan): commit the work and run wonka baked")
+        if t.get("fixing_changes"):
+            raise WonkaError("this round also holds requested changes: fix them with new commits and run wonka baked without --flaky")
+        if git("status", "--porcelain", cwd=t["worktree"]):
+            raise WonkaError("the worktree has uncommitted changes: --flaky takes no new code")
+        head, red_head = git("rev-parse", "HEAD", cwd=t["worktree"]), t.get("ci_handled_sha") or ""
+        if head != red_head:
+            raise WonkaError(f"HEAD {head[:7]} is not the red PR head {red_head[:7]}: --flaky takes no new commits; "
+                             "with fixes committed, run wonka baked without --flaky")
+        checks = ", ".join(t.get("ci_red_checks") or []) or "the failing checks"
+        t.pop("fixing_ci", None)
+        t.pop("ci_red_checks", None)
+        t["ci_flaky"] = {"why": why, "checks": checks}
+        self.set_section(tid, "changes", note.CHANGES_BOX)  # _ci_failed dropped it; ship() is skipped
+        self.move(tid, ("shipped", "awaiting"), "builder", f"CI judged flaky: {why}; re-run {checks}")
+        return f"{tid}: CI judged flaky, back to the open PR: re-run {checks}"
 
     # -- reviewing --------------------------------------------------------
 
@@ -1528,12 +1564,16 @@ class Factory:
                 meta, body = self.read(tid)
                 self.write(tid, meta, note.drop_section(body, "stuck"))
                 self.log_event(tid, "CI is green again: unstuck")
+            if t.pop("ci_flaky", None):
+                self.log_event(tid, "CI is green again after the flaky judgement")
             return None
-        if head == t.get("ci_handled_sha"):
-            return None
+        sig = _ci_signature(red)
+        if head == t.get("ci_handled_sha") and t.setdefault("ci_handled_runs", sig) == sig:
+            return None  # handled already; a red re-run on the same head has a new signature
         n = t.get("ci_fixes", 0)
         if n >= MAX_CI_FIXES:
             t["ci_handled_sha"] = head
+            t["ci_handled_runs"] = sig
             if t.get("ci_stuck"):  # a new red head while already stuck: no repeat log or notify
                 return None
             t["stuck"] = t["ci_stuck"] = True
@@ -1572,12 +1612,15 @@ class Factory:
             lines.append(f"(logs of {len(runs) - CI_LOG_RUNS} more run(s) not fetched: open the links above)")
         return "\n".join(lines)
 
-    def _mark_ci_round(self, tid, head):
+    def _mark_ci_round(self, tid, head, red):
         t = self.ticket(tid)
         t["ci_failures"] = t.get("ci_failures", 0) + 1
         t["ci_fixes"] = t.get("ci_fixes", 0) + 1
         _bump_stat(t, "ci_rounds")
         t["ci_handled_sha"] = head
+        t["ci_handled_runs"] = _ci_signature(red)
+        t["ci_red_checks"] = [c["name"] for c in red]
+        t.pop("ci_flaky", None)
         t["review_round"], t["fixing_ci"] = 0, True
         t.pop("extra_rounds", None)
 
@@ -1598,7 +1641,7 @@ class Factory:
         t = self.ticket(tid)
         section = self._ci_section(tid, t.get("ci_failures", 0) + 1, head, red)  # gh calls first: a failure changes nothing
         self._append_log(tid, [section])
-        self._mark_ci_round(tid, head)
+        self._mark_ci_round(tid, head, red)
         meta, body = self.read(tid)
         self.write(tid, meta, note.drop_section(body, "changes"))
         self.move(tid, ("baking", "pending"), "github", f"CI failed on {head[:7]} ({len(red)} check(s)), back to baking")
@@ -1635,7 +1678,7 @@ class Factory:
         t["review_round"], t["fixing_changes"] = 0, True
         t.pop("extra_rounds", None)
         if ci:
-            self._mark_ci_round(tid, ci[0])
+            self._mark_ci_round(tid, *ci)
         meta, body = self.read(tid)
         self.write(tid, meta, note.drop_section(body, "changes"))
         why = f"Changes requested ({len(pr)} PR comment(s)" + (
@@ -1962,6 +2005,7 @@ class Factory:
             kind = "ci" if t.pop("fixing_ci", None) and not kind else kind
             if kind or "round_kind" not in t:
                 t["round_kind"] = kind or "review"
+            t.pop("ci_red_checks", None)
             t["reports"] = {}
             t["finished"] = []
             self.move(tid, ("reviewing", "progress"), "wonka")

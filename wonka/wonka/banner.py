@@ -83,6 +83,11 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
                 f"⚠️ The fixer Oompa-Loompa could not start ({t['conflict_error']}). Wonka tries again on the next "
                 "tick; after 3 failed tries it stops and asks you to tick Retry.")
         return "info", "The PR has merge conflicts", "🔧 A fixer Oompa-Loompa picks it up on this tick."
+    if s == ("shipped", "awaiting") and t.get("ci_flaky"):
+        f = t["ci_flaky"]
+        return "question", "🙋 Your turn: re-run the flaky CI checks", (
+            f"The builder judged the red checks flaky ({f.get('why')}). Re-run {f.get('checks')} on {t.get('pr_url')}: "
+            "if they fail again Wonka starts another CI fix round; once green, review and merge it.")
     if s == ("drafting", "awaiting") and t.get("spec_review_pending"):
         return "question", "🙋 Your turn: review the spec", (
             f"Read the 📜 Spec and the plan [[{tid}-plan]], then tick one option in ❓ Questions: **Approve** sends it "

@@ -163,7 +163,7 @@ def run(a, f):
         msg = f.write_pr_body(a.id, sys.stdin.read(), a.dispatch)
         print(msg or f"📝 {f.pr_body_path(a.id)}")
     elif c == "baked":
-        print(f.baked(a.id, a.dispatch) or f.summary(a.id))
+        print(f.baked(a.id, a.dispatch, flaky=a.flaky) or f.summary(a.id))
     elif c == "resolved":
         print(f.resolved(a.id, a.dispatch) or f.summary(a.id))
     elif c == "report":
@@ -281,6 +281,8 @@ def parser():
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
+    s.add_argument("--flaky", metavar="WHY", help="builder, CI fix round only: the checks failed for an "
+                   "infrastructure reason (lost runner, network, preemption); no new commits, back to the open PR")
     s = sub.add_parser("resolved", help="fixer: the merge conflicts are committed")
     s.add_argument("id")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
