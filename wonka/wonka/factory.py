@@ -1663,6 +1663,8 @@ class Factory:
             t["ci_handled_runs"] = sig
             if t.get("ci_stuck"):  # a new red head while already stuck: no repeat log or notify
                 return None
+            if not t.get("stuck"):
+                _bump_stat(t, "stuck")
             t["stuck"] = t["ci_stuck"] = True
             self.set_section(tid, "stuck", f"- [ ] Retry ({_ci_stuck_reason(n, red)}. See ~/.wonka/factory.log)")
             self.log_event(tid, f"CI is still red on {head[:7]} after {n} CI fix rounds in a row: stuck, needs a human")
@@ -1994,7 +1996,8 @@ class Factory:
                 self.move(tid, KILLED, "github", "PR closed without merging")
                 return f"{tid}: PR closed"
             if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts") and (not t.get("stuck") or t.get("ci_stuck")):
-                if t.pop("ci_stuck", None):  # CI cannot go green on a conflicting PR: conflicts come first, the CI budget stays spent
+                lifted = t.pop("ci_stuck", None)
+                if lifted:  # CI cannot go green on a conflicting PR: conflicts come first, the CI budget stays spent
                     t.pop("stuck", None)
                     body = note.drop_section(body, "stuck")
                     self.write(tid, meta, body)
@@ -2003,7 +2006,7 @@ class Factory:
                 fixes = t.get("conflict_fixes", 0)
                 if fixes >= MAX_CONFLICT_FIXES:
                     base = t.get("pr_base") or t["base_branch"]
-                    if not t.get("stuck"):
+                    if not t.get("stuck") and not lifted:  # a CI stuck lifted just now was counted: same stuck, new reason
                         _bump_stat(t, "stuck")
                     t["stuck"] = True
                     self.set_section(tid, "stuck", f"- [ ] Retry ({fixes} conflict fixes were pushed but GitHub still "
