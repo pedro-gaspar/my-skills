@@ -1780,7 +1780,10 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f, self.assertRaises(WonkaError) as cm:
             f.unblock(c, [])
         self.assertIn("not blocked by any ticket", str(cm.exception))
-        self.assertTrue(all(h["by"] == "human" for h in self.f_ticket(c)["history"] if "locked" in h.get("why", "")))
+        entries = [h for h in self.f_ticket(c)["history"]
+                   if h.get("why", "").startswith(("Blocked by", "No longer blocked by"))]
+        self.assertEqual(len(entries), 4)
+        self.assertTrue(all(h["by"] == "human" for h in entries))
 
     def test_block_refuses_self_unknown_wontdo_and_cycles(self):
         a, b, c, k = self.add(), self.add(), self.add(), self.add()
