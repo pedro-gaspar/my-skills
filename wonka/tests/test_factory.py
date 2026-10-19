@@ -2685,6 +2685,65 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((Path(job["worktree"]) / "new.txt").exists())
         self.assertEqual(job["code"], job["worktree"], "a builder reads its own worktree")
 
+    def _retry_after_upstream(self, tid, before=None):
+        """Bake once, let `before(wt)` touch the worktree, push upstream dep.txt, retry and claim the bake again."""
+        self.to_planned(tid)
+        job = self.job_for(tid)
+        wt = Path(job["worktree"])
+        start = sh("git", "rev-parse", "HEAD", cwd=wt)
+        if before:
+            before(wt)
+        self.push_upstream("dep.txt")
+        with self.f() as f:
+            f.retry(tid)
+        return wt, start
+
+    def test_retried_bake_without_own_commits_starts_from_the_new_base(self):
+        tid = self.add()
+        wt, start = self._retry_after_upstream(tid)
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "bake")
+        self.assertTrue((wt / "dep.txt").exists())
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), sh("git", "rev-parse", "origin/main", cwd=self.repo))
+        self.assertEqual(self.f_ticket(tid)["base_ref"], "origin/main")
+        self.assertIn("fast-forwarded", self.note(tid)[1])
+
+    def test_retried_bake_with_own_commits_is_left_alone(self):
+        tid = self.add()
+
+        def commit(wt):
+            (wt / "mine.txt").write_text("mine\n")
+            sh("git", "add", ".", cwd=wt)
+            sh("git", "commit", "-qm", "mine", cwd=wt)
+        wt, start = self._retry_after_upstream(tid, commit)
+        mine = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.job_for(tid)
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), mine)
+        self.assertFalse((wt / "dep.txt").exists())
+        self.assertNotIn("fast-forwarded", self.note(tid)[1])
+
+    def test_retried_bake_with_local_changes_is_left_alone(self):
+        tid = self.add()
+        wt, start = self._retry_after_upstream(tid, lambda wt: (wt / "scratch.txt").write_text("keep\n"))
+        self.job_for(tid)
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), start)
+        self.assertFalse((wt / "dep.txt").exists())
+        self.assertEqual((wt / "scratch.txt").read_text(), "keep\n")
+
+    def test_bake_fix_round_on_open_pr_does_not_catch_up_with_base(self):
+        tid = self.add()
+        self.to_planned(tid)
+        wt = Path(self.job_for(tid)["worktree"])
+        start = sh("git", "rev-parse", "HEAD", cwd=wt)
+        self.push_upstream("dep.txt")
+        with self.f() as f:
+            f.ticket(tid)["pr_url"] = "https://github.com/acme/app/pull/1"
+            f.retry(tid)
+        with mock.patch.object(factory.Factory, "_sync_pr_branch"):
+            self.job_for(tid)
+        self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), start)
+        self.assertFalse((wt / "dep.txt").exists())
+
     # -- the scout: triage and drafting read the latest origin base ------------
 
     def job_for(self, tid):

@@ -1029,6 +1029,28 @@ class Factory:
             self.log_event(tid, f"Worktree folder was gone, recreated it from {branch}: {path}")
         t["worktree"], t["branch"] = str(path), branch
 
+    def _catch_up_base(self, tid):
+        """Fast-forward a bake worktree whose branch has no commits of its own to the latest base, so a retried bake
+        sees what merged since it first baked. Leaves alone a dirty tree, an unfinished merge or rebase, or a branch
+        with its own commits. Never raises: a failure is logged and the bake goes on as is."""
+        t = self.ticket(tid)
+        wt = t["worktree"]
+        try:
+            ref = self._latest_base(t)
+            if git("status", "--porcelain", cwd=wt) or _ref_exists(wt, "MERGE_HEAD") or _rebasing(wt):
+                return
+            head = git("rev-parse", "HEAD", cwd=wt)
+            target = git("rev-parse", f"{ref}^{{commit}}", cwd=wt)
+            if head == target or _exec(["git", "merge-base", "--is-ancestor", "HEAD", ref], cwd=wt)[0] != 0:
+                return  # up to date, or the branch has commits of its own
+            git("merge", "--ff-only", "--quiet", ref, cwd=wt)
+            t["base_ref"] = ref
+            self.log_event(tid, f"Worktree had no commits of its own: fast-forwarded {t['branch']} "
+                                f"from {head[:7]} to {ref} ({target[:7]})")
+        except (WonkaError, OSError) as e:
+            self.log_event(tid, "Could not catch the worktree up with the base, baking on it as is "
+                                f"({' '.join(str(e).split())})")
+
     def _latest_base(self, t):
         """Fetch origin's base branch and return the freshest ref to start from: origin/<base>, else the local base.
 
@@ -1952,6 +1974,8 @@ class Factory:
                 except WonkaError as e:  # offline or diverged: never block the builder, ship() explains a rejected push
                     self.log_event(tid, "Could not catch up with the PR branch on GitHub, baking on the local branch "
                                         f"({' '.join(str(e).split())})")
+            else:
+                self._catch_up_base(tid)
             self.move(tid, ("baking", "progress"), "wonka")
         elif s == ("reviewing", "pending"):
             if (failed := self._setup_worktree(tid)) is not None:
