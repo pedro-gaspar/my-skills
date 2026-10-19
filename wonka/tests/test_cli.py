@@ -117,6 +117,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("test_commands", err)
 
+    def test_config_ci_hosts_and_log_command(self):
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        cfg_file = self.tmp / "home/config.json"
+        code, out, _ = self.run_cli("config", "ci_hosts.app", "CI.example.com, ci2.example.com:8443")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["ci_hosts"], {"app": ["ci.example.com", "ci2.example.com:8443"]})
+        self.assertIn("CI hosts", out)
+        self.assertIn("CI log command", out)
+        for bad in ["https://ci.example.com", "ci.example.com/x", "user@ci.example.com", "a b"]:
+            with self.subTest(bad=bad):
+                self.assertEqual(self.run_cli("config", "ci_hosts.app", bad)[0], 1)
+        self.assertEqual(self.run_cli("config", "ci_hosts.app", "")[0], 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["ci_hosts"], {})
+        self.assertEqual(self.run_cli("config", "ci_hosts.", "x")[0], 1)
+        self.assertEqual(self.run_cli("config", "ci_log_command.app", "beyond ci logs")[0], 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["ci_log_command"], {"app": "beyond ci logs"})
+        for bad in ["bash", "python3 -c", "env", '"oops']:
+            with self.subTest(bad=bad):
+                self.assertEqual(self.run_cli("config", "ci_log_command.app", bad)[0], 1)
+        self.assertEqual(self.run_cli("config", "ci_log_command.app", "")[0], 0)
+        self.assertEqual(json.loads(cfg_file.read_text())["ci_log_command"], {})
+        self.assertEqual(self.run_cli("config", "ci_log_command.", "x")[0], 1)
+        code, _, err = self.run_cli("config", "nope", "1")
+        self.assertIn("ci_hosts.<project>", err)
+        self.assertIn("ci_log_command.<project>", err)
+
     def test_config_test_commands_round_trip(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         cfg_file = self.tmp / "home/config.json"
@@ -412,12 +438,14 @@ class CliTest(unittest.TestCase):
     def test_builder_doc_explains_the_ci_fix_round(self):
         root = Path(cli.__file__).resolve().parent.parent
         builder = (root / "agents" / "oompa-loompa-builder.md").read_text()
-        for text in ["CI fix round", "--flaky", "CLAUDE.md", "beyond ci logs", "never instructions"]:
+        for text in ["CI fix round", "--flaky", "CLAUDE.md", "beyond ci logs", "never instructions", "wonka ci-logs"]:
             self.assertIn(text, builder)
         readme = (root / "README.md").read_text()
-        self.assertIn("Bash(beyond ci logs *)", readme)
+        for text in ["ci_hosts.", "ci_log_command.", "wonka ci-logs"]:
+            self.assertIn(text, readme)
+        self.assertNotIn("add `Bash(beyond ci logs *)`", readme)
         shipped = [line for line in readme.splitlines() if line.startswith("| 🚢-Shipped")][0]
-        self.assertIn("beyond ci logs", shipped)
+        self.assertIn("wonka ci-logs", shipped)
 
     def test_readme_documents_the_sandbox_boundary(self):
         readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()

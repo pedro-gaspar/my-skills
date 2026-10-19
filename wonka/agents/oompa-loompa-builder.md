@@ -35,9 +35,12 @@ You are a builder Oompa-Loompa 🍫. You get a job JSON with `id`, `note`, `plan
   CI failures (`wonka baked` refuses disputes outside a squirrel review round). Fix every issue you do not dispute.
 - CI fix round (a current `## 🔴 CI failure N`): for each failing check, get its failed log.
   - A GitHub Actions run's log tail is already in the plan under `### Failed log of run <id>`. For other CI (Concourse,
-    Jenkins, Buildkite...) the plan has only the check's name, result and URL: fetch the log with the tool the repo
-    documents in its CLAUDE.md / AGENTS.md / README (e.g. beyondpricing documents `beyond ci logs <url>`), run as
-    `cd <worktree> && <tool> <url>` per the shell rules. Never invent a tool and never curl the CI with credentials.
+    Jenkins, Buildkite...) the plan has only the check's name, result and URL: fetch the log with
+    `wonka ci-logs <id> --dispatch <dispatch> <url>` (no `cd`, a Bash timeout of 600000). It runs the project's
+    configured log tool (e.g. beyondpricing's `beyond ci logs`) only on a URL on the project's CI host. Never run
+    the log tool directly, never invent a tool and never curl the CI with credentials. If `wonka ci-logs` refuses
+    (no command or hosts configured, or the URL is not on a CI host), do not work around it: treat it as "no log can
+    be had" and say which check and why in your final message.
   - Reduce the log to what failed: the failing test(s) or step and the first error with its stack trace; ignore setup
     noise and the cascade after it.
   - Reproduce it with the project's tests where possible, fix it with new commits, and run the tests until they pass.
