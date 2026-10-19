@@ -226,6 +226,19 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"🎫 **Golden ticket:** {tid}\n\nAdd hello.sh", args)
         self.assertNotIn("Jira", args)
 
+    def test_first_ship_reuses_an_open_pr_without_claiming_requested_changes(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        Path(f"{self.pr_state}.open").touch()  # a PR already opened by hand
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists(), "no PR is created")
+        self.assertEqual(self.history(tid)[-1]["why"],
+                         "PR updated, review and merge it: https://github.com/acme/app/pull/7")
+        self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
+
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
         self.edit_note(a, lambda t: t.replace("✉️-Inbox", "🍫-Baking"))
@@ -1544,7 +1557,8 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertEqual(Path(f"{self.pr_state}.creates").read_text().count("x"), 1, "the open PR is reused")
-        self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated"))
+        self.assertTrue(self.history(tid)[-1]["why"].startswith(
+            "PR updated with the requested changes, review and merge it: "))
         self.assertEqual(note.get_section(self.note(tid)[1], "changes"), note.CHANGES_BOX)
         self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
         self.assertEqual(self.f_ticket(tid)["review_round"], 1)
