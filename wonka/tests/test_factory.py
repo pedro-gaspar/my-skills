@@ -1973,6 +1973,18 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(factory._push_rejected(non_ff))
         self.assertFalse(factory._push_rejected("git push -u failed: fatal: could not read from remote"))
 
+    def test_push_rejected_reason_fits_and_keeps_the_advice(self):
+        short = "wonka/WONKA-00001-" + "x" * 40  # the longest generated branch
+        why = factory._push_rejected_reason(short)
+        self.assertIn(f"git pull --no-rebase origin {short}", why)
+        self.assertLessEqual(len(why), 200)
+        long = "feature/" + "a-very-long-custom-branch-name-" * 5
+        why = factory._push_rejected_reason(long)
+        self.assertLessEqual(len(why), 200)
+        self.assertNotIn(long, why)
+        self.assertIn("git pull --no-rebase origin $(git branch --show-current)", why)
+        self.assertTrue(why.endswith("then tick Retry"))
+
     def test_diverged_branch_does_not_block_baking(self):
         tid = self.add()
         wt, branch = self.to_awaiting_merge(tid)
