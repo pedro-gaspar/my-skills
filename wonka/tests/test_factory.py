@@ -3373,6 +3373,94 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(self.history(tid)[-1]["why"].startswith("PR updated with the CI fixes, review and merge it: "))
         self.assertEqual(self.f_ticket(tid)["pr_url"], pr_url)
 
+    def ci_fix_baked(self, tid):
+        job = [j for j in self.red_round(tid)["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "ci.sh")
+        with self.f() as f:
+            f.baked(tid)
+
+    def test_verdict_records_a_round_with_per_squirrel_counts(self):
+        tid = self.add()
+        self.to_planned(tid, reviewers=("architect", "security"))
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"},
+                    security={"verdict": "bad nut", "issues": ["a", "b"], "suggest": None,
+                              "followups": [{"title": "Add a bye script", "idea": "bye.sh"}]})
+        t = self.f_ticket(tid)
+        self.assertEqual(len(t["rounds"]), 1)
+        r = t["rounds"][0]
+        self.assertEqual((r["round"], r["kind"]), (1, "review"))
+        self.assertIsInstance(r["at"], str)
+        zero = {"issues": 0, "questions": 0, "followups": 0, "suggest": None}
+        self.assertEqual(r["squirrels"], {
+            "architect": {"verdict": "good nut", **zero},
+            "security": {"verdict": "bad nut", "issues": 2, "questions": 0, "followups": 1, "suggest": None}})
+        self.assertNotIn("reports", t)
+        self.assertNotIn("round_kind", t)
+        self.bake(tid, "again.sh")
+        self.review(tid, architect={"verdict": "good nut"}, security={"verdict": "good nut"})
+        rounds = self.f_ticket(tid)["rounds"]
+        self.assertEqual([x["round"] for x in rounds], [1, 2])
+
+    def test_round_kind_is_ci_after_a_ci_fix_round(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_fix_baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.f_ticket(tid)["rounds"][-1]["kind"], "ci")
+
+    def test_round_kind_is_change_after_a_change_request(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        job = [j for j in self.request_changes(tid, "rename it")["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "chg.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.f_ticket(tid)["rounds"][-1]["kind"], "change")
+
+    def test_retried_review_keeps_its_round_kind(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        n = len(self.f_ticket(tid).get("rounds", []))
+        self.ci_fix_baked(tid)
+        self.tick()
+        self.assertEqual(self.state(tid), ("reviewing", "progress"))
+        with self.f() as f:
+            f.retry(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        rounds = self.f_ticket(tid)["rounds"]
+        self.assertEqual(len(rounds), n + 1)
+        self.assertEqual(rounds[-1]["kind"], "ci")
+
+    def test_stats_survive_the_retries_and_stuck_resets(self):
+        tid = self.stuck_ticket()
+        t = self.f_ticket(tid)
+        self.assertEqual((t["retries"], t["stats"]["retries"], t["stats"]["stuck"]), (3, 3, 1))
+        with self.f() as f:
+            f._count_failure(tid, "again")
+        self.assertEqual(self.f_ticket(tid)["stats"]["stuck"], 1, "already stuck: not counted again")
+        self.edit_note(tid, lambda x: x.replace("- [ ] Retry", "- [x] Retry"))
+        self.tick()
+        t = self.f_ticket(tid)
+        self.assertNotIn("stuck", t)
+        self.assertNotIn("retries", t)
+        self.assertEqual(t["stats"], {"retries": 4, "stuck": 1})
+
+    def test_stats_survive_the_ci_and_conflict_resets(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        self.fix_cycle(tid, wt, 0)
+        self.pr_state.write_text("OPEN MERGEABLE")
+        self.tick()
+        t = self.f_ticket(tid)
+        self.assertNotIn("conflict_fixes", t)
+        self.assertEqual(t["stats"]["conflict_fixes"], 1)
+        self.red_round(tid)
+        self.assertEqual(self.f_ticket(tid)["stats"]["ci_rounds"], 1)
+        self.assertIn("ci_fixes", self.f_ticket(tid))
+
     def test_ci_fix_rounds_stop_after_max(self):
         tid = self.add()
         self.to_awaiting_merge(tid)

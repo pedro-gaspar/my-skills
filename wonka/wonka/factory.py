@@ -93,6 +93,12 @@ def _iso(t):
     return t.isoformat(timespec="seconds")
 
 
+def _bump_stat(t, key):
+    """Never-reset counters in t["stats"]: what went wrong on the ticket, kept after the working counters reset."""
+    stats = t.setdefault("stats", {})
+    stats[key] = stats.get(key, 0) + 1
+
+
 def _age(stamp):
     return now() - dt.datetime.fromisoformat(stamp)
 
@@ -1200,6 +1206,14 @@ class Factory:
         t = self.ticket(tid)
         reps, rnd = t.pop("reports"), t["review_round"]
         t.pop("finished", None)
+        t.setdefault("rounds", []).append({
+            "round": rnd, "kind": t.pop("round_kind", "review"), "at": _iso(now()),
+            "squirrels": {name: {"verdict": rep.get("verdict", "?"),
+                                 "issues": len(rep.get("issues") or []),
+                                 "questions": len(rep.get("questions") or []),
+                                 "followups": len(rep.get("followups") or []),
+                                 "suggest": rep.get("suggest")}
+                          for name, rep in reps.items()}})
         seen = self._child_titles(tid)
         depth, max_depth = self._depth(tid), self.cfg.get("max_followup_depth", 2)
         for rep in reps.values():
@@ -1480,6 +1494,7 @@ class Factory:
         t = self.ticket(tid)
         t["ci_failures"] = t.get("ci_failures", 0) + 1
         t["ci_fixes"] = t.get("ci_fixes", 0) + 1
+        _bump_stat(t, "ci_rounds")
         t["ci_handled_sha"] = head
         t["review_round"], t["fixing_ci"] = 0, True
         t.pop("extra_rounds", None)
@@ -1635,6 +1650,7 @@ class Factory:
         t.pop("conflict_error", None)
         # retries is reset here on purpose, so this count is what bounds a PR that GitHub keeps calling conflicting
         n = t["conflict_fixes"] = t.get("conflict_fixes", 0) + 1
+        _bump_stat(t, "conflict_fixes")
         self.move(tid, ("shipped", "awaiting"), "fixer", f"Merge conflicts fixed and pushed (fix {n}/{MAX_CONFLICT_FIXES})")
 
     # -- the tick ---------------------------------------------------------
@@ -1765,6 +1781,8 @@ class Factory:
                 fixes = t.get("conflict_fixes", 0)
                 if fixes >= MAX_CONFLICT_FIXES:
                     base = t.get("pr_base") or t["base_branch"]
+                    if not t.get("stuck"):
+                        _bump_stat(t, "stuck")
                     t["stuck"] = True
                     self.set_section(tid, "stuck", f"- [ ] Retry ({fixes} conflict fixes were pushed but GitHub still "
                                                    f"reports the PR as conflicting with `{base}`: check the PR's base "
@@ -1851,8 +1869,10 @@ class Factory:
                 return failed
             t["reviewed_head"] = git("rev-parse", "HEAD", cwd=t["worktree"])
             t["review_round"] += 1
-            t.pop("fixing_changes", None)
-            t.pop("fixing_ci", None)
+            kind = "change" if t.pop("fixing_changes", None) else None
+            kind = "ci" if t.pop("fixing_ci", None) and not kind else kind
+            if kind or "round_kind" not in t:
+                t["round_kind"] = kind or "review"
             t["reports"] = {}
             t["finished"] = []
             self.move(tid, ("reviewing", "progress"), "wonka")
@@ -1950,8 +1970,11 @@ class Factory:
         if final:
             retries = max(retries, MAX_RETRIES)
         t["retries"] = retries
+        _bump_stat(t, "retries")
         if retries < MAX_RETRIES:
             return retries, False
+        if not t.get("stuck"):
+            _bump_stat(t, "stuck")
         t["stuck"] = True
         failed = "" if final else f"{retries} tries failed, the last one: "
         self.set_section(tid, "stuck", f"- [ ] Retry ({failed}{why}. See ~/.wonka/factory.log)")
