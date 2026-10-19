@@ -27,7 +27,7 @@ class CheckTest(unittest.TestCase):
                           ("commit", ["-mfix -p", "--no-edit"]), ("commit", ["--no-edit"]),
                           ("diff", ["--stat", "--", "--output"]), ("rev-parse", ["HEAD"]),
                           ("diff", ["--name-only", "--diff-filter=U"]),
-                          ("merge", ["--no-edit", "origin/main"]), ("merge", ["--abort"]),
+                          ("rebase", ["origin/main"]), ("rebase", ["--continue"]), ("rebase", ["--abort"]),
                           ("ls-files", ["--exclude", "*.pyc", "-o"]), ("ls-files", ["-x", "-X"]),
                           ("ls-files", ["-x*.pyc", "--exclude-standard", "-o"]), ("ls-files", ["--exclude=*.o"]),
                           ("blame", ["--ignore-rev", "HEAD~1", "README.md"]), ("blame", ["-L", "1,5", "README.md"]),
@@ -38,7 +38,7 @@ class CheckTest(unittest.TestCase):
                 self.assertIsNone(check(sub, args))
 
     def test_other_subcommands_are_refused(self):
-        for sub in ("config", "push", "reset", "grep", "difftool", "mergetool", "submodule", "rebase", "bisect",
+        for sub in ("config", "push", "reset", "grep", "difftool", "mergetool", "submodule", "merge", "bisect",
                     "filter-branch", "archive", "fetch", "clone", "worktree", "-c", "-C", "--exec-path=/x",
                     "--git-dir=/x"):
             with self.subTest(sub=sub), self.assertRaises(WonkaError):
@@ -84,11 +84,12 @@ class CheckTest(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertIsNone(check("rev-parse", args))
 
-    def test_merge_only_takes_the_fixer_forms(self):
-        for args in ([], ["origin/main"], ["--no-edit"], ["--no-edit", "-s", "ours"], ["--no-edit", "--squash"],
-                     ["--no-edit", "a", "b"], ["--abort", "x"], ["-X", "theirs", "origin/main"]):
+    def test_rebase_only_takes_the_fixer_forms(self):
+        for args in ([], ["-i", "origin/main"], ["--interactive", "origin/main"], ["--onto", "a", "b"], ["--skip"],
+                     ["--exec", "x", "origin/main"], ["-x", "x", "origin/main"], ["--root"], ["a", "b"],
+                     ["--abort", "x"], ["--continue", "x"], ["-Xtheirs", "origin/main"], ["--edit-todo"]):
             with self.subTest(args=args), self.assertRaises(WonkaError):
-                check("merge", args)
+                check("rebase", args)
 
     def test_command_pins_path_and_global_options(self):
         self.assertEqual(command("/w", "/r/.git/worktrees/w", "diff", ["x"]),
@@ -144,7 +145,9 @@ class CheckTest(unittest.TestCase):
                                 ("reviewing", "progress"), "log"), wt)
         self.assertEqual(target({"worktree": str(wt), "scout": str(scout), "repo": str(repo)}, baking, "commit"), wt)
         self.assertEqual(target({"worktree": str(wt), "repo": str(repo)}, baking, "commit"), wt)
-        self.assertEqual(target({"worktree": str(wt), "repo": str(repo)}, ("shipped", "progress"), "merge"), wt)
+        self.assertEqual(target({"worktree": str(wt), "repo": str(repo)}, ("shipped", "progress"), "rebase"), wt)
+        with self.assertRaisesRegex(WonkaError, "only runs while the fixer"):
+            target({"worktree": str(wt), "repo": str(repo)}, baking, "rebase")
         for state in (("reviewing", "progress"), ("drafting", "progress"), ("shipped", "awaiting")):
             with self.subTest(state=state), self.assertRaises(WonkaError):
                 target({"worktree": str(wt), "repo": str(repo)}, state, "add")
@@ -460,50 +463,52 @@ class WrapperTest(unittest.TestCase):
             return self.git(*argv)[0]
 
     def conflicted(self):
-        """to_fixing() plus a conflicting merge through the wrapper: (tid, wt, base_ref, head before the merge)."""
+        """to_fixing() plus a conflicting rebase through the wrapper: (tid, wt, base_ref, head before the rebase)."""
         tid, wt, ref = self.to_fixing()
         head = sh("git", "rev-parse", "HEAD", cwd=wt)
-        self.assertEqual(self.hostile_git(tid, "merge", "--no-edit", ref), 1)
-        self.assertTrue(factory._ref_exists(wt, "MERGE_HEAD"))
+        self.assertEqual(self.hostile_git(tid, "rebase", ref), 1)
+        self.assertTrue(factory._rebasing(wt))
         return tid, wt, ref, head
 
-    def test_fixer_merges_and_commits_through_wonka_git(self):
+    def test_fixer_rebases_through_wonka_git(self):
         tid, wt, ref, head = self.conflicted()
         main_head = sh("git", "rev-parse", "HEAD", cwd=self.repo)
         status = sh("git", "status", "--porcelain", cwd=self.repo)
         (wt / "hello.sh").write_text("echo hi\necho upstream\n")
-        self.assertEqual(self.hostile_git(tid, "add", "hello.sh"), 0)
-        self.assertEqual(self.hostile_git(tid, "commit", "--no-edit"), 0)
-        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
-        self.assertEqual(sh("git", "rev-parse", "HEAD^1", "HEAD^2", cwd=wt).split(),
-                         [head, sh("git", "rev-parse", ref, cwd=wt)])
+        self.assertEqual(self.hostile_git(tid, "add", "hello.sh"), 0, "add works mid-rebase, on a detached HEAD")
+        self.assertEqual(self.hostile_git(tid, "rebase", "--continue"), 0)
+        self.assertFalse(factory._rebasing(wt))
+        self.assertEqual(sh("git", "rev-parse", "HEAD^", cwd=wt), sh("git", "rev-parse", ref, cwd=wt))
+        self.assertEqual(sh("git", "rev-list", "--merges", f"{ref}..HEAD", cwd=wt), "")
+        self.assertEqual(sh("git", "log", "-1", "--format=%s", cwd=wt), sh("git", "log", "-1", "--format=%s", head, cwd=wt))
         self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=self.repo), main_head)
         self.assertEqual(sh("git", "status", "--porcelain", cwd=self.repo), status)
         with self.f() as f:
             f.resolved(tid)
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
 
-    def test_plain_commit_finishes_a_merge_with_the_wrapper_editor(self):
-        """Fails if env() stops setting GIT_EDITOR=true: git would run the caller's `false` editor."""
-        tid, wt, _, _ = self.conflicted()
-        (wt / "hello.sh").write_text("echo hi\necho upstream\n")
-        self.assertEqual(self.hostile_git(tid, "add", "hello.sh"), 0)
-        self.assertEqual(self.hostile_git(tid, "commit"), 0)
-        self.assertTrue(sh("git", "log", "-1", "--format=%s", cwd=wt).startswith("Merge"))
-
-    def test_fixer_merge_abort_through_wonka_git(self):
+    def test_fixer_rebase_abort_through_wonka_git(self):
         tid, wt, _, head = self.conflicted()
-        self.assertEqual(self.hostile_git(tid, "merge", "--abort"), 0)
-        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
+        self.assertEqual(self.hostile_git(tid, "rebase", "--abort"), 0)
+        self.assertFalse(factory._rebasing(wt))
         self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
         self.assertEqual(sh("git", "rev-parse", "HEAD", cwd=wt), head)
+        with self.f() as f:
+            self.assertEqual(sh("git", "symbolic-ref", "--short", "HEAD", cwd=wt), f.ticket(tid)["branch"])
 
-    def test_clean_fixer_merge_through_wonka_git(self):
+    def test_clean_fixer_rebase_through_wonka_git(self):
         tid, wt, ref = self.to_fixing(conflict=False)
-        self.assertEqual(self.hostile_git(tid, "merge", "--no-edit", ref), 0)
-        self.assertEqual(sh("git", "rev-parse", "HEAD^2", cwd=wt), sh("git", "rev-parse", ref, cwd=wt))
-        self.assertFalse(factory._ref_exists(wt, "MERGE_HEAD"))
+        self.assertEqual(self.hostile_git(tid, "rebase", ref), 0)
+        self.assertEqual(sh("git", "rev-parse", "HEAD^", cwd=wt), sh("git", "rev-parse", ref, cwd=wt))
+        self.assertFalse(factory._rebasing(wt))
 
+    def test_mid_rebase_add_still_refused_on_another_branch(self):
+        tid, wt, _, _ = self.conflicted()
+        with self.f() as f:
+            f.ticket(tid)["branch"] = "wonka/someone-else"
+        (wt / "hello.sh").write_text("echo hi\n")
+        code = self.hostile_git(tid, "add", "hello.sh")
+        self.assertEqual(code, 1)
 
 if __name__ == "__main__":
     unittest.main()

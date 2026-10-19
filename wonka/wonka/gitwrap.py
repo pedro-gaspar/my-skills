@@ -10,10 +10,11 @@ from .factory import JOB_AGENTS, Factory, check_branch, fmt
 from .store import WonkaError
 
 READS = ("status", "diff", "log", "show", "rev-parse", "ls-files", "blame")
-WRITES = ("add", "commit", "merge")
+WRITES = ("add", "commit", "rebase")
 SUBCOMMANDS = READS + WRITES
-# the states whose job writes to the worktree: the builder bakes, the fixer merges the base into an open PR
+# the states whose job writes to the worktree: the builder bakes, the fixer rebases an open PR onto its base
 WRITE_STATES = frozenset(JOB_AGENTS[a] for a in ("oompa-loompa-builder", "oompa-loompa-fixer"))
+FIXING = JOB_AGENTS["oompa-loompa-fixer"]  # only the fixer rewrites history, and only by rebasing
 # long options refused (and any abbreviation of them: parse-options accepts unambiguous prefixes), including the
 # options that read a file given by path, which can be outside the worktree (--pathspec-from-file, --exclude-from...)
 BANNED = {
@@ -45,11 +46,12 @@ KEEP_ENV = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMI
             "GIT_COMMITTER_DATE")
 
 
-def _check_merge(args):
-    """The fixer only ever runs `merge --no-edit <ref>` or `merge --abort`: nothing else gets through."""
-    ok = args == ["--abort"] or (len(args) == 2 and args[0] == "--no-edit" and not args[1].startswith("-"))
+def _check_rebase(args):
+    """The fixer only ever runs `rebase <ref>`, `rebase --continue` or `rebase --abort`: nothing else gets through
+    (no -i, --exec, --onto or --skip, which drops a commit)."""
+    ok = args in (["--continue"], ["--abort"]) or (len(args) == 1 and not args[0].startswith("-"))
     if not ok:
-        raise WonkaError("git merge only runs as 'merge --no-edit <ref>' or 'merge --abort'")
+        raise WonkaError("git rebase only runs as 'rebase <ref>', 'rebase --continue' or 'rebase --abort'")
 
 
 def _inside(sub, arg):
@@ -68,8 +70,8 @@ def check(sub, args):
     """Raise WonkaError when the subcommand or one of its options is not allowed."""
     if sub not in SUBCOMMANDS:
         raise WonkaError(f"git {sub} is not allowed; use one of {', '.join(SUBCOMMANDS)}")
-    if sub == "merge":
-        return _check_merge(args)
+    if sub == "rebase":
+        return _check_rebase(args)
     banned = BANNED["*"] + BANNED.get(sub, ())
     banned_short, short_value = BANNED_SHORT.get(sub, ""), SHORT_WITH_VALUE.get(sub, "")
     long_value, exact_ok = LONG_WITH_VALUE.get(sub, ()), EXACT_OK.get(sub, ())
@@ -172,6 +174,8 @@ def target(t, state, sub):
         if state not in WRITE_STATES:
             raise WonkaError(f"git {sub} only runs while the ticket is baking or fixing merge conflicts "
                              f"(it is {fmt(state)})")
+        if sub == "rebase" and state != FIXING:
+            raise WonkaError(f"git rebase only runs while the fixer resolves merge conflicts (it is {fmt(state)})")
         if not has_wt:
             raise WonkaError(f"no worktree for this ticket: git {sub} only runs in its worktree")
         return Path(wt)
@@ -181,6 +185,21 @@ def target(t, state, sub):
     if has_wt:
         return Path(wt)
     return Path(t["repo"])
+
+
+def _on_branch(path, gd):
+    """The branch the worktree is on, or "" when detached. A rebase detaches HEAD until it ends; git keeps the branch
+    it is rebasing in rebase-merge (or rebase-apply)/head-name."""
+    out = subprocess.run(command(path, gd, "symbolic-ref", ["--quiet", "--short", "HEAD"]), env=env(),
+                         stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
+    if out:
+        return out
+    for d in ("rebase-merge", "rebase-apply"):
+        try:
+            return (Path(gd) / d / "head-name").read_text().strip().removeprefix("refs/heads/")
+        except OSError:
+            continue
+    return ""
 
 
 def main(argv):
@@ -201,8 +220,7 @@ def main(argv):
     try:
         gd = git_dir(repo, path)
         if sub in WRITES:
-            head = subprocess.run(command(path, gd, "symbolic-ref", ["--quiet", "--short", "HEAD"]), env=env(),
-                                  stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
+            head = _on_branch(path, gd)
             if head != branch:
                 raise WonkaError(f"git {sub} only runs on {branch}, but the worktree is on {head or 'a detached HEAD'}")
         return subprocess.run(command(path, gd, sub, args), env=env(), stdin=subprocess.DEVNULL).returncode

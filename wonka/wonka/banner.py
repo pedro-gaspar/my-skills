@@ -65,7 +65,7 @@ def _story(tid, t, meta, cfg):
             "Fix the cause, then tick **Retry** in 🎩 Stuck below.")
     if t.get("conflicts") and s == ("shipped", "progress"):
         return "info", "A fixer Oompa-Loompa is fixing merge conflicts", (
-            f"🔧 Merging {t.get('merge_ref')} into `{t.get('branch')}` in `{t.get('worktree')}`. Nothing to do.")
+            f"🔧 Rebasing `{t.get('branch')}` onto {t.get('merge_ref')} in `{t.get('worktree')}`. Nothing to do.")
     if t.get("conflicts") and s == ("shipped", "awaiting"):
         if t.get("conflict_error"):
             return "warning", "The PR has merge conflicts", (
