@@ -140,6 +140,12 @@ class CheckTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HOME": "/tmp/evil"}):
             self.assertEqual(REAL_PASSWD_HOME(), pwd.getpwuid(os.getuid()).pw_dir)
 
+    def test_passwd_home_fails_closed_without_a_passwd_entry(self):
+        with mock.patch.object(gitwrap.pwd, "getpwuid", side_effect=KeyError(os.getuid())):
+            self.assertIsNone(REAL_PASSWD_HOME())
+        with mock.patch.object(gitwrap.pwd, "getpwuid", return_value=mock.Mock(pw_dir="")):
+            self.assertIsNone(REAL_PASSWD_HOME())
+
     def test_write_states_follow_the_job_map(self):
         self.assertEqual(gitwrap.WRITE_STATES, {JOB_AGENTS["oompa-loompa-builder"], JOB_AGENTS["oompa-loompa-fixer"]})
         self.assertEqual(gitwrap.WRITE_STATES, {("baking", "progress"), ("shipped", "progress")})
@@ -587,6 +593,44 @@ class HermeticGitTest(unittest.TestCase):
         self.assertEqual(e["HOME"], GIT_HOME)
         self.assertNotIn("GIT_CONFIG_GLOBAL", e)
         self.assertEqual(self.global_config(e), ["user.name=t", "user.email=t@t"])
+
+
+class BannedLongFormsTest(unittest.TestCase):
+    """Each banned option spelled out in full (not only abbreviated) is refused."""
+
+    def test_full_long_options_are_refused(self):
+        for line in ("commit --file f", "commit --file=f", "commit -m x --file f", "add --edit", "add --edit a.py",
+                     "log --config=core.pager=sh", "diff --config x", "status --config=x",
+                     "log --upload-pack=sh", "show --upload-pack x", "log --receive-pack=sh",
+                     "diff --receive-pack x", "diff --extcmd=sh", "show --extcmd sh",
+                     "log --open-files-in-pager", "diff --open-files-in-pager=vi", "ls-files --config=x"):
+            sub, *args = line.split()
+            with self.subTest(line=line), self.assertRaisesRegex(WonkaError, "is not allowed"):
+                check(sub, args)
+
+
+class OnBranchTest(unittest.TestCase):
+    """Mid-rebase HEAD is detached: the branch comes from rebase-merge or rebase-apply/head-name."""
+
+    def setUp(self):
+        self.gd = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.gd, ignore_errors=True)
+        patcher = mock.patch.object(gitwrap.subprocess, "run", return_value=mock.Mock(stdout="\n"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_rebase_apply_head_name(self):
+        (self.gd / "rebase-apply").mkdir()
+        (self.gd / "rebase-apply" / "head-name").write_text("refs/heads/wonka/x\n")
+        self.assertEqual(gitwrap._on_branch("/w", self.gd), "wonka/x")
+
+    def test_rebase_merge_head_name(self):
+        (self.gd / "rebase-merge").mkdir()
+        (self.gd / "rebase-merge" / "head-name").write_text("refs/heads/wonka/y\n")
+        self.assertEqual(gitwrap._on_branch("/w", self.gd), "wonka/y")
+
+    def test_detached_without_a_rebase(self):
+        self.assertEqual(gitwrap._on_branch("/w", self.gd), "")
 
 
 if __name__ == "__main__":
