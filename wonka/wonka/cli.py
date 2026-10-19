@@ -262,7 +262,7 @@ def main(argv=None):
             return git_main(argv[1:])
         except WonkaError as e:
             store.log(f"git {' '.join(argv[1:3])}: {e}")
-            print(f"🫐 wonka: {e}", file=sys.stderr)
+            print(f"🗑️ wonka: {e}", file=sys.stderr)
             return 1
     a = parser().parse_args(argv)
     try:
@@ -281,5 +281,5 @@ def main(argv=None):
         return 0
     except WonkaError as e:
         store.log(f"{a.cmd} {getattr(a, 'id', '')}: {e}".replace("  ", " "))
-        print(f"🫐 wonka: {e}", file=sys.stderr)
+        print(f"🗑️ wonka: {e}", file=sys.stderr)
         return 1

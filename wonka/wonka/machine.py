@@ -6,8 +6,8 @@ STATUSES = {
     "ready": "🎫-Ready",
     "baking": "🍫-Baking",
     "reviewing": "🐿️-Reviewing",
-    "shipped": "🛗-Shipped",
-    "wontdo": "🫐-Wont-Do",
+    "shipped": "🚢-Shipped",
+    "wontdo": "🗑️-Wont-Do",
 }
 PHASES = {
     "pending": "🕰️-Pending",

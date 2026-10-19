@@ -217,7 +217,7 @@ class CliTest(unittest.TestCase):
     def test_errors_are_friendly_and_logged(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         code, _, err = self.run_cli("show", "WONKA-00042")
-        self.assertEqual((code, err.strip()), (1, "🫐 wonka: No ticket WONKA-00042"))
+        self.assertEqual((code, err.strip()), (1, "🗑️ wonka: No ticket WONKA-00042"))
         self.assertIn("No ticket WONKA-00042", (self.tmp / "home/factory.log").read_text())
 
 
