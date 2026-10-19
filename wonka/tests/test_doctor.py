@@ -125,6 +125,33 @@ class OrphansTest(unittest.TestCase):
     def test_missing_folders_are_ok(self):
         self.assertEqual(list(doctor._orphans(self.cfg)), [("ok", "notes: no unknown ## sections (0 notes)")])
 
+    def test_undecodable_note_warns_unreadable(self):
+        path = self.board / "golden-tickets" / "WONKA-00001.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"---\nid: WONKA-00001\n---\n# \xff\xfe bad\n")
+        try:
+            path.read_text()
+        except UnicodeDecodeError:
+            pass
+        else:
+            self.skipTest("default encoding decodes any bytes")
+        self.write("golden-tickets", "WONKA-00002.md", "# 🎫 T\n\n## 💡 Idea\nx\n\n## 🎩 Factory log\n> y\n")
+        result = list(doctor._orphans(self.cfg))
+        self.assertEqual(len(result), 1)
+        level, msg = result[0]
+        self.assertEqual(level, "warn")
+        self.assertIn(f"{path}: unreadable (", msg)
+        self.assertNotIn("WONKA-00002.md", msg)
+
+    def test_unreadable_path_warns_unreadable(self):
+        path = self.board / "archive" / "WONKA-00003.md"
+        path.mkdir(parents=True)
+        result = list(doctor._orphans(self.cfg))
+        self.assertEqual(len(result), 1)
+        level, msg = result[0]
+        self.assertEqual(level, "warn")
+        self.assertIn(f"{path}: unreadable (", msg)
+
 
 
 class NpxCheckTest(unittest.TestCase):
