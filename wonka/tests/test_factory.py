@@ -216,7 +216,9 @@ class FactoryTest(unittest.TestCase):
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
         args = Path(f"{self.pr_state}.args").read_text()
-        self.assertIn(f"🎫 **Golden ticket:** {tid}  \n🎟️ **Jira:** CALC-42\n\nAdd hello.sh", args)
+        self.assertIn(f"<!-- wonka:{tid} -->\n\n🎟️ **Jira:** CALC-42\n\nAdd hello.sh", args)
+        for gone in ("Golden ticket", "🎫", "Baked by"):
+            self.assertNotIn(gone, args)
         self.assertIn("[CALC-42] Add a hello script\n", args)
         self.assertNotIn(tid + "] ", args)
 
@@ -235,8 +237,10 @@ class FactoryTest(unittest.TestCase):
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
         args = Path(f"{self.pr_state}.args").read_text()
-        self.assertIn(f"🎫 **Golden ticket:** {tid}\n\nAdd hello.sh", args)
+        self.assertIn(f"<!-- wonka:{tid} -->\n\nAdd hello.sh", args)
         self.assertNotIn("Jira", args)
+        self.assertNotIn("Baked by", args)
+        self.assertNotIn("Wonka factory", args)
         self.assertIn(f"[{tid}] Add a hello script\n", args)
 
     def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
@@ -259,11 +263,49 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("was not opened by Wonka", note.get_section(self.note(tid)[1], "stuck"))
         self.assertTrue(wt.exists())
 
+    def test_first_ship_refuses_a_pr_marked_for_another_ticket(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/8", "body": "<!-- wonka:WONKA-99999 -->\\n\\nAdd" },'
+            ' { "url": "https://github.com/acme/app/pull/9", "body": "🎫 **Golden ticket:** %s2\\n\\nAdd" }]\n' % tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "pending"))
+        self.assertTrue(self.f_ticket(tid).get("stuck"))
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists(), "no PR is created")
+        self.assertIn("was not opened by Wonka", note.get_section(self.note(tid)[1], "stuck"))
+
+    def test_is_our_pr_body(self):
+        ok = factory._is_our_pr_body
+        tid = "WONKA-00001"
+        self.assertTrue(ok(tid, f"<!-- wonka:{tid} -->\n\nspec"))
+        self.assertTrue(ok(tid, f"\r\n<!-- wonka:{tid} -->\r\n\nspec"))
+        self.assertTrue(ok(tid, f"🎫 **Golden ticket:** {tid}  \n🎟️ **Jira:** K-1"))
+        self.assertTrue(ok(tid, f"🎫 **Golden ticket:** {tid}\n\nspec"))
+        self.assertFalse(ok(tid, "hand written"))
+        self.assertFalse(ok(tid, None))
+        self.assertFalse(ok(tid, f"<!-- wonka:{tid}2 -->"))
+        self.assertFalse(ok(tid, f"🎫 **Golden ticket:** {tid}2"))
+
+    def test_first_ship_reuses_an_open_pr_with_the_hidden_marker(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        Path(f"{self.pr_state}.list").write_text(
+            '[{ "url": "https://github.com/acme/app/pull/7", "body": "<!-- wonka:%s -->\\n\\nAdd" }]\n' % tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists(), "no PR is created")
+        self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
+
     def test_first_ship_reuses_an_open_pr_wonka_opened_without_claiming_requested_changes(self):
         tid = self.add()
         self.to_planned(tid)
         self.bake(tid)
-        # Wonka opened it, but the URL was lost (a crashed tick): its description starts with the ticket's line
+        # legacy: Wonka opened it before the hidden marker, the URL was lost (a crashed tick): old visible line
         Path(f"{self.pr_state}.list").write_text(
             '[{ "url": "https://github.com/acme/app/pull/7", "body": "🎫 **Golden ticket:** %s\\n\\nAdd" }]\n' % tid)
         self.review(tid, architect={"verdict": "good nut"})

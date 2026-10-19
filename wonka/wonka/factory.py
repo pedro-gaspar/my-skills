@@ -258,8 +258,18 @@ def check_branch(t):
 
 
 def _pr_mark(tid):
-    """The line every PR Wonka opens starts its description with."""
+    """The hidden marker every PR Wonka opens starts its description with."""
+    return f"<!-- wonka:{tid} -->"
+
+
+def _old_pr_mark(tid):
+    """The visible first line of the description of PRs Wonka opened before the hidden marker."""
     return f"🎫 **Golden ticket:** {tid}"
+
+
+def _is_our_pr_body(tid, body):
+    body = (body or "").lstrip()
+    return body.startswith(_pr_mark(tid)) or body.split("\n", 1)[0].rstrip() == _old_pr_mark(tid)
 
 
 def pr_title(tid, meta):
@@ -268,10 +278,11 @@ def pr_title(tid, meta):
 
 
 def pr_body(tid, meta, spec):
-    ids = [_pr_mark(tid)]
+    parts = [_pr_mark(tid)]
     if meta.get("jira"):
-        ids.append(f"🎟️ **Jira:** {meta['jira']}")
-    return "  \n".join(ids) + f"\n\n{spec.strip()}\n\n🤖 Baked by the Wonka factory"
+        parts.append(f"🎟️ **Jira:** {meta['jira']}")
+    parts.append(spec.strip())
+    return "\n\n".join(parts)
 
 
 def fmt(state):
@@ -1020,15 +1031,15 @@ class Factory:
 
     def _own_prs(self, tid):
         """The URLs of the open PRs on the ticket's branch, which must all be Wonka's own for this ticket: the PR it
-        recorded, or one whose description starts with its golden ticket line (opened by Wonka, e.g. before a crash
-        lost the URL). Raises _NotOurs for any other PR: Wonka never pushes to a PR it did not open."""
+        recorded, or one whose description starts with its hidden `<!-- wonka:<id> -->` marker (or, for PRs opened
+        before it, the old golden ticket line), i.e. opened by Wonka, e.g. before a crash lost the URL. Raises _NotOurs for any other PR: Wonka never pushes to a PR it did not open."""
         t = self.ticket(tid)
         prs = gh_json("pr", "list", "--repo", t["pr_repo"], "--head", t["branch"], "--state", "open",
                       "--json", "url,body", default=[])
         ours, others = [], []
         for pr in prs:
             pr = pr if isinstance(pr, dict) else {}
-            mine = pr.get("url") and (pr["url"] == t.get("pr_url") or (pr.get("body") or "").startswith(_pr_mark(tid)))
+            mine = pr.get("url") and (pr["url"] == t.get("pr_url") or _is_our_pr_body(tid, pr.get("body")))
             (ours if mine else others).append(pr.get("url") or "?")
         if others:
             raise _NotOurs(f"open PR {', '.join(others)} on {t['branch']} was not opened by Wonka for {tid}: "
