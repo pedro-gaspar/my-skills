@@ -27,6 +27,26 @@ class PermissionsTest(unittest.TestCase):
         paths = (self.tmp / "missing.json", self.write("list.json", []), self.write("bad.json", "not json"), good)
         self.assertEqual(doctor._permissions(paths), (["Bash(wonka *)"], []))
 
+    def test_non_object_permissions_skips_the_file(self):
+        good = self.write("good.json", {"permissions": {"allow": ["Bash(wonka *)"]}})
+        paths = (self.write("list.json", {"permissions": ["Bash(x)"]}),
+                 self.write("str.json", {"permissions": "x"}),
+                 self.write("null.json", {"permissions": None}), good)
+        self.assertEqual(doctor._permissions(paths), (["Bash(wonka *)"], []))
+
+    def test_string_allow_is_skipped(self):
+        a = self.write("a.json", {"permissions": {"allow": "Bash(git *)", "additionalDirectories": ["~/x"]}})
+        self.assertEqual(doctor._permissions((a,)), ([], [str(Path("~/x").expanduser())]))
+
+    def test_string_additional_directories_is_skipped(self):
+        a = self.write("a.json", {"permissions": {"allow": ["Bash(wonka *)"], "additionalDirectories": "~/x"}})
+        self.assertEqual(doctor._permissions((a,)), (["Bash(wonka *)"], []))
+
+    def test_non_string_items_are_dropped(self):
+        a = self.write("a.json", {"permissions": {"allow": ["Bash(wonka *)", 1, None],
+                                                  "additionalDirectories": ["~/x", 2, None]}})
+        self.assertEqual(doctor._permissions((a,)), (["Bash(wonka *)"], [str(Path("~/x").expanduser())]))
+
     def test_default_paths_are_read_at_call_time(self):
         a = self.write("settings.json", {"permissions": {"allow": ["Bash(git *)"]}})
         with mock.patch.object(doctor, "SETTINGS", (a, self.tmp / "nope.json")):
