@@ -1965,6 +1965,27 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.f_ticket(tid)["pr_url"], "https://github.com/acme/app/pull/7")
         self.assertEqual(self.f_ticket(tid)["review_round"], 1)
 
+    def test_request_changes_ages_an_earlier_review_round_before_it(self):
+        tid = self.add()
+        self.to_ready(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "bad nut", "issues": ["no shebang"]})
+        self.bake(tid, "fix.sh")
+        self.review(tid, architect={"verdict": "good nut"})
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertRegex(self.plan_text(tid), r"(?m)^## 🐿️ Review round 1$")
+        self.pr_feedback()
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        self.assertNotRegex(plan, r"(?m)^## 🐿️ Review round")
+        self.assertEqual(plan.count("## 🐿️ Earlier review round 1"), 1)
+        earlier, request = plan.index("## 🐿️ Earlier review round 1"), plan.index("## 🔁 Change request 1")
+        self.assertLess(earlier, request, "the aged review round stays before the change request")
+        self.assertIn("no shebang", plan[earlier:request])
+        self.assertIn("rename it", plan[request:])
+
     def push_from_github(self, branch, filename):
         """Commit `filename` on the PR branch from a second clone and push it, as a suggestion applied on GitHub."""
         other = self.tmp / f"github-{filename}"
