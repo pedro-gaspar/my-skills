@@ -35,6 +35,20 @@ REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?
 TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
 
 
+def _parse_dispute(text):
+    """Parse a `--dispute "<issue> :: <why>"` value into an issue/why dict, whitespace collapsed (one line each)."""
+    issue, sep, why = text.partition("::")
+    issue, why = " ".join(issue.split()), " ".join(why.split())
+    if not sep or not issue or not why:
+        raise WonkaError(f'--dispute needs "<issue> :: <why>", got: {text}')
+    return {"issue": issue, "why": why}
+
+
+def _round_issues(entry):
+    """How many issues the squirrels raised in a round entry of t["rounds"]."""
+    return sum(s.get("issues", 0) for s in entry.get("squirrels", {}).values())
+
+
 def _split_reviews(text):
     """Split a plan into (plan, review log): the log starts at the first review-round heading."""
     m = REVIEW_LOG.search(text)
@@ -1239,7 +1253,7 @@ class Factory:
         self.log_event(tid, f"Cleaned up the kept {what}")
         return f"{tid}: cleaned up the kept {what}"
 
-    def baked(self, tid, dispatch=None, flaky=None):
+    def baked(self, tid, dispatch=None, flaky=None, disputes=()):
         if self._stale_dispatch(tid, dispatch):
             return (f"{tid}: builder result is from an earlier dispatch "
                     f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
@@ -1247,16 +1261,38 @@ class Factory:
         t = self.ticket(tid)
         if flaky is not None:
             return self._baked_flaky(tid, flaky)
+        seen, parsed = set(), []
+        for d in map(_parse_dispute, disputes):
+            if d["issue"].casefold() not in seen:
+                seen.add(d["issue"].casefold())
+                parsed.append(d)
+        disputes = parsed
+        if disputes:
+            last = (t.get("rounds") or [{}])[-1]
+            if not (t.get("reviewed_head") and not t.get("fixing_changes") and not t.get("fixing_ci")
+                    and last.get("round") == t.get("review_round") and _round_issues(last) > 0):
+                raise WonkaError("nothing to dispute: --dispute is only for issues the squirrels raised in the last "
+                                 "review round (not change requests, CI failures or a first bake)")
+        all_disputed = bool(disputes) and len(disputes) >= _round_issues(t["rounds"][-1])
         if git("status", "--porcelain", cwd=t["worktree"]):
             raise WonkaError("the worktree has uncommitted changes: commit them first")
         if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
             raise WonkaError(f"no commits on {t['branch']} yet")
-        if t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]:
-            raise WonkaError(f"no new commits on {t['branch']} since the last review: commit the fixes first")
+        no_new = t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]
+        if no_new and not all_disputed:
+            raise WonkaError(f"no new commits on {t['branch']} since the last review: commit the fixes first "
+                             "(or dispute every issue with --dispute)")
         template = find_pr_template(Path(t["worktree"]))
         if template is not None and t.get("pr_body_dispatch") != t.get("dispatch"):
             raise WonkaError(f"this repo has a PR template ({template.relative_to(t['worktree'])}): write the PR body "
                              f"with wonka pr-body {tid} --dispatch {t.get('dispatch')} first")
+        if disputes:
+            entry = t["rounds"][-1]
+            entry["disputes"] = disputes
+            self._append_to_round(tid, "### Disputed by the builder\n"
+                                  + "\n".join(f"- {d['issue']} :: {d['why']}" for d in disputes) + "\n")
+            self.log_event(tid, f"The builder disputed {len(disputes)} of {_round_issues(entry)} issue(s) of review "
+                                f"round {entry['round']}" + (", no new commits" if no_new else ""))
         self.move(tid, ("baking", "ready"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
 
@@ -1393,7 +1429,13 @@ class Factory:
         """Append the human's answers to the squirrels' questions to the plan, under this round's review heading."""
         t = self.ticket(tid)
         body = note.decisions(section, skip_no=(note.CLOSE_Q, note.DRAFT_Q))
-        if not body or not t["plan"] or not Path(t["plan"]).exists():
+        if body:
+            self._append_to_round(tid, f"### Decisions\n{body}\n")
+
+    def _append_to_round(self, tid, block):
+        """Append a block to the plan under this round's review heading (adding the heading when it is missing)."""
+        t = self.ticket(tid)
+        if not t["plan"] or not Path(t["plan"]).exists():
             return
         plan = Path(t["plan"])
         text = plan.read_text()
@@ -1401,9 +1443,9 @@ class Factory:
         rounds = list(REVIEW_LOG.finditer(text))
         sep = "" if not text or text.endswith("\n") else "\n"
         if rounds and rounds[-1].group(0) == head:
-            add = f"### Decisions\n{body}\n"
+            add = block
         else:  # a clean round with questions logged no heading yet
-            add = f"\n{head}\n### Decisions\n{body}\n"
+            add = f"\n{head}\n{block}"
         plan.write_text(text + sep + add)
 
     def _back_to_baking(self, tid, why):
