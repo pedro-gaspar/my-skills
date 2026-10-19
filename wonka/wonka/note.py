@@ -11,15 +11,15 @@ HEADINGS = {
     "questions": "❓ Questions",
     "answers": "✅ Answers",
     "spec": "📜 Spec",
-    "toobig": "🫐 Too big",
-    "duplicate": "🫐 Duplicate",
+    "toobig": "🗑️ Too big",
+    "duplicate": "🗑️ Duplicate",
     "review-questions": "🐿️ Review Questions",
     "stuck": "🎩 Stuck",
     "changes": "🔁 Request changes",
     "log": "🎩 Factory log",
 }
 
-CLOSE_Q = "🫐 Close this ticket?"
+CLOSE_Q = "🗑️ Close this ticket?"
 DRAFT_Q = "🧪 Send it back to Drafting?"
 CHANGES_BOX = "- [ ] 🔁 Request changes"
 

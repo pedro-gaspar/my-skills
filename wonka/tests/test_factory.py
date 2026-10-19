@@ -168,7 +168,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "merged branch is deleted")
 
         meta, body = self.note(tid)
-        self.assertEqual((meta["status"], meta["phase"]), ("🛗-Shipped", "🌟-Done"))
+        self.assertEqual((meta["status"], meta["phase"]), ("🚢-Shipped", "🌟-Done"))
         self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
         self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
@@ -243,7 +243,7 @@ class FactoryTest(unittest.TestCase):
     def test_illegal_drag_is_reverted_but_wont_do_is_allowed(self):
         a, b = self.add(), self.add("Second")
         self.edit_note(a, lambda t: t.replace("✉️-Inbox", "🍫-Baking"))
-        self.edit_note(b, lambda t: t.replace("✉️-Inbox", "🫐-Wont-Do"))
+        self.edit_note(b, lambda t: t.replace("✉️-Inbox", "🗑️-Wont-Do"))
         events = self.tick()["events"]
         self.assertIn(f"{a}: reverted illegal 🍫-Baking/🕰️-Pending", events)
         self.assertEqual(self.note(a)[0]["status"], "✉️-Inbox")
@@ -258,7 +258,7 @@ class FactoryTest(unittest.TestCase):
             f.triage(b, "s", duplicate_of=a)
         self.assertEqual(self.state(b), ("wontdo", "done"))
         body = self.note(b)[1]
-        self.assertIn("## 🫐 Duplicate", body)
+        self.assertIn("## 🗑️ Duplicate", body)
         self.assertIn(f"[[{a}]]", body)
         self.assertNotIn("🎫 Approval", body)
         with self.f() as f:
@@ -287,7 +287,7 @@ class FactoryTest(unittest.TestCase):
                 with self.assertRaises(WonkaError), self.f() as f:
                     f.triage(b, "s", **kw)
                 self.assertEqual(self.state(b), ("inbox", "pending"))
-                self.assertNotIn("## 🫐 Duplicate", self.note(b)[1])
+                self.assertNotIn("## 🗑️ Duplicate", self.note(b)[1])
 
     def test_medium_ticket_waits_for_approval_and_answers(self):
         tid = self.add()
@@ -751,7 +751,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_a_stuck_ticket_dragged_to_wont_do_drops_stuck(self):
         tid = self.stuck_ticket()
-        self.edit_note(tid, lambda t: t.replace("✉️-Inbox", "🫐-Wont-Do"))
+        self.edit_note(tid, lambda t: t.replace("✉️-Inbox", "🗑️-Wont-Do"))
         self.tick()
         self.assert_finished_clean(tid)
 
@@ -1436,7 +1436,7 @@ class FactoryTest(unittest.TestCase):
         """Drag the ticket's note to Wont-Do and tick: the factory kills it."""
         with self.f() as f:
             label = f.read(tid)[0]["status"]
-        self.edit_note(tid, lambda t: t.replace(f"status: {label}", "status: 🫐-Wont-Do", 1))
+        self.edit_note(tid, lambda t: t.replace(f"status: {label}", "status: 🗑️-Wont-Do", 1))
         self.assertIn(f"{tid}: killed by a human", self.tick()["events"])
         self.assertEqual(self.state(tid), ("wontdo", "done"))
 
@@ -1916,7 +1916,7 @@ class FactoryTest(unittest.TestCase):
         sa = Path(self.job_for(a)["code"])  # one drafting slot: b waits in the Inbox
         self.assertTrue(sa.exists())
 
-        self.edit_note(a, lambda t: t.replace("🧪-Drafting", "🫐-Wont-Do"))
+        self.edit_note(a, lambda t: t.replace("🧪-Drafting", "🗑️-Wont-Do"))
         sb = Path(self.job_for(b)["code"])  # a's slot frees up and b is drafted in the same tick
         self.assertEqual(self.state(a), ("wontdo", "done"))
         self.assertFalse(sa.exists())

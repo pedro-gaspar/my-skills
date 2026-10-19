@@ -23,11 +23,11 @@ QUIPS = {
     ("reviewing", "progress"): "🐿️ Tap, tap, tap. Good nut or bad nut?",
     ("reviewing", "awaiting"): "🐿️ “Don't forget what happened to the man who suddenly got everything he wanted.”",
     ("reviewing", "done"): "🥜 A good nut!",
-    ("shipped", "pending"): "🛗 “Up and out!”",
-    ("shipped", "progress"): "🛗 Pressing the button marked UP AND OUT…",
-    ("shipped", "awaiting"): "🛗 “We have so much time and so little to see.” Strike that, reverse it: merge it.",
+    ("shipped", "pending"): "🚢 “All aboard!”",
+    ("shipped", "progress"): "🚢 “There's no earthly way of knowing which direction we are going…”",
+    ("shipped", "awaiting"): "🚢 “We have so much time and so little to see.” Strike that, reverse it: merge it.",
     ("shipped", "done"): "✨ “So shines a good deed in a weary world.”",
-    ("wontdo", "done"): "🫐 “Violet, you're turning violet, Violet!”",
+    ("wontdo", "done"): "🗑️ “She's a bad egg.”",
 }
 STUCK_QUIP = "🌊 Augustus is stuck in the chocolate pipe again."
 
@@ -101,14 +101,14 @@ def _story(tid, t, meta, cfg):
         ("reviewing", "awaiting"): ("question", "🙋 Your turn: the squirrels have questions", (
             f"Tick one option per question in 🐿️ Review Questions ({_round(t, cfg)}). Then it goes back to baking, "
             "back to drafting, or is closed, as you choose.")),
-        ("reviewing", "done"): ("success", "A good nut", "🛗 Off to ship."),
-        ("shipped", "pending"): ("info", "Opening the pull request", "🛗 On the next tick."),
-        ("shipped", "progress"): ("info", "Opening the pull request", "🛗 Pushing the branch and opening the PR."),
+        ("reviewing", "done"): ("success", "A good nut", "🚢 Off to ship."),
+        ("shipped", "pending"): ("info", "Opening the pull request", "🚢 On the next tick."),
+        ("shipped", "progress"): ("info", "Opening the pull request", "🚢 Pushing the branch and opening the PR."),
         ("shipped", "awaiting"): ("question", "🙋 Your turn: merge the PR", (
             f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree. "
             "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
         ("shipped", "done"): ("success", "Shipped 🎉", f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}"),
-        ("wontdo", "done"): ("failure", "Rolled away 🫐", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
+        ("wontdo", "done"): ("failure", "Down the chute 🗑️", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
     }[s]
 
 

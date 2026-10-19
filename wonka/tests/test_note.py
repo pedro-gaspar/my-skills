@@ -250,7 +250,7 @@ class NoteTest(unittest.TestCase):
         self.assertIn(f"- {note.DRAFT_Q} → Yes (recommended)", out)
         self.assertNotIn(note.CLOSE_Q, out)
         self.assertNotIn("Unanswered", out)
-        self.assertIn("- 🫐 Close this ticket? → No", note.decisions(close_no), "No is kept without skip_no")
+        self.assertIn("- 🗑️ Close this ticket? → No", note.decisions(close_no), "No is kept without skip_no")
 
     def test_approval_and_retry_checkboxes(self):
         self.assertFalse(note.approved("- [ ] Approve (size m)"))

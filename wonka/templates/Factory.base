@@ -21,8 +21,8 @@ views:
       - 🎫-Ready
       - 🍫-Baking
       - 🐿️-Reviewing
-      - 🛗-Shipped
-      - 🫐-Wont-Do
+      - 🚢-Shipped
+      - 🗑️-Wont-Do
     order:
       - id
       - title
