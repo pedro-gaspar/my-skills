@@ -14,6 +14,7 @@ HEADINGS = {
     "answers": "✅ Answers",
     "spec": "📜 Spec",
     "toobig": "🗑️ Too big",
+    "split": "🗑️ Split by repo",
     "duplicate": "🗑️ Duplicate",
     "review-questions": "🐿️ Review Questions",
     "stuck": "🎩 Stuck",

@@ -391,6 +391,64 @@ class FactoryTest(unittest.TestCase):
         toobig = note.get_section(self.note(tid)[1], "toobig")
         self.assertEqual(toobig, "- [[WONKA-00002]] Pages\n- [[WONKA-00003]] Users")
 
+    def make_lib(self):
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        sh("git", "init", "-q", "-b", "main", cwd=lib)
+        (lib / "README.md").write_text("lib\n")
+        sh("git", "add", ".", cwd=lib)
+        sh("git", "commit", "-qm", "init", cwd=lib)
+        return lib
+
+    def drafting_ticket(self):
+        tid = self.add("Change the API and its client")
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "m")
+        self.edit_note(tid, lambda text: text.replace("- [ ] Approve", "- [x] Approve"))
+        self.tick()
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        return tid
+
+    def test_multi_repo_ticket_is_split_by_repo(self):
+        lib = self.make_lib()
+        tid = self.drafting_ticket()
+        with self.f() as f:
+            f.add("App part", title="App part", repo=str(self.repo), parent=tid)
+            f.add("Lib part", title="Lib part", repo=str(lib), parent=tid)
+            f.drafted(tid, "m", split=True)
+        self.assertEqual(self.state(tid), ("wontdo", "done"))
+        self.assertEqual(note.get_section(self.note(tid)[1], "split"),
+                         "- [[WONKA-00002]] App part · app\n- [[WONKA-00003]] Lib part · lib")
+        kid = self.f_ticket("WONKA-00003")
+        self.assertEqual((kid["repo"], kid["project"]), (str(lib.resolve()), "lib"))
+        self.assertIn("Split by repo: 2 tickets in 2 repos", self.f_ticket(tid)["history"][-1]["why"])
+
+    def test_split_is_refused_without_a_child_in_another_repo(self):
+        lib = self.make_lib()
+        tid = self.drafting_ticket()
+        with self.f() as f:
+            with self.assertRaises(WonkaError):
+                f.drafted(tid, "s", split=True)
+            f.add("App part", title="App part", repo=str(self.repo), parent=tid)
+            with self.assertRaises(WonkaError):
+                f.drafted(tid, "s", split=True)
+            f.add("Lib part", title="Lib part", repo=str(lib), parent=tid)
+            with self.assertRaises(WonkaError):
+                f.drafted(tid, "s", ["backend"], split=True)
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+        self.assertEqual(self.note(tid)[0].get("size"), "m")
+
+    def test_repos_lists_each_known_repo_once(self):
+        lib = self.make_lib()
+        self.add("one")
+        self.add("two")
+        with self.f() as f:
+            f.add("lib", repo=str(lib))
+        with self.f() as f:
+            self.assertEqual(f.repos(), [("app", str(self.repo.resolve()), "acme/app"),
+                                         ("lib", str(lib.resolve()), None)])
+
     def test_spark_and_airflow_squirrels_review_data_tickets(self):
         tid = self.add()
         self.to_ready(tid, reviewers=("spark", "airflow"))

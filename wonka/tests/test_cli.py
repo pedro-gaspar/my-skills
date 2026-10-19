@@ -147,6 +147,31 @@ class CliTest(unittest.TestCase):
                 for ln in cmds:
                     self.assertIn("--dispatch <dispatch>", ln, (name, verb))
 
+    def test_drafted_takes_split(self):
+        base = ["drafted", "WONKA-00001", "--size", "m", "--dispatch", "1"]
+        self.assertTrue(cli.parser().parse_args(base + ["--split"]).split)
+        self.assertFalse(cli.parser().parse_args(base).split)
+
+    def test_repos_is_read_only_and_prints_known_repos(self):
+        self.assertIn("repos", cli.READ_ONLY)
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        repo = self.tmp / "proj"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"],
+                       cwd=repo, check=True)
+        self.run_cli("add", "--repo", str(repo), "x")
+        code, out, _ = self.run_cli("repos")
+        self.assertEqual(code, 0)
+        self.assertIn(str(repo.resolve()), out)
+        self.assertTrue(out.rstrip().endswith(" -"))
+
+    def test_analyst_doc_splits_by_repo(self):
+        root = Path(cli.__file__).resolve().parent.parent
+        text = (root / "agents" / "oompa-loompa-analyst.md").read_text()
+        for needle in ("wonka repos", "--split", "One repo per ticket"):
+            self.assertIn(needle, text)
+
     def test_resolved_takes_an_id(self):
         a = cli.parser().parse_args(["resolved", "WONKA-00001", "--dispatch", "1"])
         self.assertEqual((a.cmd, a.id), ("resolved", "WONKA-00001"))

@@ -129,7 +129,8 @@ def run(a, f):
         msg = f.write_plan(a.id, sys.stdin.read(), a.dispatch)
         print(msg or f"📋 {f.plan_path(a.id)}")
     elif c == "drafted":
-        msg = f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r], a.dispatch)
+        msg = f.drafted(a.id, a.size, [r for r in (a.reviewers or "").split(",") if r], a.dispatch,
+                        split=a.split)
         print(msg or f.summary(a.id))
     elif c == "baked":
         print(f.baked(a.id, a.dispatch) or f.summary(a.id))
@@ -153,6 +154,9 @@ def run(a, f):
         print(json.dumps(out, indent=2, ensure_ascii=False))
     elif c == "show":
         print(json.dumps({**f.ticket(a.id), "note": str(f.path(a.id))}, indent=2, ensure_ascii=False))
+    elif c == "repos":
+        for project, repo, pr_repo in f.repos():
+            print(f"{project:20} {repo}  {pr_repo or '-'}")
     elif c == "status":
         for k in f.live():
             meta = f.read(k)[0]
@@ -167,7 +171,7 @@ def _key(value, table):
 
 
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
-READ_ONLY = ("status", "show")  # read a snapshot of the state, so they never wait for a long tick
+READ_ONLY = ("status", "show", "repos")  # read a snapshot of the state, so they never wait for a long tick
 
 
 def parser():
@@ -223,7 +227,10 @@ def parser():
     s.add_argument("id")
     s.add_argument("--size", required=True, choices=machine.SIZES)
     s.add_argument("--reviewers", help="comma list: architect,backend,frontend,security,spark,airflow")
+    s.add_argument("--split", action="store_true", help="the idea spans several repos: close it, one child ticket "
+                                                        "per repo already added with wonka add --repo <path> --parent <id>")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
+    sub.add_parser("repos", help="the repos the factory knows: project, local path, PR repo")
     s = sub.add_parser("baked", help="builder: the code is committed")
     s.add_argument("id")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)

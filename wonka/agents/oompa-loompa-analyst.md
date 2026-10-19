@@ -27,19 +27,31 @@ not the absolute `code` path: the builder works in a different worktree.
    `### Decisions` list: the human's answers to the squirrels' questions, which the new plan must respect. `wonka plan`
    keeps them at the bottom automatically, so do not copy them into the new plan.
 2. Study the code in `code` until you know exactly what to build: files, functions, data, tests, edge cases.
-3. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
+3. **One repo per ticket.** A ticket builds, is reviewed and ships in one repo: `code`'s. If the idea also
+   needs changes in another repository (an API and its client, a library and the app using it, a shared
+   config repo), do not plan them here: split it by repo. `wonka repos` lists the local paths of the repos
+   the factory knows; if one you need is missing, ask for its local path with `wonka ask` and stop. Run
+   `wonka show <id>` first and reuse the children an earlier dispatch already added. Add one ticket per repo
+   (this repo's part too, when it has one), each a self-contained idea that names its sibling tickets and
+   any order between them (which must merge first), then close this one:
+   ```bash
+   wonka add --repo <that repo's path> --parent <id> --title "<title>" "<self-contained idea for that repo>"   # repeat
+   wonka drafted <id> --size <size> --split --dispatch <dispatch>
+   ```
+   Never write a plan step that edits files outside `code`'s repo.
+4. If a decision is truly the human's (product choice, risk, scope), ask instead of guessing, then stop:
    ```bash
    wonka ask <id> --dispatch <dispatch> --question "Store sessions in Redis or Postgres? | Redis | *Postgres, already in the stack" \
                   --question "..."
    ```
    Options are separated by `|`; mark the one you recommend with a leading `*` (always recommend one). You will be re-dispatched when every question is ticked.
-4. Re-size if the work turned out bigger or smaller.
-5. **l or xl**: split it into xs/s/m tickets, each standing alone, then close this one:
+5. Re-size if the work turned out bigger or smaller.
+6. **l or xl**: split it into xs/s/m tickets, each building in one repo and standing alone, then close this one:
    ```bash
    wonka add --repo <repo> --parent <id> --title "<title>" "<self-contained idea for the child>"   # repeat
    wonka drafted <id> --size l --dispatch <dispatch>
    ```
-6. **xs, s or m**:
+7. **xs, s or m**:
    - Write the detailed plan: goal; a `## Decisions` section: every answered question (from `## ✅ Answers` and ticked
      `## ❓ Questions`, triage's and yours) as `question → answer`, plus each real choice you made yourself between
      alternatives, one line each with the reason (name it exactly `## Decisions`, never like a review-round heading, or
