@@ -67,6 +67,10 @@ def _story(tid, t, meta, cfg):
         return "info", "A fixer Oompa-Loompa is fixing merge conflicts", (
             f"🔧 Merging {t.get('merge_ref')} into `{t.get('branch')}` in `{t.get('worktree')}`. Nothing to do.")
     if t.get("conflicts") and s == ("shipped", "awaiting"):
+        if t.get("conflict_error"):
+            return "warning", "The PR has merge conflicts", (
+                f"⚠️ The fixer Oompa-Loompa could not start ({t['conflict_error']}). Wonka tries again on the next "
+                "tick; after 3 failed tries it stops and asks you to tick Retry.")
         return "info", "The PR has merge conflicts", "🔧 A fixer Oompa-Loompa picks it up on this tick."
     return {
         ("inbox", "pending"): ("abstract", "Waiting for triage", "📏 An Oompa-Loompa sizes this ticket on the next tick."),

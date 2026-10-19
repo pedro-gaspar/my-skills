@@ -2076,6 +2076,129 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
         self.assertTrue(self.f_ticket(tid)["conflicts"])
 
+    def stuck_fixer(self):
+        """A conflicting PR whose fixer cannot start (the fetch fails) for three ticks: stuck."""
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        sh("git", "remote", "set-url", "origin", str(self.tmp / "gone.git"), cwd=self.repo)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        for n in (1, 2, 3):
+            tick = self.tick()
+            self.assertTrue(any(e.startswith(f"{tid}: ⚠️ fixer could not start") for e in tick["events"]), tick["events"])
+            self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+            t = self.f_ticket(tid)
+            self.assertEqual(t["retries"], n)
+            self.assertTrue(t["conflict_error"].startswith(f"try {n}/3: "), t["conflict_error"])
+            if n < 3:
+                self.assertNotIn("stuck", t)
+                self.assertIn("could not start", self.note(tid)[1])
+        return tid
+
+    def test_unstartable_fixer_is_stuck_after_three_ticks(self):
+        tid = self.stuck_fixer()
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"])
+        self.assertTrue(t["conflicts"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        stuck = note.get_section(self.note(tid)[1], "stuck")
+        self.assertTrue(stuck.startswith("- [ ] Retry (3 tries failed"), stuck)
+        self.assertEqual(len(stuck.strip().splitlines()), 1, stuck)
+        tick = self.tick()
+        self.assertFalse(any(e.startswith(f"{tid}: ⚠️") for e in tick["events"]), tick["events"])
+        self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
+        self.assertEqual(self.f_ticket(tid)["retries"], 3)
+
+    def test_retry_on_a_stuck_fixer_tries_again(self):
+        tid = self.stuck_fixer()
+        sh("git", "remote", "set-url", "origin", str(self.tmp / "origin.git"), cwd=self.repo)
+        self.edit_note(tid, lambda t: t.replace("- [ ] Retry", "- [x] Retry"))
+        tick = self.tick()
+        self.assertIn(f"{tid}: unstuck by a human", tick["events"])
+        self.assertNotIn("stuck", self.f_ticket(tid))
+        jobs = [j for j in tick["jobs"] + self.tick()["jobs"] if j["id"] == tid]
+        self.assertEqual([j["job"] for j in jobs], ["conflicts"])
+        self.assertEqual(self.state(tid), ("shipped", "progress"))
+        self.assertNotIn("conflict_error", self.f_ticket(tid))
+
+    def test_diverged_pr_branch_is_stuck_at_once(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        other = self.tmp / "other"
+        sh("git", "clone", "-q", "-b", branch, str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / "theirs.txt").write_text("remote\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "remote commit", cwd=other)
+        sh("git", "push", "-q", "origin", branch, cwd=other)
+        (wt / "mine.txt").write_text("local\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "local commit", cwd=wt)
+        self.pr_state.write_text("OPEN CONFLICTING")
+        self.tick()
+        t = self.f_ticket(tid)
+        self.assertTrue(t["stuck"])
+        self.assertTrue(t["conflicts"])
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        stuck = note.get_section(self.note(tid)[1], "stuck")
+        self.assertIn(f"git pull --no-rebase origin {branch}", stuck)
+        self.assertNotIn("3 tries", stuck)
+
+    def test_stuck_fixer_clears_when_the_pr_is_merged(self):
+        tid = self.stuck_fixer()
+        self.pr_state.write_text("MERGED MERGEABLE")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "done"))
+        t = self.f_ticket(tid)
+        self.assertNotIn("stuck", t)
+        self.assertNotIn("conflict_error", t)
+        body = self.note(tid)[1]
+        self.assertIsNone(note.get_section(body, "stuck"))
+        self.assertNotIn("factory is stuck", body)
+
+    def test_stuck_fixer_clears_when_fixed_by_hand(self):
+        tid = self.stuck_fixer()
+        self.pr_state.write_text("OPEN MERGEABLE")
+        self.tick()
+        t = self.f_ticket(tid)
+        for key in ("stuck", "retries", "conflicts", "conflict_error"):
+            self.assertNotIn(key, t)
+        body = self.note(tid)[1]
+        self.assertIsNone(note.get_section(body, "stuck"))
+        self.assertIn("merge the PR", body)
+
+    def test_request_changes_clears_a_stuck_fixer(self):
+        tid = self.stuck_fixer()
+        self.pr_feedback()
+        self.request_changes(tid, "rename it")
+        self.assertEqual(self.state(tid)[0], "baking")
+        t = self.f_ticket(tid)
+        self.assertNotIn("stuck", t)
+        self.assertNotIn("conflict_error", t)
+        self.assertIsNone(note.get_section(self.note(tid)[1], "stuck"))
+
+    def test_leftovers_are_stashed_before_the_fix(self):
+        tid = self.add()
+        wt, _ = self.to_awaiting_merge(tid)
+        (wt / "hello.sh").write_text("echo edited by hand\n")
+        (wt / "scratch.txt").write_text("untracked\n")
+        self.upstream_change()
+        self.fixer_job(tid)
+        self.assertEqual(sh("git", "status", "--porcelain", cwd=wt), "")
+        self.assertEqual(len(sh("git", "stash", "list", cwd=wt).splitlines()), 1)
+        self.assertTrue(any("Stashed uncommitted leftovers" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+
+    def test_untracked_file_from_the_pr_branch_does_not_look_diverged(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        other = self.tmp / "other"
+        sh("git", "clone", "-q", "-b", branch, str(self.tmp / "origin.git"), str(other), cwd=self.tmp)
+        (other / "suggestion.txt").write_text("committed on GitHub\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "review suggestion", cwd=other)
+        sh("git", "push", "-q", "origin", branch, cwd=other)
+        (wt / "suggestion.txt").write_text("a local draft\n")
+        self.fixer_job(tid)
+        self.assertEqual((wt / "suggestion.txt").read_text(), "committed on GitHub\n")
+
 
 if __name__ == "__main__":
     unittest.main()
