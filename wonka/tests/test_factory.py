@@ -3210,7 +3210,7 @@ class FactoryTest(unittest.TestCase):
             f.tick()
             self.assertIsNone(f._base_cache)
 
-    def test_scout_falls_back_to_the_repo_without_origin(self):
+    def test_scout_falls_back_to_the_local_base_without_origin(self):
         sh("git", "remote", "remove", "origin", cwd=self.repo)
         tid = self.add()
         job = self.job_for(tid)
@@ -3220,6 +3220,8 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((Path(job["code"]) / "README.md").exists())
         self.assertNotEqual(Path(job["code"]).resolve(), self.repo.resolve())
 
+    def test_failed_scout_is_a_retry_never_the_main_checkout(self):
+        tid = self.add()
         real = factory.git
 
         def fake(*args, cwd):
@@ -3227,23 +3229,47 @@ class FactoryTest(unittest.TestCase):
                 raise WonkaError("worktree add failed")
             return real(*args, cwd=cwd)
 
-        with self.f() as f:
-            f.retry(tid)  # dispatch the triage again
-        with mock.patch.object(factory, "git", fake):
-            job = self.job_for(tid)
-        self.assertEqual(job["job"], "triage")
-        self.assertEqual(job["code"], self.f_ticket(tid)["repo"])
-        self.assertEqual(job["base_ref"], "main")
-        self.assertIn("No fresh checkout", (store.home() / "factory.log").read_text())
+        events = []
+        for n in (1, 2, 3):
+            with mock.patch.object(factory, "git", fake):
+                out = self.tick()
+            events += out["events"]
+            self.assertEqual([j for j in out["jobs"] if j["id"] == tid], [], "no job when the scout cannot be made")
+            self.assertEqual(self.state(tid), ("triage", "pending"))
+            self.assertEqual(self.f_ticket(tid)["retries"], n)
+        self.assertIn(f"{tid}: ⚠️ could not make the scout (a fresh checkout of the base) (try 1/3), retried next "
+                      "tick: worktree add failed", events)
+        self.assertIn(f"{tid}: ⚠️ could not make the scout (a fresh checkout of the base), stuck: worktree add failed",
+                      out["events"])
+        self.assertTrue(self.f_ticket(tid)["stuck"])
+        self.assertIsNone(self.f_ticket(tid).get("job_started_at"))
+        self.assertIn("Could not make the scout", (store.home() / "factory.log").read_text())
+        self.assertEqual(self.tick()["jobs"], [], "stuck: nothing is handed out until a human ticks Retry")
 
-    def test_unwritable_worktrees_dir_falls_back_to_the_repo(self):
+    def test_failed_scout_keeps_a_draft_pending(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        with mock.patch.object(Factory, "fresh_scout", side_effect=OSError("disk full")):
+            out = self.tick()
+        self.assertEqual([j for j in out["jobs"] if j["id"] == tid], [])
+        self.assertIn(f"{tid}: ⚠️ could not make the scout (a fresh checkout of the base) (try 1/3), retried next "
+                      "tick: disk full", out["events"])
+        self.assertEqual(self.state(tid), ("drafting", "pending"), "not moved to progress without a scout")
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "draft")
+        self.assertTrue(Path(job["code"]).name.endswith("-scout"))
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+
+    def test_unwritable_worktrees_dir_hands_out_no_job(self):
         tid = self.add()
         store.worktrees_dir().parent.mkdir(parents=True, exist_ok=True)
         store.worktrees_dir().write_text("not a dir\n")
-        job = self.job_for(tid)
-        self.assertEqual(job["job"], "triage")
-        self.assertEqual(job["code"], self.f_ticket(tid)["repo"])
-        self.assertTrue(any("No fresh checkout" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+        out = self.tick()
+        self.assertEqual(out["jobs"], [])
+        self.assertTrue(any(e.startswith(f"{tid}: ⚠️ could not make the scout") for e in out["events"]))
+        self.assertTrue(any("Could not make the scout" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
 
     def test_killed_or_deleted_ticket_drops_its_scout(self):
         a, b = self.add(), self.add("Second")

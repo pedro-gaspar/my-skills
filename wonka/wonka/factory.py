@@ -2191,7 +2191,12 @@ class Factory:
             raise WonkaError(f"{tid} is an Idea: tick Start or drag it to 📏 Triage first")
         job = {"triage": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
                "shipped": "conflicts"}[s[0]]
-        base_ref = None
+        base_ref = scout = None
+        if job in ("triage", "draft"):  # before any move: a failure is counted like a retry and nothing is handed out
+            try:
+                scout = self.fresh_scout(tid)
+            except (WonkaError, OSError) as e:  # never fall back to the main checkout: the agents must not read it
+                return self._setup_failed(tid, "make the scout (a fresh checkout of the base)", e)
         if s == ("drafting", "pending"):
             self.move(tid, ("drafting", "progress"), "wonka")
         elif s == ("baking", "pending"):
@@ -2240,13 +2245,7 @@ class Factory:
             except (WonkaError, OSError) as e:
                 return self._fixer_failed_to_start(tid, e)
             self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
-        code, ref = t["worktree"], base_ref or self.base_ref(tid)
-        if job in ("triage", "draft"):
-            try:
-                code, ref = self.fresh_scout(tid)
-            except (WonkaError, OSError) as e:  # never strand the job: the draft has already moved to progress
-                self.log_event(tid, f"No fresh checkout of the base, the agent reads the main checkout ({e})")
-                code, ref = t["repo"], self.base_ref(tid)
+        code, ref = scout or (t["worktree"], base_ref or self.base_ref(tid))
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
         t["dispatch"] = t.get("dispatch", 0) + 1  # only ever goes up: tells a late agent from the live one
@@ -2281,13 +2280,18 @@ class Factory:
             self.ensure_worktree(tid)
             return None
         except (WonkaError, OSError) as e:
-            err = " ".join(str(e).split())
-            err = err if len(err) <= 150 else err[:149] + "…"
-            retries, stuck = self._count_failure(tid, f"could not set up the worktree: {err}")
-            self.log_event(tid, f"Could not set up the worktree (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): {err}")
-            if stuck:
-                return f"{tid}: ⚠️ could not set up the worktree, stuck: {err}"
-            return f"{tid}: ⚠️ could not set up the worktree (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
+            return self._setup_failed(tid, "set up the worktree", e)
+
+    def _setup_failed(self, tid, what, exc):
+        """A job could not be set up (`what` could not be done): count it like a retry, stuck after MAX_RETRIES, and
+        hand nothing out. Returns the event to report."""
+        err = " ".join(str(exc).split())
+        err = err if len(err) <= 150 else err[:149] + "…"
+        retries, stuck = self._count_failure(tid, f"could not {what}: {err}")
+        self.log_event(tid, f"Could not {what} (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): {err}")
+        if stuck:
+            return f"{tid}: ⚠️ could not {what}, stuck: {err}"
+        return f"{tid}: ⚠️ could not {what} (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
 
     def retry(self, tid, why="the last job did not finish", final=False):
         """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help)."""

@@ -158,7 +158,9 @@ push.
 
 Triage and the analyst read a throwaway read-only checkout of the latest `origin/<base>` in
 `~/.wonka/worktrees/<project>/<id>-scout`, made fresh for each job and removed once the ticket leaves triage or
-drafting. Your own checkout is never touched, so they never plan against stale code.
+drafting. Your own checkout is never touched, so they never plan against stale code. When the scout cannot be made,
+the job is not handed out: it counts as a retry (the reason is in the ticket log and `factory.log`), and after three
+the ticket is stuck until you tick Retry.
 
 Worktrees and scouts have no gitignored files. List the ones a project's tests need with
 `wonka config worktree_files.<project> server/.env,other/.env` (`<project>` is the repo folder name; an empty value
