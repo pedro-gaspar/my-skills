@@ -3923,6 +3923,9 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.move(tid, ("baking", "pending"), "human", "Pulled back by hand")
         self.assertNotIn("round_kind", self.f_ticket(tid))
+        self.bake(tid, "again.sh")
+        self.review(tid, architect={"verdict": "good nut"})
+        self.assertEqual(self.f_ticket(tid)["rounds"][-1]["kind"], "review")
 
     def test_killed_review_drops_round_kind(self):
         tid = self.add()
