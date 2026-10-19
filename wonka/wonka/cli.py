@@ -40,9 +40,12 @@ def cmd_init(a):
     store.save_config(cfg)
     for d in (store.tickets_dir, store.plans_dir, store.archive_dir):
         d(cfg).mkdir(parents=True, exist_ok=True)
-    base = store.board(cfg) / "Wonka.base"
-    if not base.exists():
-        base.write_text((ROOT / "templates" / "Wonka.base").read_text().replace("{{folder}}", a.folder))
+    board = store.board(cfg)
+    base, old = board / store.BASE_FILE, board / store.OLD_BASE_FILE
+    if not base.exists() and old.exists():
+        old.rename(base)
+    elif not base.exists():
+        base.write_text((ROOT / "templates" / "Factory.base").read_text().replace("{{folder}}", a.folder))
     ensure_link()
     show_config(cfg)
     print(f"🎩 “Come with me, and you'll be in a world of pure imagination.”\n   🍫 Factory {base}\n   State {store.home()}")

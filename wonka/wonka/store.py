@@ -10,6 +10,8 @@ import shutil
 from pathlib import Path
 
 STATE_FILE = "golden_ticket_status.json"
+BASE_FILE = "🍫 Factory.base"  # the Obsidian board; its file name is what Obsidian shows
+OLD_BASE_FILE = "Wonka.base"  # name before WONKA-00084; wonka init renames it
 DEFAULT_CONFIG = {
     "vault": None,
     "folder": "wonka",

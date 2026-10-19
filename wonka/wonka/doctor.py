@@ -103,7 +103,13 @@ def checks():
         yield "fail", str(e)
         return
     board = store.board(cfg)
-    yield ("ok" if (board / "Wonka.base").exists() else "fail"), f"🍫 factory {board / 'Wonka.base'}"
+    base, old = board / store.BASE_FILE, board / store.OLD_BASE_FILE
+    if base.exists():
+        yield "ok", f"🍫 factory {base}"
+    elif old.exists():
+        yield "warn", f"🍫 factory {old} has the old name: run wonka init to rename it to {store.BASE_FILE}"
+    else:
+        yield "fail", f"🍫 factory {base}"
     yield from _orphans(cfg)
     path = store.home() / store.STATE_FILE
     try:
