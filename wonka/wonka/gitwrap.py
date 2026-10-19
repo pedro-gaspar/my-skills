@@ -13,17 +13,25 @@ WRITES = ("add", "commit", "merge")
 SUBCOMMANDS = READS + WRITES
 # the states whose job writes to the worktree: the builder bakes, the fixer merges the base into an open PR
 WRITE_STATES = frozenset(JOB_AGENTS[a] for a in ("oompa-loompa-builder", "oompa-loompa-fixer"))
-# long options refused (and any abbreviation of them: parse-options accepts unambiguous prefixes)
+# long options refused (and any abbreviation of them: parse-options accepts unambiguous prefixes), including the
+# options that read a file given by path, which can be outside the worktree (--pathspec-from-file, --exclude-from...)
 BANNED = {
     "*": ("--output", "--ext-diff", "--textconv", "--no-index", "--contents", "--exec", "--upload-pack",
-          "--receive-pack", "--extcmd", "--open-files-in-pager", "--config"),
+          "--receive-pack", "--extcmd", "--open-files-in-pager", "--config", "--pathspec-from-file"),
     "add": ("--interactive", "--patch", "--edit", "--all"),
     "commit": ("--amend", "--interactive", "--patch", "--file", "--template"),
+    "ls-files": ("--exclude-from", "--exclude-per-directory"),
+    "blame": ("--ignore-revs-file",),
 }
-BANNED_SHORT = {"add": "pieA", "commit": "pFt"}       # short flags refused, also inside clusters (-vp)
-SHORT_WITH_VALUE = {"commit": "mFCct"}                # rest of the cluster, or else the next arg, is a value
+# short flags refused, also inside clusters (-vp); -X, -S and -O<orderfile> read a file given by path
+BANNED_SHORT = {"add": "pieA", "commit": "pFt", "ls-files": "X", "blame": "S", "diff": "O", "log": "O", "show": "O"}
+# rest of the cluster, or else the next arg, is a value: only options whose value is mandatory belong here
+SHORT_WITH_VALUE = {"commit": "mFCct", "ls-files": "x", "blame": "L", "diff": "SG", "show": "SG", "log": "SGLn"}
 LONG_WITH_VALUE = {"commit": ("--message", "--author", "--date", "--reuse-message", "--reedit-message", "--fixup",
-                              "--squash", "--cleanup", "--trailer", "--pathspec-from-file")}
+                              "--squash", "--cleanup", "--trailer"),
+                   "ls-files": ("--exclude",), "blame": ("--ignore-rev",)}
+# exact option names that are prefixes of a banned name: git takes an exact match over an abbreviation, so they are safe
+EXACT_OK = {"ls-files": ("--exclude",), "blame": ("--ignore-rev",)}
 NO_EXTERNAL = ("diff", "log", "show", "blame")        # these get --no-ext-diff --no-textconv injected
 # only identity and dates pass through: every GIT_CONFIG_* (GLOBAL, SYSTEM, NOSYSTEM, PARAMETERS, COUNT/KEY/VALUE)
 # is dropped, since a config the caller picks can run programs (core.pager, gpg.program, filters, hooksPath)
@@ -57,7 +65,7 @@ def check(sub, args):
         return _check_merge(args)
     banned = BANNED["*"] + BANNED.get(sub, ())
     banned_short, short_value = BANNED_SHORT.get(sub, ""), SHORT_WITH_VALUE.get(sub, "")
-    long_value = LONG_WITH_VALUE.get(sub, ())
+    long_value, exact_ok = LONG_WITH_VALUE.get(sub, ()), EXACT_OK.get(sub, ())
     i = 0
     while i < len(args):
         arg = args[i]
@@ -70,7 +78,7 @@ def check(sub, args):
             _inside(sub, arg)
         elif arg.startswith("--"):
             name = arg.split("=", 1)[0]
-            if any(b.startswith(name) for b in banned):
+            if name not in exact_ok and any(b.startswith(name) for b in banned):
                 raise WonkaError(f"git {sub} {name} is not allowed (it can run programs, write or read files outside "
                                  "the repo, or rewrite history; abbreviations of such options are refused too)")
             if "=" not in arg and name in long_value:
