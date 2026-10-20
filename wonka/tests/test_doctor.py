@@ -132,6 +132,20 @@ class PermissionChecksTest(unittest.TestCase):
         result = list(doctor.permission_checks(self.AGENT[1:], self.DIRS[:1], self.DIRS))
         self.assertEqual(self.snippet(result[0][1]), {"allow": self.AGENT[:1], "additionalDirectories": self.DIRS[1:]})
 
+    def test_wonka_home_or_a_parent_in_additional_directories_warns(self):
+        """Edit and Write could change the config and state; only the worktrees and factory folders belong there."""
+        with mock.patch.dict(os.environ, {"WONKA_HOME": "/tmp/wh/.wonka"}):
+            for d in ("/tmp/wh/.wonka", "/tmp/wh/.wonka/", "/tmp/wh", "/tmp", "/"):
+                with self.subTest(d=d):
+                    result = list(doctor.permission_checks(self.AGENT, self.DIRS + [d], self.DIRS))
+                    self.assertEqual([lv for lv, _ in result], ["ok", "warn"])
+                    self.assertIn("additionalDirectories lets Edit and Write change /tmp/wh/.wonka", result[1][1])
+                    self.assertIn(d, result[1][1])
+            for d in ("/tmp/wh/.wonka/worktrees", "/tmp/wh/vault/wonka", "/tmp/other"):
+                with self.subTest(d=d):
+                    result = list(doctor.permission_checks(self.AGENT, self.DIRS + [d], self.DIRS))
+                    self.assertEqual([lv for lv, _ in result], ["ok"])
+
     def test_broad_wonka_rule_warns(self):
         for rule in doctor.BROAD:
             with self.subTest(rule=rule):
@@ -168,6 +182,60 @@ class SandboxChecksTest(unittest.TestCase):
             b.write_text(json.dumps({"sandbox": {"filesystem": ["odd"]}}))
             c.write_text("not json")
             self.assertEqual(doctor._sandbox_writes([a, b, c, Path(d, "missing.json")]), ["~/.wonka"])
+
+
+class SandboxModeTest(unittest.TestCase):
+    """wonka test runs inside Claude Code's sandbox, so the test command is confined; every other command outside."""
+    RIGHT = list(doctor.SANDBOX_EXCLUDED)
+
+    def levels(self, enabled, excluded):
+        return [lv for lv, _ in doctor.sandbox_mode_checks(enabled, excluded)]
+
+    def test_every_command_but_test_is_excluded(self):
+        from wonka import cli
+        subs = next(a for a in cli.parser()._actions if a.dest == "cmd").choices
+        self.assertEqual(sorted({*doctor.AGENT_COMMANDS, *doctor.HUMAN_COMMANDS}), sorted(subs))
+        self.assertEqual(sorted(self.RIGHT), sorted(f"wonka {c} *" for c in subs if c != "test"))
+
+    def test_recommended_settings_are_ok(self):
+        self.assertEqual(self.levels(True, self.RIGHT), ["ok"])
+        self.assertEqual(self.levels(True, [e[:-2] + ":*" for e in self.RIGHT]), ["ok"])
+
+    def test_sandbox_off_warns_with_the_settings(self):
+        (level, msg), = doctor.sandbox_mode_checks(False, self.RIGHT)
+        self.assertEqual(level, "warn")
+        self.assertIn("sandbox is off", msg)
+        box = json.loads(msg.split("\n", 1)[1])["sandbox"]
+        self.assertEqual(box["excludedCommands"], self.RIGHT)
+        self.assertNotIn("wonka test *", box["excludedCommands"])
+
+    def test_excluding_wonka_test_warns(self):
+        for wide in ("wonka *", "wonka:*", "wonka  *", "wonka test *", "wonka test:*", "wonka"):
+            with self.subTest(wide=wide):
+                result = list(doctor.sandbox_mode_checks(True, self.RIGHT + [wide]))
+                self.assertEqual([lv for lv, _ in result], ["warn"])
+                self.assertIn("test commands run outside the sandbox", result[0][1])
+                self.assertIn(wide, result[0][1])
+        # wonka * alone covers the others, so only the test warning
+        self.assertEqual(self.levels(True, ["wonka *"]), ["warn"])
+
+    def test_missing_exclusions_warn(self):
+        result = list(doctor.sandbox_mode_checks(True, self.RIGHT[1:]))
+        self.assertEqual([lv for lv, _ in result], ["warn"])
+        self.assertIn(self.RIGHT[0], result[0][1])
+        self.assertEqual(self.levels(True, []), ["warn"])
+
+    def test_reads_enabled_and_exclusions_from_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b, c = Path(d, "a.json"), Path(d, "b.json"), Path(d, "c.json")
+            a.write_text(json.dumps({"sandbox": {"enabled": True, "excludedCommands": ["wonka git *", 3]}}))
+            b.write_text(json.dumps({"sandbox": {"enabled": "yes", "excludedCommands": "wonka *"}}))
+            c.write_text(json.dumps({"sandbox": {"excludedCommands": ["wonka tick *"]}}))
+            self.assertEqual(doctor._sandbox_mode([a, b, c, Path(d, "missing.json")]),
+                             (True, ["wonka git *", "wonka tick *"]))
+            c.write_text(json.dumps({"sandbox": {"enabled": False}}))
+            self.assertEqual(doctor._sandbox_mode([a, c]), (False, ["wonka git *"]))
+            self.assertEqual(doctor._sandbox_mode([Path(d, "missing.json")]), (False, []))
 
 
 class OkTest(unittest.TestCase):

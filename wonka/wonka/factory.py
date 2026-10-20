@@ -136,6 +136,8 @@ def _age(stamp):
 TIMEOUT = 120  # seconds any git or gh call may take; most run inside the state lock
 # git, gh and Git Credential Manager must never ask a human anything
 NONINTERACTIVE = {"GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "GCM_INTERACTIVE": "never"}
+# The gh program: tests patch this, never an environment variable, which a caller could set to run its own program
+GH = "gh"
 
 
 def _exec(cmd, cwd=None):
@@ -174,7 +176,7 @@ def git(*args, cwd):
 
 
 def gh(*args, cwd=None):
-    return _run([os.environ.get("WONKA_GH", "gh"), *args], cwd=cwd)
+    return _run([GH, *args], cwd=cwd)
 
 
 def gh_json(*args, default, cwd=None):

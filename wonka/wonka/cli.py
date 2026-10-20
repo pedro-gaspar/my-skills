@@ -401,18 +401,23 @@ def parser():
     sub.add_parser("test", help="agents: run a project's test command under a per-project lock: "
                                 "wonka test <id> [--dispatch <n>] -- <command> ...")
     sub.add_parser("ci-logs", help="agents: fetch a failed CI log with the project's log tool, only from its CI "
-                                   "hosts: wonka ci-logs <id> [--dispatch <n>] <url>")
+                                   "hosts: wonka ci-logs <id> --dispatch <n> <url>")
     return p
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        store.home()  # a refused WONKA_HOME stops here, before anything (the log too) is read or written
+    except WonkaError as e:
+        print(f"🗑️ wonka: {e}", file=sys.stderr)
+        return 1
     if argv[:1] and argv[0] in PASSTHROUGH:
         try:
             run_main = importlib.import_module(f".{PASSTHROUGH[argv[0]]}", __package__).main
             return run_main(argv[1:])
         except WonkaError as e:
-            store.log(f"{argv[0]} {' '.join(argv[1:3])}: {e}")
+            store.try_log(f"{argv[0]} {' '.join(argv[1:3])}: {e}")  # wonka test runs sandboxed, ~/.wonka read-only
             print(f"🗑️ wonka: {e}", file=sys.stderr)
             if isinstance(e, store.CriticalError):
                 alert(str(e))

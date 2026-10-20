@@ -31,6 +31,16 @@ class CliTest(unittest.TestCase):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def test_a_refused_wonka_home_stops_every_command_cleanly(self):
+        for argv in (["status"], ["git", "WONKA-00001", "status"], ["test", "WONKA-00001", "--", "./t.sh"],
+                     ["config"], ["doctor"]):
+            with self.subTest(argv=argv), mock.patch.dict(os.environ, {"WONKA_HOME": "rel/home"}):
+                code, out, err = self.run_cli(*argv)
+            self.assertEqual(code, 1)
+            self.assertIn("WONKA_HOME must be an absolute path", err)
+            self.assertNotIn("Traceback", err)
+        self.assertFalse((self.tmp / "home").exists())
+
     def test_init_writes_settings_board_and_link(self):
         code, out, _ = self.run_cli("init", "--vault", str(self.tmp / "vault"), "--drafting", "2", "--baking", "3",
                                     "--archive-days", "14", "--max-review-rounds", "4")
@@ -145,7 +155,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("config", "ci_hosts.", "x")[0], 1)
         self.assertEqual(self.run_cli("config", "ci_log_command.app", "beyond ci logs")[0], 0)
         self.assertEqual(json.loads(cfg_file.read_text())["ci_log_command"], {"app": "beyond ci logs"})
-        for bad in ["bash", "python3 -c", "env", '"oops', "./scripts/ci.sh"]:
+        for bad in ["bash", "python3 -c", "env", '"oops', "./scripts/ci.sh", '""', '"" logs']:
             with self.subTest(bad=bad):
                 self.assertEqual(self.run_cli("config", "ci_log_command.app", bad)[0], 1)
         self.assertEqual(self.run_cli("config", "ci_log_command.app", "")[0], 0)
@@ -548,9 +558,13 @@ class CliTest(unittest.TestCase):
         readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
         self.assertLess(readme.index("## Sandbox boundary"), readme.index("\n## Use"))
         section = readme.split("## Sandbox boundary", 1)[1].split("\n## ", 1)[0]
-        for text in ["not a sandbox", "--repo", "/sandbox", '"wonka *"', "allowUnsandboxedCommands", "allowWrite",
-                     "denyRead"]:
+        for text in ["not a sandbox", "--repo", "/sandbox", "allowUnsandboxedCommands", "allowWrite",
+                     "denyRead", "allowedDomains"]:
             self.assertIn(text, section)
+        # the settings exclude every wonka command but test, as the doctor recommends
+        from wonka import doctor
+        settings = json.loads(section.split("```json", 1)[1].split("```", 1)[0])
+        self.assertEqual(settings["sandbox"]["excludedCommands"], list(doctor.SANDBOX_EXCLUDED))
 
     def test_readme_documents_the_ci_state_fields(self):
         readme = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()

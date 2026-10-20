@@ -117,15 +117,8 @@ def set_setting(cfg, key, raw):
             raise WonkaError("usage: wonka config ci_log_command.<project> <command>")
         value = raw.strip()
         if value:
-            try:
-                tokens = shlex.split(value)
-            except ValueError as e:
-                raise WonkaError(f"{value}: not a valid command prefix ({e})")
-            if not tokens:
-                value = ""
-        if value:
-            from .cilogs import command_problem  # lazily: cilogs imports store
-            problem = command_problem(value)
+            from .cilogs import parse_command  # lazily: cilogs imports store
+            problem = parse_command(value)[1]
             if problem:
                 raise WonkaError(f"ci_log_command.{project} {problem}")
         cur = dict(cfg.get("ci_log_command") or {})
@@ -162,7 +155,21 @@ class CriticalError(WonkaError):
 
 
 def home():
-    return Path(os.environ.get("WONKA_HOME") or Path.home() / ".wonka")
+    """~/.wonka, or WONKA_HOME (the tests, a second factory). An agent that set it could load a config and state it
+    wrote, but a background agent cannot: `WONKA_HOME=<dir> wonka git ...` does not match the per-command allow rules
+    (`Bash(wonka git *)`), so Claude Code would ask a human. As a cheap second line, a relative WONKA_HOME (it would
+    resolve against the agent's worktree) or one inside the default home (its worktrees and drafts, which agents
+    write) is refused."""
+    default = Path.home() / ".wonka"
+    raw = os.environ.get("WONKA_HOME")
+    if not raw:
+        return default
+    path = Path(raw)
+    if not path.is_absolute():
+        raise WonkaError(f"WONKA_HOME must be an absolute path, not {raw!r}")
+    if default.resolve() in path.resolve().parents:
+        raise WonkaError(f"WONKA_HOME {raw} is inside {default}, whose worktrees agents write: refusing it")
+    return path
 
 
 def load_config():
@@ -277,6 +284,12 @@ def worktrees_dir():
     return home() / "worktrees"
 
 
+def test_locks_dir():
+    """Where `wonka test` keeps its per-project locks: inside the worktrees folder, which sandboxed commands may write,
+    so `wonka test` can run inside the sandbox and confine the test command it starts."""
+    return worktrees_dir() / ".locks"
+
+
 def drafts_dir():
     """Where agents put the markdown they hand to `wonka plan|section|pr-body --file`: inside the worktrees folder,
     which sandboxed commands may write, unlike the rest of ~/.wonka (config and state)."""
@@ -291,6 +304,13 @@ def log(*lines):
     stamp = datetime.datetime.now().isoformat(timespec="seconds")
     with open(home() / "factory.log", "a") as fh:
         fh.writelines(f"{stamp} {line}\n" for line in lines)
+
+
+def try_log(*lines):
+    """log, skipped silently when ~/.wonka is not writable: `wonka test` runs inside the sandbox, which never may write
+    there (it holds the config and the state)."""
+    with contextlib.suppress(OSError):
+        log(*lines)
 
 
 def _load(text):

@@ -210,5 +210,42 @@ class StateTest(unittest.TestCase):
         self.assertEqual(base.read_text(), "groupOrder:\n  - 🧪 Drafting\n")
 
 
+class HomeTest(unittest.TestCase):
+    """WONKA_HOME is for the tests and a second factory, never a folder an agent controls."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        patcher = mock.patch.object(store.Path, "home", return_value=self.tmp / "me")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def home(self, value):
+        with mock.patch.dict(os.environ, {"WONKA_HOME": value}):
+            return store.home()
+
+    def test_default_and_absolute(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("WONKA_HOME", None)
+            self.assertEqual(store.home(), self.tmp / "me" / ".wonka")
+        self.assertEqual(self.home(""), self.tmp / "me" / ".wonka")
+        self.assertEqual(self.home(str(self.tmp / "other")), self.tmp / "other")
+        self.assertEqual(self.home(str(self.tmp / "me" / ".wonka")), self.tmp / "me" / ".wonka")
+
+    def test_relative_is_refused(self):
+        for value in ("home", "./x", "../.wonka"):
+            with self.subTest(value=value), self.assertRaisesRegex(store.WonkaError, "absolute path"):
+                self.home(value)
+
+    def test_inside_the_default_home_is_refused(self):
+        default = self.tmp / "me" / ".wonka"
+        (default / "worktrees").mkdir(parents=True)
+        (self.tmp / "link").symlink_to(default / "worktrees")
+        for value in (default / "worktrees" / "app" / "WONKA-00001", default / "worktrees" / ".drafts",
+                      self.tmp / "link" / "x"):
+            with self.subTest(value=value), self.assertRaisesRegex(store.WonkaError, "agents write"):
+                self.home(str(value))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,8 +24,9 @@ Then run `/wonka init`. It asks for your vault and how many tickets to draft and
 existing `🍫 Factory.base`; an older vault's `Wonka.base` is renamed to `🍫 Factory.base` by `wonka init` (keeping
 any view changes), and the doctor warns until it is. The doctor prints the permission snippet that lets background
 agents run unattended (one `Bash(wonka <command> *)` rule per command agents and the loop run, plus the worktree and
-factory folders as `additionalDirectories`). The human's commands (`init`, `config`, `set`, `move`, `block`,
-`unblock`, `doctor`) are left out on purpose: an agent that read a hostile diff or CI log could otherwise switch the
+factory folders as `additionalDirectories`; never `~/.wonka` itself or a folder above it like `~`, which would let
+Edit and Write change the config and state: the doctor warns). The human's commands (`init`, `config`, `set`, `move`,
+`block`, `unblock`, `doctor`) are left out on purpose: an agent that read a hostile diff or CI log could otherwise switch the
 sandbox off (`wonka config test_commands.<project> bash`) or pass its own gates (`wonka move`, `wonka set <id>
 spec_review agent`). They ask you instead; never allow them, or `Bash(wonka *)`, in your settings (the doctor warns).
 `wonka section` only writes the analyst's 📜 Spec, while the ticket is being drafted, so no agent ticks a box for you. Agents
@@ -58,37 +59,47 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
    `~/.claude/settings.json`; on Linux it needs `bubblewrap` and `socat`. The OS then confines every shell command
    and whatever it starts: writes only to the working directory, a temp dir and `additionalDirectories`, and network
    only to the domains you allow. It does not cover Edit and Write, which is why step 1 still matters. Wonka needs
-   these settings to keep working under it:
+   these settings to keep working under it (`wonka doctor` prints them):
 
    ```json
    {
      "sandbox": {
        "enabled": true,
        "allowUnsandboxedCommands": false,
-       "excludedCommands": ["wonka *"]
+       "excludedCommands": [
+         "wonka git *", "wonka ci-logs *", "wonka triage *", "wonka ask *", "wonka section *", "wonka plan *",
+         "wonka drafted *", "wonka pr-body *", "wonka baked *", "wonka resolved *", "wonka report *",
+         "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *", "wonka tick *",
+         "wonka finished *", "wonka retry *", "wonka init *", "wonka config *", "wonka set *", "wonka move *",
+         "wonka block *", "wonka unblock *", "wonka doctor *"
+       ]
      }
    }
    ```
 
-   - `wonka *` runs outside the sandbox: the CLI writes to the main repo's `.git` (worktrees, fetches, commit
-     objects) and talks to GitHub and npm.
-   - Never add `~/.wonka` to `sandbox.filesystem.allowWrite`: it holds Wonka's config and state, and sandboxed test
-     code that can edit them can turn the sandbox off for `wonka test`. Agents hand markdown over with `--file`
-     (`wonka plan|section|pr-body <id> --file <drafts>/...`, a file they write in `~/.wonka/worktrees/.drafts`), so
-     no wonka call runs sandboxed; a heredoc piped into wonka would. The doctor warns about an old `allowWrite`.
-   - Commands run through `wonka test` run outside the sandbox too (`wonka *` is excluded), and a builder can edit
-     the script they run: only list a project's `test_commands` if you accept that. A shell or interpreter with
-     nothing pinned after it (`bash`, `python3 -c`) would run anything, so `wonka config` refuses it and `wonka test`
+   - Every wonka command but `wonka test` runs outside the sandbox: the CLI writes Wonka's state in `~/.wonka` and
+     the main repo's `.git` (worktrees, fetches, commit objects), and talks to GitHub and npm.
+   - `wonka test` is left out on purpose, so it runs inside the sandbox and the test command it starts (a script the
+     builder can edit: `./test.sh`, a `conftest.py`, a Makefile) is confined with it: it writes only the worktree, a
+     temp dir and the `additionalDirectories`, and reaches only the domains you allow. `wonka test` writes nothing
+     but its lock, which is in the worktrees folder (`~/.wonka/worktrees/.locks`). Never exclude `wonka *` or
+     `wonka test *`: test commands would then run unconfined (the doctor warns, and warns when the sandbox is off).
+     With the sandbox off, `wonka test` works as before, unconfined. A shell or interpreter with nothing pinned after
+     it (`bash`, `python3 -c`) would run anything, so `wonka config` refuses it as a test command and `wonka test`
      refuses to run one set by hand.
+   - Never add `~/.wonka` to `sandbox.filesystem.allowWrite`: it holds Wonka's config and state, and sandboxed test
+     code that can edit them can loosen the factory's checks. Agents hand markdown over with `--file`
+     (`wonka plan|section|pr-body <id> --file <drafts>/...`, a file they write in `~/.wonka/worktrees/.drafts`), so
+     no other wonka call runs sandboxed; a heredoc piped into wonka would. The doctor warns about an old `allowWrite`.
    - `allowUnsandboxedCommands: false` stops an agent from retrying a blocked command outside the sandbox.
 
    Tests that need the network fail until you add their hosts to `sandbox.network.allowedDomains`.
 
 Projects whose CI is not GitHub Actions configure their log tool and CI host, e.g.
 `wonka config ci_log_command.beyondpricing "beyond ci logs"` and
-`wonka config ci_hosts.beyondpricing <concourse host>`. Builders then fetch a failed log with `wonka ci-logs <id> <url>`,
+`wonka config ci_hosts.beyondpricing <concourse host>`. Builders then fetch a failed log with `wonka ci-logs <id> --dispatch <n> <url>` (only in a CI fix round, from the current dispatch),
 which refuses any URL that is not https on one of those hosts (a check URL on a PR can be set by anyone who can post a
-commit status). It runs under `Bash(wonka ci-logs *)` and outside the sandbox with `wonka *`, so no `Bash(beyond ci logs *)`
+commit status). It runs under `Bash(wonka ci-logs *)` and outside the sandbox with `wonka ci-logs *`, so no `Bash(beyond ci logs *)`
 rule or sandbox exclusion is needed: remove them if you added them, they let an agent run the tool on any URL (the
 doctor warns).
 
@@ -98,6 +109,12 @@ to the worktree (`./scripts/ci.sh`), which the builder could edit.
 `wonka git` never looks inside a submodule (`diff.ignoreSubmodules=all`): a nested repo brings its own config, whose
 filters would run outside the sandbox. `wonka git add` refuses to run while the worktree holds a submodule or a nested
 repo, since git add looks inside them anyway, so repos that use submodules need a human to commit.
+
+Agents cannot point wonka at a config they wrote: a command that starts with a variable (`WONKA_HOME=<dir> wonka git
+...`) does not match the per-command allow rules, so Claude Code asks you instead of running it for a background
+agent; never approve one. `WONKA_HOME` itself (for the tests, or a second factory) must be an absolute path, and not
+inside `~/.wonka` (whose worktrees and drafts agents write). gh is always the `gh` on PATH: the old `WONKA_GH`
+override is gone.
 
 What stays open: sandboxed commands can still read most of your home, `~/.ssh` included (close it with
 `sandbox.filesystem.denyRead`), and git hooks run outside the sandbox: commit hooks with `wonka git commit`, and
@@ -120,8 +137,8 @@ push.
 | `wonka config [key value]` | show or change settings (it also shows the factory folder and log paths): `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `ci_hosts.<project>`, `ci_log_command.<project>`, `test_lock_wait_minutes` (numbers must be finite: `inf` and `nan` are refused). A hand-edited `config.json` with a value of the wrong type (a null `vault` or `wip`, a string where a list goes) stops every command with an error naming the key |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
-| `wonka ci-logs <id> [--dispatch <n>] <url>` | what builders use to fetch a failed CI log: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
-| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
+| `wonka ci-logs <id> --dispatch <n> <url>` | what builders use to fetch a failed CI log, only in a CI fix round and from the current dispatch: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
+| `wonka doctor` | check git, gh, npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, the sandbox (on, with every wonka command but `test` excluded), `additionalDirectories` that would expose `~/.wonka`, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
 
 ## The floor
 
@@ -152,12 +169,17 @@ your checkout's file. `wonka doctor` warns when a listed file is missing in your
 Agents run a project's tests with `wonka test <id> -- <command>`. List the allowed command prefixes with
 `wonka config test_commands.<project> ./test.sh,make test` (a comma list; an empty value removes it). `wonka test`
 runs only a command that starts with one of them, with no shell, in the ticket's scout or worktree (never your
-checkout). One run per project holds `~/.wonka/locks/<project>-tests.lock`; the others wait up to
+checkout). One run per project holds `~/.wonka/worktrees/.locks/<project>-tests.lock` (in the worktrees folder, so
+`wonka test` can run inside the sandbox; a link planted in its place is refused); the others wait up to
 `test_lock_wait_minutes` (default 3, so wait plus run fit the agents' 10-minute Bash timeout), then exit 75 naming
 the holder. The exit code is the command's. `wonka config` and `wonka doctor` warn about a prefix that leaves the
-program or code to the caller (a shell, interpreter or launcher with nothing pinned after it, like `python3 -c`,
-`sh -c`, `bash`, `env`, `npx`; option values like `python3 -W ignore`, env assignments like `env FOO=1` and a
-wrapped runner like `env FOO=1 bash` do not count as pinned), since it allows any command outside the sandbox.
+program or code to the caller (a shell, interpreter, wrapper or launcher with nothing pinned after it, like
+`python3 -c`, `sh -c`, `bash`, `awk`, `env`, `setsid`, `flock <file>`, `npx`, `go run`, `cargo run`, or `uv` and
+`npm` with no subcommand; option values like `python3 -W ignore`, env assignments like `env FOO=1` and a wrapped
+runner like `env FOO=1 bash` do not count as pinned; `find`, `watch`, `script`, `parallel`, `gdb` and `su` take a
+command anywhere in their arguments, so nothing pins them), since it allows any command outside the sandbox. Tools
+that run the repo's own files are not open, even bare: `make`, `npm run`, `cargo test` and `pytest` run what the
+Makefile, package.json or conftest.py say, which the builder can edit anyway, like `./test.sh`.
 
 Every job JSON carries the project's `test_commands` (`[]` when none). The analyst, builder, fixer and squirrels run a
 test command that starts with one of them through `wonka test <id> --dispatch <n> -- <command>` with a 10-minute Bash
