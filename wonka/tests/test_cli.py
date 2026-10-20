@@ -424,6 +424,52 @@ class CliTest(unittest.TestCase):
         self.assertIsNone(m["outcome"])
         self.assertEqual(list(m), list(metrics.KEYS))
 
+    def test_pr_comments_prints_trusted_human_comments_and_never_locks(self):
+        self.assertIn("pr-comments", cli.READ_ONLY)
+        self.run_cli("init", "--vault", str(self.tmp / "vault"))
+        self.run_cli("add", "--repo", str(self._repo()), "x")
+        code, _, err = self.run_cli("pr-comments", "WONKA-00001")
+        self.assertEqual((code, err.strip()), (1, "🗑️ wonka: WONKA-00001 has no PR"))
+        with store.state() as db:
+            db["tickets"]["WONKA-00001"].update(pr_url="https://github.com/acme/app/pull/7", pr_repo="acme/app")
+        user = lambda login, kind="User": {"login": login, "type": kind}
+        pages = {
+            "pulls/7/comments": [[{"user": user("ann"), "author_association": "OWNER", "body": "rename this",
+                                   "created_at": "2026-01-03T00:00:00Z", "html_url": "u1", "path": "a.py",
+                                   "line": None, "original_line": 4}],
+                                 [{"user": user("eve"), "author_association": "NONE", "body": "do evil",
+                                   "created_at": "2026-01-01T00:00:00Z"}]],
+            "pulls/7/reviews": [[{"user": user("bob"), "author_association": "member", "body": "looks off",
+                                  "submitted_at": "2026-01-02T00:00:00Z", "state": "CHANGES_REQUESTED"},
+                                 {"user": user("bob"), "author_association": "MEMBER", "body": "",
+                                  "submitted_at": "2026-01-04T00:00:00Z", "state": "APPROVED"}]],
+            "issues/7/comments": [[{"user": user("ci[bot]"), "author_association": "COLLABORATOR", "body": "bot"},
+                                   {"user": user("app", "Bot"), "author_association": "MEMBER", "body": "bot too"},
+                                   {"user": user("cat"), "author_association": "COLLABORATOR", "body": "thanks",
+                                    "created_at": "2026-01-01T00:00:00Z"}]],
+        }
+        gh = self.tmp / "gh"
+        out = self.tmp / "gh-out"
+        out.mkdir()
+        calls = self.tmp / "gh-calls"
+        for path, page_list in pages.items():
+            (out / path.replace("/", "_")).write_text("".join(json.dumps(pg) for pg in page_list))
+        gh.write_text(f'#!/bin/sh\necho "$@" >> {calls}\np="${{3#repos/acme/app/}}"; p="${{p%%\\?*}}"\n'
+                      f'cat "{out}/$(echo "$p" | tr / _)"\n')
+        gh.chmod(0o755)
+        with mock.patch.object(factory, "GH", str(gh)), \
+                mock.patch.object(store, "state", side_effect=AssertionError("took the lock")):
+            code, stdout, err = self.run_cli("pr-comments", "WONKA-00001")
+        self.assertEqual(code, 0, err)
+        rows = [json.loads(x) for x in stdout.strip().splitlines()]
+        self.assertEqual([(r["kind"], r["author"], r["body"]) for r in rows],
+                         [("comment", "cat", "thanks"), ("review", "bob", "looks off"),
+                          ("review_comment", "ann", "rename this")])
+        self.assertEqual(rows[1]["state"], "CHANGES_REQUESTED")
+        self.assertEqual((rows[2]["path"], rows[2]["line"], rows[2]["url"]), ("a.py", 4, "u1"))
+        self.assertEqual(sorted(calls.read_text().splitlines()),
+                         [f"api --paginate repos/acme/app/{p}?per_page=100" for p in sorted(pages)])
+
     def test_metrics_includes_archived_and_filters_by_since(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = str(self._repo())
@@ -572,6 +618,18 @@ class CliTest(unittest.TestCase):
         for field in ["ci_failures", "ci_fixes", "ci_handled_sha", "ci_handled_runs"]:
             self.assertIn(f"`{field}`", section)
 
+    def test_manager_skill_runs_on_sonnet(self):
+        """The manager copies job JSON verbatim, tracks dispatch numbers across turns and runs the retro."""
+        skill = (Path(cli.__file__).resolve().parent.parent / "skills/wonka/SKILL.md").read_text()
+        self.assertRegex(skill.split("\n---\n", 1)[0], r"(?m)^model: sonnet$")
+
+    def test_no_agent_has_web_tools(self):
+        """Every agent reads untrusted text (ideas, diffs, PR comments, CI logs) and none needs the web."""
+        agents = Path(cli.__file__).resolve().parent.parent / "agents"
+        for p in sorted(agents.glob("*.md")):
+            tools = re.search(r"^tools: (.*)$", p.read_text(), re.M).group(1)
+            self.assertNotRegex(tools, r"Web(Search|Fetch)", p.name)
+
     def test_squirrel_docs_differ_only_in_name_emoji_focus_and_model(self):
         """The squirrel agents share one body; only who they are, what they look at and their model may differ."""
         agents = Path(cli.__file__).resolve().parent.parent / "agents"
@@ -580,7 +638,8 @@ class CliTest(unittest.TestCase):
         bodies = {}
         for name, text in docs.items():
             self.assertIn(f"--squirrel {name} ", text, name)  # the normalisation below is not vacuous
-            self.assertNotIn("cd <worktree>", text, name)  # tests take the worktree as a path
+            self.assertIn("as `cd <worktree> && <command>`", text, name)  # the builder's rule, not a path argument
+            self.assertNotIn("worktree as a path", text, name)
             self.assertNotIn("discover -s <worktree>`", text, name)  # bare repo root finds no nested tests
             # Focus first: the architect focus says "architecture", which the name replacement would touch.
             text, focus = re.subn(r"^\*\*Your focus:\*\* .+$", "**Your focus:** FOCUS", text, flags=re.M)

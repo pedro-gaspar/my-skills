@@ -305,7 +305,8 @@ class RunnerTablesTest(unittest.TestCase):
         wherever it comes, so no operand pins them."""
         for p in ["find", "find . -name '*_test.py'", "watch", "watch ./test.sh", "script", "script -q -c ./t.sh",
                   "parallel", "parallel ./t.sh", "gdb --args ./t", "su", "runuser -u ci", "env FOO=1 find .",
-                  "timeout 60 watch ./t.sh"]:
+                  "timeout 60 watch ./t.sh", "docker compose run tests", "docker run --rm img", "podman run img",
+                  "nerdctl run img"]:
             with self.subTest(p):
                 self.assertTrue(testrun.open_prefix(p))
 

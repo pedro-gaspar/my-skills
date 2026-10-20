@@ -69,9 +69,9 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
        "excludedCommands": [
          "wonka git *", "wonka ci-logs *", "wonka triage *", "wonka ask *", "wonka section *", "wonka plan *",
          "wonka drafted *", "wonka pr-body *", "wonka baked *", "wonka resolved *", "wonka report *",
-         "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *", "wonka tick *",
-         "wonka finished *", "wonka retry *", "wonka init *", "wonka config *", "wonka set *", "wonka move *",
-         "wonka block *", "wonka unblock *", "wonka doctor *"
+         "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *",
+         "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka init *",
+         "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *", "wonka doctor *"
        ]
      }
    }
@@ -133,7 +133,8 @@ push.
 | `/wonka status` | one line per ticket, with ` ⛓️ <ids>` for blockers that have not merged yet; a ticket whose note is gone shows `⚠️` and why in place of its title |
 | `wonka repos` | the repos the factory knows (project, local path, PR repo); the analyst uses it to file a ticket in another repo |
 | `wonka metrics [--since YYYY-MM-DD]` | one JSON line per ticket, archived ones too: `id, project, size, created_at, reviewers, outcome` (merged / bad nut / duplicate / split / closed by human / PR closed, null while live), `hours_in` per status, `hours_awaiting_human` (time in 🙋), `rounds`, `stats`, `followups_filed`, `pr_url`; `--since` filters on the creation date. Reads a snapshot, never the lock |
-| `/wonka retro [YYYY-MM-DD]` | look back over the tickets created since the date (default 7 days ago): 🔍 **oompa-loompa-inspector** (Opus, read-only) reads `wonka metrics`, the plans' review logs and decisions, the notes' answers, `~/.wonka/factory.log` and the human review comments on merged PRs, and reports flow (hours per status, time waiting on you, gates that fire most), recurring issues (3+ tickets), squirrel quality per reviewer and planning quality. Each proposal (cheapest fix first: a CLI check, an agent prompt, the squirrel focus or reviewer choice, then the repo's AGENTS.md) is yours to Apply (a 💡 Idea ticket in the my-skills clone or the product repo), Apply and start, or Skip; nothing is edited directly, never the plugin cache in ~/.claude/plugins |
+| `wonka pr-comments <id>` | one JSON line per human comment on the ticket's PR, oldest first: review comments, reviews and conversation comments (all pages), only by the repo's owners, members and collaborators, bots skipped. The inspector reads PR comments through it, so it needs no `gh` permission. Reads a snapshot, never the lock |
+| `/wonka retro [YYYY-MM-DD]` | look back over the tickets created since the date (default 7 days ago): 🔍 **oompa-loompa-inspector** (Opus, read-only) reads `wonka metrics`, the plans' review logs and decisions, the notes' answers, `~/.wonka/factory.log` and the human review comments on merged PRs (`wonka pr-comments`), and reports flow (hours per status, time waiting on you, gates that fire most), recurring issues (3+ tickets), squirrel quality per reviewer and planning quality. Each proposal (cheapest fix first: a CLI check, an agent prompt, the squirrel focus or reviewer choice, then the repo's AGENTS.md) is yours to Apply (a 💡 Idea ticket in the my-skills clone or the product repo), Apply and start, or Skip; nothing is edited directly, never the plugin cache in ~/.claude/plugins |
 | `wonka config [key value]` | show or change settings (it also shows the factory folder and log paths): `wip.triage`, `wip.drafting`, `wip.baking` (see [WIP limits](#wip-limits)), `archive_after_days`, `stale_hours`, `max_review_rounds`, `max_followup_depth`, `worktree_files.<project>`, `test_commands.<project>`, `ci_hosts.<project>`, `ci_log_command.<project>`, `test_lock_wait_minutes` (numbers must be finite: `inf` and `nan` are refused). A hand-edited `config.json` with a value of the wrong type (a null `vault` or `wip`, a string where a list goes) stops every command with an error naming the key |
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
@@ -230,7 +231,10 @@ written unchecked and the reason goes to `~/.wonka/factory.log`. Only output lin
 (`MD032/...`) count as problems: an npx or npm error (no network, a 404 from the registry, a cache it cannot write)
 exits 1 as well and counts as the linter failing. A line that continues a list item without indent (a lazy
 continuation) is left in its list. Headings in any section's text (`#`, `##`) become `###`, so they cannot end the
-section early; inside a code fence only `##` lines do, so `# install deps` in a bash block stays as written.
+section early. Lines inside a closed code fence stay as written (`## install` or `# install deps` in a bash block):
+Wonka skips fences when it looks for sections. A fence that never closes is not one: the headings after it are
+demoted and its opening line gets a `\` in front, so it shows as text and cannot pair with a fence further down.
+In the plan, a CI log's `##` lines are demoted even inside fences.
 
 Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian, or moved into a subfolder
 of the tickets folder, is put back on the next tick (found by the `id` in its frontmatter); a deleted note drops its
@@ -249,15 +253,28 @@ and the next tick puts it back, with a note on the ticket. Notes keep only `id, 
 jira, spec_review, blocked_by`. `blocked_by` is a read-only mirror of the state (comma-separated, absent when none): edit it with `wonka block`/`unblock`, since a hand edit is overwritten on the next write. Everything else (repo, PR repo, branch, worktree, PR, rounds, history) is in
 `~/.wonka/golden_ticket_status.json` (the previous version is kept next to it as `.json.bak`). It also keeps a never-reset record of what went wrong: `rounds` (one entry per review verdict: round, kind review/change/ci, time, and per squirrel the verdict, suggest and counts of issues, questions and follow-ups, plus the builder's `disputes` (issue, why) when it declined issues) and `stats` (`ci_rounds`, `conflict_fixes`, `retries`, `stuck`, `followups_filed` counters that survive the resets of the working counters; `stuck` counts each time the ticket goes 🎩 Stuck, once per stuck episode: a CI stuck that turns into a conflict stuck counts once). The CI working counters sit next to them: `ci_failures` counts every CI fix round of the ticket and numbers the plan's `## 🔴 CI failure N` sections (never reset); `ci_fixes` counts the CI fix rounds in a row on the open PR and makes the ticket 🎩 Stuck at 3 (reset by green checks, a merge or close, or Retry on a CI-stuck ticket); `ci_handled_sha` is the PR head whose red checks were last handled and, with `ci_handled_runs` (the failing runs), keeps the same failure from being reworked twice (cleared by Retry on a CI-stuck ticket; `wonka baked --flaky` needs the worktree HEAD to be it). It and the notes
 are written atomically (a temp file, then a rename), and every command that changes state takes a lock in `~/.wonka`,
-giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status`, `wonka show`, `wonka repos` and `wonka metrics` only read, so they never wait for it: an agent
+giving up after 10 minutes. `wonka git`, `wonka test`, `wonka status`, `wonka show`, `wonka repos`, `wonka metrics` and `wonka pr-comments` only read, so they never wait for it: an agent
 is never stalled by a tick that is busy talking to GitHub.
 
 ## Develop
 
 ```bash
 cd wonka && python3 -m unittest                  # from wonka/
-python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (what plans and squirrels use)
+python3 -m unittest discover -s wonka -t wonka   # from the repo root, no cd (what plans use)
 ```
+
+Before a commit, run `./check.sh` (from `wonka/`): the unit tests, then `ruff check` with `ruff.toml` (pyflakes and
+a few pycodestyle error rules, no formatting) when ruff is installed; without ruff it says so and skips the lint.
+There is no hosted CI: this is the check.
 
 A bare `python3 -m unittest` from the repo root finds no tests (`NO TESTS RAN`, exit code 5). If a run reports 0
 tests, the command is wrong, not passing.
+
+The tests never touch GitHub: a fake `gh` prints what Wonka expects. `tests/test_gh_contract.py` checks that the real
+`gh` still prints it: every JSON field Wonka reads from `gh pr view`, `gh pr list` and `gh api`, against a public merged
+PR (cli/cli#9000). It needs the network and a logged-in `gh`, so it only runs on request. Run it after a gh upgrade or
+when you change a fake gh's output:
+
+```bash
+cd wonka && WONKA_GH_CONTRACT=1 python3 -m unittest tests.test_gh_contract -v
+```

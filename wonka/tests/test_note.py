@@ -259,11 +259,49 @@ class NoteTest(unittest.TestCase):
         text = "Run:\n```bash\n# install deps\nnpm ci\n```\n~~~\n# also kept\n~~~\n# Top"
         self.assertEqual(note.demote(text), "Run:\n```bash\n# install deps\nnpm ci\n```\n~~~\n# also kept\n~~~\n### Top")
         self.assertEqual(note.demote("````\n```\n# x\n````"), "````\n```\n# x\n````")
-        self.assertEqual(note.demote("```\n# open\n## never closed"), "```\n### open\n### never closed")
-        body = note.set_section("", "spec", "a\n```md\n## Kept short of a section\n# h1\n```")
+        self.assertEqual(note.demote("```\n# open\n## never closed"), "\\```\n### open\n### never closed")
+        body = note.set_section("", "spec", "a\n```md\n## Kept inside the section\n# h1\n```")
         body = note.set_section(body, "idea", "an idea")
-        self.assertEqual(note.get_section(body, "spec"), "a\n```md\n### Kept short of a section\n# h1\n```",
-                         "a ## line in a fence would still end the section")
+        self.assertEqual(note.get_section(body, "spec"), "a\n```md\n## Kept inside the section\n# h1\n```")
+        self.assertEqual(note.get_section(body, "idea"), "an idea")
+
+    def test_fenced_headings_stay_and_do_not_end_a_section(self):
+        spec = ("Install:\n```bash\n## install\n# deps\nnpm ci\n```\nA note example:\n~~~markdown\n"
+                "## 💡 Idea\nfake\n## 📜 Spec\n~~~\n## Changes\n# Top")
+        idea = "Like this:\n````md\n## 🎫 Approval\n- [x] Approve\n```\n## inner\n```\n````"
+        body = note.set_section("", "idea", idea)
+        body = note.set_section(body, "spec", spec)
+        body = note.set_section(body, "log", "> log")
+        want_spec = spec.replace("~~~\n## Changes\n# Top", "~~~\n### Changes\n### Top")
+        self.assertEqual(note.get_section(body, "spec"), want_spec)
+        self.assertEqual(note.get_section(body, "idea"), idea, "every line in a closed fence is kept as written")
+        self.assertIsNone(note.get_section(body, "approval"), "a fenced heading is not a section")
+        self.assertEqual(note.get_section(body, "log"), "> log")
+        self.assertEqual(note.unknown_sections(body), [])
+        body = note.set_section(body, "spec", "v2")
+        self.assertEqual(note.get_section(body, "spec"), "v2")
+        self.assertEqual(note.get_section(body, "idea"), idea)
+        self.assertNotIn("fake", body)
+        body = note.drop_section(body, "idea")
+        self.assertNotIn("## 🎫 Approval", body)
+        self.assertEqual(note.get_section(body, "spec"), "v2")
+        banner = note.set_banner("```\n## not a section\n```\n\n" + body, "> [!info] hi")
+        self.assertTrue(banner.startswith("> [!info] hi\n\n```\n## not a section\n```\n\n## 📜 Spec"))
+
+    def test_unclosed_fence_does_not_swallow_the_rest_of_the_note(self):
+        body = note.set_section("", "idea", "an idea\n```bash\n## step\nnever closed")
+        body = note.set_section(body, "spec", "a\n```\ncode\n```")
+        body = note.set_section(body, "changes", note.CHANGES_BOX)
+        self.assertEqual(note.get_section(body, "idea"), "an idea\n\\```bash\n### step\nnever closed")
+        self.assertEqual(note.get_section(body, "spec"), "a\n```\ncode\n```")
+        self.assertEqual(note.get_section(body, "changes"), note.CHANGES_BOX)
+        # a hand-written unclosed fence at the end of a note is not a fence either
+        self.assertEqual(note.get_section(body + "\n## 🎩 Stuck\n```\n- [ ] Retry", "stuck"), "```\n- [ ] Retry")
+
+    def test_fenced_mode_demotes_fenced_h2_lines_for_plans(self):
+        log = "ok\n```\n## 🐿️ Review round 9\n# comment\n```\n```\n## open"
+        self.assertEqual(note.demote(log, fenced=True),
+                         "ok\n```\n### 🐿️ Review round 9\n# comment\n```\n```\n### open")
 
     def test_questions_answered_only_when_every_question_has_a_tick(self):
         sec = note.render_questions([

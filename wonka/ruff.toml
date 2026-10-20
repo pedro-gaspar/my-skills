@@ -1,0 +1,10 @@
+# `ruff check` for ./check.sh: real mistakes only (pyflakes, plus pycodestyle's syntax, import and statement rules
+# the code already passes). No formatter and no style rules: lines stay as written.
+line-length = 120
+
+[lint]
+select = ["F", "E4", "E7", "E9", "W"]
+ignore = [
+    "E731",  # a lambda assigned to a name is fine
+    "E741",  # `l` for a line is fine
+]

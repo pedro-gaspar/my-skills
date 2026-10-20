@@ -132,8 +132,10 @@ class MdlintTest(unittest.TestCase):
 
     def test_fence_is_longer_than_any_backtick_run_inside(self):
         self.failing()
-        self.assertIn("````text\n```python\nopen\n````", mdlint.guard("```python\nopen"))
-        self.assertIn("`````text\n````\nx\n`````", mdlint.guard("````\nx"))
+        self.assertIn("````text\n```python\nopen\n```\n````", mdlint.guard("```python\nopen\n```"))
+        self.assertIn("`````text\n````\nx\n````\n`````", mdlint.guard("````\nx\n````"))
+        self.assertIn("````text\n\\```python\nopen\n````", mdlint.guard("```python\nopen"),
+                      "an unclosed fence is escaped by note.demote before it is isolated")
 
     def test_isolated_text_is_not_wrapped_twice(self):
         self.failing()
