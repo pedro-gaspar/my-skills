@@ -704,9 +704,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(p.parse_args(["block", "WONKA-00003", "WONKA-00001", "WONKA-00002"]).blockers), 2)
         self.assertEqual(p.parse_args(["unblock", "WONKA-00003"]).blockers, [])
 
-    def test_needs_human_spec_review_flag(self):
-        self.assertTrue(cli.parser().parse_args(["add", "x", "--needs-human-spec-review"]).needs_human_spec_review)
-        self.assertFalse(cli.parser().parse_args(["add", "x"]).needs_human_spec_review)
+    def test_review_spec_flag(self):
+        self.assertTrue(cli.parser().parse_args(["add", "x", "--review-spec"]).review_spec)
+        self.assertFalse(cli.parser().parse_args(["add", "x"]).review_spec)
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         repo = self.tmp / "app"
         repo.mkdir()
@@ -715,7 +715,7 @@ class CliTest(unittest.TestCase):
         for cmd in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
             subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
         with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
-            self.assertEqual(self.run_cli("add", "x", "--repo", str(repo), "--needs-human-spec-review")[0], 0)
+            self.assertEqual(self.run_cli("add", "x", "--repo", str(repo), "--review-spec")[0], 0)
         notes = list((self.tmp / "vault").rglob("WONKA-00001.md"))
         self.assertEqual(len(notes), 1)
         self.assertIn("spec_review: human\n", notes[0].read_text())

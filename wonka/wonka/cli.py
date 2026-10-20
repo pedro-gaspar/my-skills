@@ -180,7 +180,7 @@ def run(a, f):
     c = a.cmd
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
-                  spec_review="human" if a.needs_human_spec_review else None, blocked_by=split_ids(a.blocked_by),
+                  spec_review="human" if a.review_spec else None, blocked_by=split_ids(a.blocked_by),
                   start="triage" if a.triage else "idea")
         if a.triage:
             print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
@@ -309,7 +309,7 @@ def parser():
     s.add_argument("--parent")
     s.add_argument("--size", choices=machine.SIZES)
     s.add_argument("--jira")
-    s.add_argument("--needs-human-spec-review", action="store_true",
+    s.add_argument("--review-spec", action="store_true",
                    help="a human approves the spec and plan before baking (spec_review: human)")
     s.add_argument("--blocked-by", action="append",
                    help="ids this ticket waits on (comma list or repeat): WONKA-00001,WONKA-00002")
