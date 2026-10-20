@@ -2382,6 +2382,38 @@ class FactoryTest(unittest.TestCase):
         self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "")
         self.assertTrue(any(h.get("why", "").startswith("Branch kept") for h in self.history(tid)))
 
+    def test_merge_keeps_a_branch_with_commits_never_pushed(self):
+        tid = self.add()
+        wt, branch = self.to_awaiting_merge(tid)
+        (wt / "later.sh").write_text("echo later\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "made by hand after the last push", cwd=wt)
+        local = sh("git", "rev-parse", branch, cwd=self.repo)
+        self.pr_state.write_text("MERGED")
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertFalse(wt.exists(), "the worktree is clean: it goes")
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.repo), local, "the local commit is never lost")
+        self.assertTrue(self.f_ticket(tid)["keep_branch"])
+        self.assertNotIn("cleanup", self.f_ticket(tid))
+        self.assertEqual(self.whys(tid, "Branch kept"), 1)
+        self.tick()
+        self.assertEqual(sh("git", "rev-parse", branch, cwd=self.repo), local)
+        self.assertEqual(self.whys(tid, "Branch kept"), 1, "logged once")
+
+    def test_cleanup_keeps_a_branch_with_commits_never_pushed(self):
+        tid = self.add()
+        wt, branch = self.kept_after(tid, "MERGED")
+        (wt / "scratch.txt").unlink()
+        (wt / "later.sh").write_text("echo later\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "made by hand after the merge", cwd=wt)
+        events = self.tick()["events"]
+        self.assertFalse(wt.exists())
+        self.assertIn(f"{tid}: cleaned up the kept worktree", events)
+        self.assertNotEqual(sh("git", "branch", "--list", branch, cwd=self.repo), "", "its local commit is kept")
+        self.assertTrue(self.f_ticket(tid)["keep_branch"])
+
     # -- cleanup of what done tickets kept ---------------------------------
 
     def whys(self, tid, prefix):
@@ -3210,7 +3242,7 @@ class FactoryTest(unittest.TestCase):
             f.tick()
             self.assertIsNone(f._base_cache)
 
-    def test_scout_falls_back_to_the_repo_without_origin(self):
+    def test_scout_falls_back_to_the_local_base_without_origin(self):
         sh("git", "remote", "remove", "origin", cwd=self.repo)
         tid = self.add()
         job = self.job_for(tid)
@@ -3220,6 +3252,8 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue((Path(job["code"]) / "README.md").exists())
         self.assertNotEqual(Path(job["code"]).resolve(), self.repo.resolve())
 
+    def test_failed_scout_is_a_retry_never_the_main_checkout(self):
+        tid = self.add()
         real = factory.git
 
         def fake(*args, cwd):
@@ -3227,23 +3261,47 @@ class FactoryTest(unittest.TestCase):
                 raise WonkaError("worktree add failed")
             return real(*args, cwd=cwd)
 
-        with self.f() as f:
-            f.retry(tid)  # dispatch the triage again
-        with mock.patch.object(factory, "git", fake):
-            job = self.job_for(tid)
-        self.assertEqual(job["job"], "triage")
-        self.assertEqual(job["code"], self.f_ticket(tid)["repo"])
-        self.assertEqual(job["base_ref"], "main")
-        self.assertIn("No fresh checkout", (store.home() / "factory.log").read_text())
+        events = []
+        for n in (1, 2, 3):
+            with mock.patch.object(factory, "git", fake):
+                out = self.tick()
+            events += out["events"]
+            self.assertEqual([j for j in out["jobs"] if j["id"] == tid], [], "no job when the scout cannot be made")
+            self.assertEqual(self.state(tid), ("triage", "pending"))
+            self.assertEqual(self.f_ticket(tid)["retries"], n)
+        self.assertIn(f"{tid}: ⚠️ could not make the scout (a fresh checkout of the base) (try 1/3), retried next "
+                      "tick: worktree add failed", events)
+        self.assertIn(f"{tid}: ⚠️ could not make the scout (a fresh checkout of the base), stuck: worktree add failed",
+                      out["events"])
+        self.assertTrue(self.f_ticket(tid)["stuck"])
+        self.assertIsNone(self.f_ticket(tid).get("job_started_at"))
+        self.assertIn("Could not make the scout", (store.home() / "factory.log").read_text())
+        self.assertEqual(self.tick()["jobs"], [], "stuck: nothing is handed out until a human ticks Retry")
 
-    def test_unwritable_worktrees_dir_falls_back_to_the_repo(self):
+    def test_failed_scout_keeps_a_draft_pending(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        with mock.patch.object(Factory, "fresh_scout", side_effect=OSError("disk full")):
+            out = self.tick()
+        self.assertEqual([j for j in out["jobs"] if j["id"] == tid], [])
+        self.assertIn(f"{tid}: ⚠️ could not make the scout (a fresh checkout of the base) (try 1/3), retried next "
+                      "tick: disk full", out["events"])
+        self.assertEqual(self.state(tid), ("drafting", "pending"), "not moved to progress without a scout")
+        job = self.job_for(tid)
+        self.assertEqual(job["job"], "draft")
+        self.assertTrue(Path(job["code"]).name.endswith("-scout"))
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+
+    def test_unwritable_worktrees_dir_hands_out_no_job(self):
         tid = self.add()
         store.worktrees_dir().parent.mkdir(parents=True, exist_ok=True)
         store.worktrees_dir().write_text("not a dir\n")
-        job = self.job_for(tid)
-        self.assertEqual(job["job"], "triage")
-        self.assertEqual(job["code"], self.f_ticket(tid)["repo"])
-        self.assertTrue(any("No fresh checkout" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
+        out = self.tick()
+        self.assertEqual(out["jobs"], [])
+        self.assertTrue(any(e.startswith(f"{tid}: ⚠️ could not make the scout") for e in out["events"]))
+        self.assertTrue(any("Could not make the scout" in h.get("why", "") for h in self.f_ticket(tid)["history"]))
 
     def test_killed_or_deleted_ticket_drops_its_scout(self):
         a, b = self.add(), self.add("Second")
@@ -5824,6 +5882,148 @@ class FactoryTest(unittest.TestCase):
         self.rebase_onto(wt, "origin/main")
         with self.f() as f:
             f.resolved(tid, dispatch=job["dispatch"])
+
+    # -- the flags each move clears (FLAG_LIFE) -----------------------------
+
+    @staticmethod
+    def old_cleared(dst, by):
+        """What move() cleared before FLAG_LIFE, written out as it was: the table must say exactly this."""
+        final = dst in (machine.MERGED, KILLED)
+        out = {"job_started_at", "conflict_error"}
+        if dst != ("shipped", "progress"):
+            out |= {"conflicts", "merge_ref", "merge_sha", "fix_head", "lease"}
+        if dst != ("drafting", "awaiting"):
+            out.add("spec_review_pending")
+        if dst[0] != "reviewing":
+            out.add("round_kind")
+        if dst[0] != "shipped" or dst[1] == "ready":
+            out |= {"conflict_fixes", "ci_flaky"}
+        if by != "wonka" or final:
+            out |= {"ci_stuck", "stuck", "retries"}
+        if final:
+            out |= {"ci_fixes", "cleanup"}
+        if dst[1] == "ready":
+            out.add("pr_base")
+        if dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
+            out.add("scout")
+        return out
+
+    def legal_edges(self):
+        edges = set(machine.EDGES)
+        edges |= {(s, KILLED) for s in factory._ALL if machine.allowed(s, KILLED)}
+        return sorted(edges)
+
+    def test_flag_table_clears_what_move_always_cleared(self):
+        for src, dst in self.legal_edges():
+            for by in ("wonka", "human", "github", "builder", "fixer"):
+                self.assertEqual(factory.cleared_flags(dst, by), self.old_cleared(dst, by), (src, dst, by))
+
+    def test_move_clears_the_flags_of_the_table_and_keeps_the_rest(self):
+        tid = self.add()
+        flags = sorted(factory.FLAG_LIFE)
+        for src, dst in self.legal_edges():
+            for by in ("wonka", "human"):
+                with self.f() as f:
+                    t = f.ticket(tid)
+                    t["last_valid"] = {"status": src[0], "phase": src[1]}
+                    for k in flags:
+                        t[k] = {"scout": str(self.tmp / "no-scout"), "ci_flaky": {"why": "w", "checks": "c"},
+                                "conflict_error": "e", "job_started_at": factory._iso(factory.now())}.get(k, 1)
+                    t.pop("held_by", None)
+                    f.move(tid, dst, by)
+                    left = {k for k in flags if k in t}
+                    if dst in (machine.MERGED, KILLED):
+                        t.pop("entered_done_at", None)
+                self.assertEqual(left, set(flags) - self.old_cleared(dst, by), (src, dst, by))
+
+    # -- the slow reads happen before the tick takes the state lock -----------
+
+    def prefetched_tick(self, gh=None):
+        """prefetch() on a snapshot, then the tick under the lock with what it read (and, given, another gh)."""
+        fetched = Factory(self.cfg, store.snapshot()).prefetch()
+        if gh is not None:
+            self.set_gh(gh)
+        with store.state() as db:
+            return Factory(self.cfg, db, fetched).tick(), fetched
+
+    def test_tick_reads_github_without_holding_the_lock(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.pr_state.write_text("MERGED")
+        S = str(self.pr_state)
+        self.set_gh(FAKE_GH.replace('S="$WONKA_FAKE_PR_STATE"\n', 'S="$WONKA_FAKE_PR_STATE"\n'
+                                    'if [ "$1 $2" = "pr view" ]; then echo x >> "$S.views"; touch "$S.started"; '
+                                    'sleep 1.5; touch "$S.slept"; fi\n', 1))
+        result = {}
+
+        def tick():
+            result["code"] = cli.main(["tick"])
+
+        out = io.StringIO()
+        with mock.patch.object(cli, "LINK", self.tmp / "bin" / "wonka"), contextlib.redirect_stdout(out):
+            th = __import__("threading").Thread(target=tick)
+            th.start()
+            deadline = time.monotonic() + 30
+            while not Path(f"{S}.started").exists():
+                self.assertLess(time.monotonic(), deadline, "gh pr view never ran")
+                time.sleep(0.02)
+            with mock.patch.object(store, "LOCK_TIMEOUT", 1), store.state() as db:  # busy: CriticalError after 1 s
+                self.assertFalse(Path(f"{S}.slept").exists(), "the lock was free while gh was still at work")
+                self.assertEqual(db["tickets"][tid]["last_valid"], {"status": "shipped", "phase": "awaiting"})
+            th.join(60)
+        self.assertEqual(result["code"], 0)
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertEqual(Path(f"{S}.views").read_text(), "x\n", "the tick used what it read before the lock")
+
+    def test_requested_changes_and_red_ci_are_read_before_the_lock(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.ci_state([self.check_run()])
+        self.edit_note(tid, lambda t: t.replace(note.CHANGES_BOX, "- [x] 🔁 Request changes\nrename it"))
+        Path(f"{self.pr_state}.runlog").write_text("boom at test_x\n")
+        out, fetched = self.prefetched_tick(gh=FAILING_GH)  # under the lock every gh call fails
+        self.assertFalse(Path(f"{self.pr_state}.calls").exists(), "no gh call under the lock")
+        self.assertEqual({w if isinstance(w, str) else w[0] for _, w in fetched["reads"]}, {"view", "feedback", "log"})
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        plan = self.plan_text(tid)
+        self.assertIn("## 🔴 CI failure 1", plan)
+        self.assertIn("boom at test_x", plan)
+        self.assertIn("rename it", plan)
+
+    def test_prefetched_reads_for_another_state_are_not_used(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        url = self.f_ticket(tid)["pr_url"]
+        with self.f() as f:
+            for stamp, want in (((("baking", "pending"), url), "fetched"), ((("shipped", "awaiting"), "other"), "fetched"),
+                                ((("shipped", "awaiting"), url), "cached")):
+                f._fetched = {"reads": {(tid, "view"): (stamp, "cached")}}
+                self.assertEqual(f._read(tid, "view", lambda: "fetched"), want, stamp)
+            self.assertEqual(f._read(tid, "state", lambda: "fetched"), "fetched", "never read: fetched now")
+
+    def test_failed_prefetch_is_read_again_under_the_lock(self):
+        tid = self.add()
+        self.to_awaiting_merge(tid)
+        self.set_gh(FAILING_GH)
+        fetched = Factory(self.cfg, store.snapshot()).prefetch()
+        self.assertEqual(fetched["reads"], {})
+        self.set_gh(FAKE_GH)
+        self.pr_state.write_text("MERGED")
+        with store.state() as db:
+            Factory(self.cfg, db, fetched).tick()
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+
+    def test_base_is_fetched_before_the_lock(self):
+        tid = self.add()
+        self.push_upstream()
+        fetched = Factory(self.cfg, store.snapshot()).prefetch()
+        self.assertEqual(fetched["bases"], {(str(self.repo.resolve()), "main"): "origin/main"})
+        calls, patch = self.count_fetches()
+        with patch, store.state() as db:
+            jobs = Factory(self.cfg, db, fetched).tick()["jobs"]
+        self.assertEqual(calls, [], "no fetch under the lock")
+        self.assertEqual(jobs[0]["job"], "triage")
+        self.assertTrue((Path(jobs[0]["code"]) / "new.txt").exists(), "the scout has what was fetched")
 
 
 class GhCommandTest(unittest.TestCase):

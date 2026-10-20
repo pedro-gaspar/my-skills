@@ -34,6 +34,47 @@ WORKTREE_JOBS = {("baking", "progress"): "oompa-loompa-builder", ("shipped", "pr
 OFF_PR = frozenset({("baking", "pending"), ("baking", "progress"), ("baking", "ready"), ("reviewing", "pending"),
                     ("reviewing", "progress"), ("reviewing", "awaiting"), ("reviewing", "ready"),
                     ("shipped", "pending"), ("shipped", "progress")})
+# the states from which a tick may start a job on the latest base (a scout, a new worktree, a catch-up), counting the
+# moves into Drafting and Baking the same tick makes: prefetch() fetches their base before the lock
+NEEDS_BASE = frozenset({("triage", "pending"), ("triage", "ready"), ("drafting", "pending"), ("drafting", "progress"),
+                        ("planned", "pending"), ("baking", "pending")})
+_ALL = frozenset((status, phase) for status, phases in machine.VALID.items() for phase in phases)
+_UNFINISHED = _ALL - {machine.MERGED, KILLED}
+_PR_WAITS = frozenset({("shipped", "pending"), ("shipped", "progress"), ("shipped", "awaiting")})
+# Per-ticket flags tied to where the ticket is: flag -> (the states it lives in, cleared by any move Wonka itself did not
+# make). move() clears a flag whenever the ticket moves outside its states, and also, when the second field is set, on
+# any move by a human, an agent or GitHub. A flag set just before a move to one of its states survives it.
+FLAG_LIFE = {
+    "job_started_at": (frozenset(), False),  # every move ends the job; start() stamps the new one after its move
+    "conflict_error": (frozenset(), False),  # a fixer that started, or any other move, ends the failed-start episode
+    # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through ship(), killed,
+    # merged) starts clean and the next tick re-detects conflicts
+    **dict.fromkeys(("conflicts", "merge_ref", "merge_sha", "fix_head", "lease"),
+                    (frozenset({("shipped", "progress")}), False)),
+    "spec_review_pending": (frozenset({("drafting", "awaiting")}), False),  # only drafting/awaiting waits on it
+    # left Reviewing without a verdict: a stale ci/change kind must not label the next round
+    "round_kind": (frozenset(s for s in _ALL if s[0] == "reviewing"), False),
+    # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a merge starts
+    # clean (kept through pending/progress so a failed fixer's retry does not reset it)
+    "conflict_fixes": (_PR_WAITS, False),
+    "ci_flaky": (_PR_WAITS, False),  # only lives while the PR waits in the shipped states
+    "ci_fixes": (_UNFINISHED, False),  # merged or killed: the CI fix count dies with the PR
+    "cleanup": (_UNFINISHED, False),  # the flag reflects only this attempt
+    # finished, or moved by anyone but Wonka (a human, an agent's result, GitHub): nothing left to retry
+    "stuck": (_UNFINISHED, True),
+    "ci_stuck": (_UNFINISHED, True),  # goes with stuck
+    "retries": (_UNFINISHED, True),
+    "pr_base": (frozenset(s for s in _ALL if s[1] != "ready"), False),
+    # the scout checkout, removed by drop_scout(): no triage or draft job is left to read it anywhere else
+    "scout": (frozenset({("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")}), False),
+}
+
+
+def cleared_flags(dst, by):
+    """The FLAG_LIFE flags that a move to dst made by `by` clears."""
+    return {k for k, (lives, by_hand) in FLAG_LIFE.items() if dst not in lives or (by_hand and by != "wonka")}
+
+
 REVIEW_LOG = re.compile(r"^## (?:🐿️ (?:Earlier review|Review) round|🔁 (?:Earlier change|Change) request"
                         r"|🔴 (?:Earlier CI|CI) failure) \d+", re.M)
 # PR comments by anyone else are not copied into the plan: the builder runs unattended and would read them as instructions
@@ -133,7 +174,7 @@ def _age(stamp):
     return now() - dt.datetime.fromisoformat(stamp)
 
 
-TIMEOUT = 120  # seconds any git or gh call may take; most run inside the state lock
+TIMEOUT = 120  # seconds any git or gh call may take; a tick makes its slow reads before taking the state lock (prefetch)
 # git, gh and Git Credential Manager must never ask a human anything
 NONINTERACTIVE = {"GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "GCM_INTERACTIVE": "never"}
 # The gh program: tests patch this, never an environment variable, which a caller could set to run its own program
@@ -529,9 +570,12 @@ def split_ids(values):
 
 
 class Factory:
-    def __init__(self, cfg, db):
+    def __init__(self, cfg, db, fetched=None):
         self.cfg, self.db = cfg, db
         self._base_cache = None  # {(repo, base): ref} during tick(); None outside a tick: always fetch
+        # what prefetch() read before tick() took the state lock: {"reads": {(tid, what): (stamp, value)},
+        # "bases": {(repo, base): ref}}
+        self._fetched = fetched or {}
 
     # -- tickets and notes ------------------------------------------------
 
@@ -711,51 +755,26 @@ class Factory:
                              **({"why": why} if why else {})})
         if final:
             self._hold_for_live_job(tid, src)  # killed, or merged while an agent still worked on a fix round
-        t.pop("job_started_at", None)
-        if dst != ("shipped", "progress"):
-            # a conflict fix only lives in shipped/progress; anywhere else (back to awaiting, a retry through
-            # ship(), killed, merged) starts clean and the next tick re-detects conflicts
-            t.pop("conflicts", None)
-            t.pop("merge_ref", None)
-            t.pop("merge_sha", None)
-            t.pop("fix_head", None)
-            t.pop("lease", None)
-        if dst != ("drafting", "awaiting"):
-            t.pop("spec_review_pending", None)  # only a drafting/awaiting ticket can wait on the spec review
-        if dst[0] != "reviewing":
-            t.pop("round_kind", None)  # left Reviewing without a verdict: a stale ci/change kind must not label the next round
-        t.pop("conflict_error", None)  # a fixer that started, or any other move, ends the failed-start episode
-        if dst[0] != "shipped" or dst[1] == "ready":
-            # the count of conflict fixes lives across one open PR's shipped states; a change request, a kill or a
-            # merge starts clean (kept through pending/progress so a failed fixer's retry does not reset it)
-            t.pop("conflict_fixes", None)
-        if by != "wonka" or final:
-            t.pop("ci_stuck", None)  # goes with the stuck flag below
-        if final:
-            t.pop("ci_fixes", None)  # merged or killed: the CI fix count dies with the PR
-        if dst[0] != "shipped" or dst[1] == "ready":
-            t.pop("ci_flaky", None)  # only lives while the PR waits in the shipped states
-        if dst[1] == "ready":
-            t.pop("pr_base", None)
+        cleared = cleared_flags(dst, by)  # see FLAG_LIFE
+        stuck = "stuck" in cleared and t.get("stuck")
+        for k in cleared - {"scout"}:  # the scout is a checkout: drop_scout() removes it below
+            t.pop(k, None)
         if final:
             t["entered_done_at"] = _iso(now())
         meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
         if final:
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
-        if (by != "wonka" or final) and t.pop("stuck", None):
-            body = note.drop_section(body, "stuck")  # finished, or moved by a human: nothing left to retry
+        if stuck:
+            body = note.drop_section(body, "stuck")
         self.write(tid, meta, body)
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
-        if by != "wonka" or final:
-            t.pop("retries", None)
         if final:
-            t.pop("cleanup", None)  # the flag reflects only this attempt
             self.drop_worktree(tid)
             if dst == ("shipped", "ready"):
                 self.drop_branch(tid)
-        if t.get("scout") and dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
-            self.drop_scout(tid)  # no triage or draft job left to read it
+        if "scout" in cleared and t.get("scout"):
+            self.drop_scout(tid)
         if dst[1] == "awaiting":
             notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
 
@@ -961,8 +980,7 @@ class Factory:
 
     def drafted(self, tid, size, reviewers=(), dispatch=None, split=False):
         if self._stale_dispatch(tid, dispatch):
-            return (f"{tid}: analyst result is from an earlier dispatch "
-                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+            return self._stale_msg(tid, "analyst result", dispatch)
         self.expect(tid, ("drafting", "progress"))
         t = self.ticket(tid)
         if split:
@@ -1124,16 +1142,22 @@ class Factory:
         cache = self._base_cache
         if cache is not None and key in cache:
             return cache[key]
-        ref = t["base_branch"]
         try:
-            git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
-            if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
-                ref = f"origin/{t['base_branch']}"
+            ref = self._fetch_base(t)
         except WonkaError:
-            pass  # offline or no origin: use the local base branch
+            ref = t["base_branch"]  # offline or no origin: use the local base branch
         if cache is not None:
             cache[key] = ref
         return ref
+
+    @staticmethod
+    def _fetch_base(t):
+        """Fetch origin's base branch: origin/<base>, or the local base when origin has no such branch. Raises when
+        the fetch fails."""
+        git("fetch", "--quiet", "origin", t["base_branch"], cwd=t["repo"])
+        if _ref_exists(t["repo"], f"refs/remotes/origin/{t['base_branch']}"):
+            return f"origin/{t['base_branch']}"
+        return t["base_branch"]
 
     # -- scout: a read-only checkout of the latest base for triage and drafting --
 
@@ -1254,8 +1278,9 @@ class Factory:
         return held["agents"]
 
     def drop_branch(self, tid, quiet=False):
-        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone.
-        Returns whether the branch is gone; a kept one flags the ticket for cleanup."""
+        """After a merged PR: delete the local branch. Best effort, only once the worktree is gone, and only when
+        everything on it was pushed: a branch with local commits the PR never got is kept (keep_branch) and logged.
+        Returns whether Wonka is done with the branch; one it could not delete flags the ticket for cleanup."""
         t = self.ticket(tid)
         if not t.get("branch") or t.get("keep_branch"):  # keep_branch: it holds commits the merged PR never got
             return True
@@ -1263,6 +1288,11 @@ class Factory:
             t["cleanup"] = True  # the worktree was kept (it still has the branch checked out)
             return False
         if not Path(t["repo"]).is_dir() or not _ref_exists(t["repo"], f"refs/heads/{t['branch']}"):
+            return True
+        if self._unpushed(tid):  # -D would lose them: commits made after the last push (or it cannot be told)
+            t["keep_branch"] = True
+            self.log_event(tid, f"Branch kept: {t['branch']} has commits that were never pushed to the PR. Open a PR "
+                                "for them by hand, or delete the branch yourself")
             return True
         try:
             git("branch", "-D", t["branch"], cwd=t["repo"])
@@ -1288,6 +1318,7 @@ class Factory:
                       and _ref_exists(t["repo"], f"refs/heads/{t['branch']}"))
         if s == ("shipped", "ready") and not self.drop_branch(tid, quiet=True):
             return None
+        had_branch = had_branch and not t.get("keep_branch")  # kept just now: it has commits that were never pushed
         t.pop("cleanup", None)
         if not had_wt and not had_branch:
             return None  # nothing was left after all
@@ -1297,8 +1328,7 @@ class Factory:
 
     def baked(self, tid, dispatch=None, flaky=None, disputes=()):
         if self._stale_dispatch(tid, dispatch):
-            return (f"{tid}: builder result is from an earlier dispatch "
-                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+            return self._stale_msg(tid, "builder result", dispatch)
         self.expect(tid, ("baking", "progress"))
         t = self.ticket(tid)
         if flaky is not None:
@@ -1373,8 +1403,7 @@ class Factory:
         if reviewer not in REVIEWERS:
             raise WonkaError(f"unknown squirrel {reviewer}; one of {', '.join(REVIEWERS)}")
         if self._stale_dispatch(tid, dispatch):
-            return (f"{tid}: squirrel-{reviewer} report is from an earlier dispatch "
-                    f"({dispatch}, now {self.ticket(tid)['dispatch']}), ignored")
+            return self._stale_msg(tid, f"squirrel-{reviewer} report", dispatch)
         self.expect(tid, ("reviewing", "progress"))
         t = self.ticket(tid)
         if reviewer not in (t["reviewers"] or ["architect"]):
@@ -1757,15 +1786,11 @@ class Factory:
                  f"The PR's checks failed on {head}. Fix them with new commits on the same branch."]
         for c in red:
             lines.append(note.demote(" ".join(x for x in (f"- {c['name']}: {c['result']}", c["url"]) if x)))
-        runs = []
-        for c in red:
-            rid = _run_id(c["url"], t["pr_repo"])
-            if rid and rid not in runs:
-                runs.append(rid)
+        runs = self._red_runs(tid, red)
         for rid in runs[:CI_LOG_RUNS]:
             lines.append(f"### Failed log of run {rid}")
             try:
-                log = gh("run", "view", rid, "--repo", t["pr_repo"], "--log-failed")
+                log = self._read(tid, ("log", rid), lambda: self._run_log(tid, rid))
             except (WonkaError, OSError) as e:
                 err = " ".join(str(e).split())[:200]
                 lines.append(f"(could not fetch the log: {err})")
@@ -1777,6 +1802,18 @@ class Factory:
         if len(runs) > CI_LOG_RUNS:
             lines.append(f"(logs of {len(runs) - CI_LOG_RUNS} more run(s) not fetched: open the links above)")
         return "\n".join(lines)
+
+    def _red_runs(self, tid, red):
+        """The distinct Actions run ids of the red checks, in order (only runs of the PR's repo)."""
+        runs = []
+        for c in red:
+            rid = _run_id(c["url"], self.ticket(tid)["pr_repo"])
+            if rid and rid not in runs:
+                runs.append(rid)
+        return runs
+
+    def _run_log(self, tid, rid):
+        return gh("run", "view", rid, "--repo", self.ticket(tid)["pr_repo"], "--log-failed")
 
     def _mark_ci_round(self, tid, head, red):
         t = self.ticket(tid)
@@ -1827,7 +1864,9 @@ class Factory:
         """The human ticked 🔁 Request changes: write their notes and the PR feedback into the plan, back to baking.
         `ci` is (head, red checks) when the PR's CI is red too: one round holds both."""
         t = self.ticket(tid)
-        pr, skipped, newest = self._pr_feedback(tid, t.get("changes_cutoff"))  # fetch first: a gh failure changes nothing
+        since = t.get("changes_cutoff")
+        pr, skipped, newest = self._read(tid, ("feedback", since),  # fetch first: a gh failure changes nothing
+                                         lambda: self._pr_feedback(tid, since))
         if not notes.strip() and not pr:
             if ci is None:
                 self.set_section(tid, "changes", note.CHANGES_BOX)
@@ -1949,13 +1988,88 @@ class Factory:
         # a fixer started before rebasing existed has no lease; its merge is a fast-forward, pushed without force
         lease = [f"--force-with-lease={t['branch']}:{t['lease']}"] if t.get("lease") else []
         git("push", *lease, "origin", t["branch"], cwd=wt)
-        # the fix landed: the next conflict episode gets the full start budget and no stale warning
-        t.pop("retries", None)
-        t.pop("conflict_error", None)
-        # retries is reset here on purpose, so this count is what bounds a PR that GitHub keeps calling conflicting
+        # the fix landed: the fixer's move below clears retries and conflict_error (FLAG_LIFE), so the next conflict
+        # episode gets the full start budget and no stale warning, and this count is what bounds a PR that GitHub
+        # keeps calling conflicting
         n = t["conflict_fixes"] = t.get("conflict_fixes", 0) + 1
         _bump_stat(t, "conflict_fixes")
         self.move(tid, ("shipped", "awaiting"), "fixer", f"Merge conflicts fixed and pushed (fix {n}/{MAX_CONFLICT_FIXES})")
+
+    # -- reads done before the tick takes the state lock --------------------
+
+    def _fetch_stamp(self, tid):
+        """What prefetched PR data holds for: the ticket still in the same state on the same PR."""
+        return self.state(tid), self.ticket(tid).get("pr_url")
+
+    def _read(self, tid, what, fetch):
+        """fetch(), unless prefetch() already read `what` for this ticket while it was where it is now."""
+        hit = self._fetched.get("reads", {}).get((tid, what))
+        if hit is not None and hit[0] == self._fetch_stamp(tid):
+            return hit[1]
+        return fetch()
+
+    def prefetch(self):
+        """Do the slow network reads the next tick will need (PR states, checks, comments, CI logs, base fetches) on a
+        snapshot of the state, before tick() takes the state lock, so a slow GitHub never keeps the agents' commands
+        waiting on it. Changes nothing (self.db is a snapshot, never saved). Returns what Factory takes as `fetched`;
+        a read that fails is left out and tick() does it under the lock as before, as it does any read for a ticket
+        that has moved on since."""
+        reads, bases = {}, {}
+
+        def keep(tid, what, fetch):
+            try:
+                value = fetch()
+            except (WonkaError, OSError):
+                return None
+            reads[(tid, what)] = (self._fetch_stamp(tid), value)
+            return value
+
+        for tid in self.live():
+            try:
+                self._prefetch_ticket(tid, keep, bases)
+            except Exception as e:  # only ever a head start: the tick reads it under the lock, and reports a real fault
+                store.log(f"{tid} wonka: could not read ahead of the tick ({type(e).__name__}: {e})")
+        return {"reads": reads, "bases": {k: v for k, v in bases.items() if v}}
+
+    def _prefetch_ticket(self, tid, keep, bases):
+        t, s = self.ticket(tid), self.state(tid)
+        if s in OFF_PR and t.get("pr_url"):
+            keep(tid, "state", lambda: self._pr_state(tid))
+        elif s == ("shipped", "awaiting") and t.get("pr_url"):
+            if view := keep(tid, "view", lambda: self._pr_view(tid)):
+                self._prefetch_pr(tid, view, keep)
+        key = (t.get("repo"), t.get("base_branch"))
+        if s in NEEDS_BASE and all(key) and key not in bases and not (
+                t.get("stuck") or (t.get("job_started_at") and not t.get("resume"))):
+            try:
+                bases[key] = self._fetch_base(t)
+            except WonkaError:
+                bases[key] = None  # fetched under the lock, as before
+
+    def _prefetch_pr(self, tid, view, keep):
+        """The reads _watch_pr() will make on an open PR: its comments when changes are requested, the failed CI logs
+        when a CI fix round is due."""
+        t = self.ticket(tid)
+        pr, mergeable, _, head, rollup = view
+        if pr != "OPEN":
+            return
+        try:
+            changes = note.get_section(self.read(tid)[1], "changes")
+        except (WonkaError, OSError):
+            changes = None
+        if changes is not None and note.requested_changes(changes)[0]:
+            since = t.get("changes_cutoff")
+            keep(tid, ("feedback", since), lambda: self._pr_feedback(tid, since))
+        if mergeable != "MERGEABLE":
+            return
+        red, pending, total = _ci_checks(_parse_rollup(rollup))
+        if not head or not total or pending or not red or t.get("ci_fixes", 0) >= MAX_CI_FIXES:
+            return  # as _red_ci(): no round is due
+        sig = _ci_signature(red)
+        if head == t.get("ci_handled_sha") and t.get("ci_handled_runs", sig) == sig:
+            return
+        for rid in self._red_runs(tid, red)[:CI_LOG_RUNS]:
+            keep(tid, ("log", rid), lambda: self._run_log(tid, rid))
 
     # -- the tick ---------------------------------------------------------
 
@@ -2001,20 +2115,55 @@ class Factory:
         """Put illegal board edits back and act on ticked checkboxes and merged PRs."""
         t = self.ticket(tid)
         if not self.path(tid).exists():
-            src = self.state(tid)
-            if src in (machine.MERGED, KILLED):  # finished already: the note only went before the archive
-                self._archive_files(tid)
-                t["archived"] = True
-                self.log_event(tid, "The note was deleted: archived early, as it ended")
-                return f"{tid}: note was deleted, archived as {'merged' if src == machine.MERGED else 'Wont Do'}"
-            self._hold_for_live_job(tid, src)
-            t.pop("job_started_at", None)  # the ticket is archived: its job is no longer tracked
-            t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "ready"}, True, True
-            t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/ready", "by": "human"})
-            self.drop_worktree(tid)
-            self.drop_scout(tid)
-            return f"{tid}: note was deleted, ticket dropped"
+            return self._note_gone(tid)
         meta, body = self.read(tid)
+        if (moved := self._board_edit(tid, meta, body)) is not None:
+            return moved
+        last = self.state(tid)
+        if last in OFF_PR and t.get("pr_url"):
+            try:
+                pr = self._read(tid, "state", lambda: self._pr_state(tid))
+            except (WonkaError, OSError) as e:  # offline: the fix round goes on, the next tick asks again
+                store.log(f"{tid} wonka: could not check the PR ({' '.join(str(e).split())})")
+                pr = None
+            if (gone := self._pr_left(tid, pr)) is not None:
+                return gone
+        if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
+            return self._unstick(tid, meta, body)
+        if last == machine.IDEA:
+            return self._idea_box(tid, meta, body)
+        if last == ("triage", "awaiting"):
+            return self._triage_answered(tid, body)
+        if last == ("drafting", "awaiting") and t.get("spec_review_pending"):
+            return self._spec_reviewed(tid, note.get_section(body, "questions"))
+        if last == ("drafting", "awaiting"):
+            return self._questions_answered(tid, body)
+        if last == ("reviewing", "awaiting"):
+            return self._review_answered(tid, note.get_section(body, "review-questions"))
+        if last == ("shipped", "awaiting") and t["pr_url"]:
+            return self._watch_pr(tid, meta, body)
+        return None
+
+    def _note_gone(self, tid):
+        """The ticket's note was deleted: archive a finished ticket early, drop any other."""
+        t, src = self.ticket(tid), self.state(tid)
+        if src in (machine.MERGED, KILLED):  # finished already: the note only went before the archive
+            self._archive_files(tid)
+            t["archived"] = True
+            self.log_event(tid, "The note was deleted: archived early, as it ended")
+            return f"{tid}: note was deleted, archived as {'merged' if src == machine.MERGED else 'Wont Do'}"
+        self._hold_for_live_job(tid, src)
+        t.pop("job_started_at", None)  # the ticket is archived: its job is no longer tracked
+        t["last_valid"], t["archived"], t["lost"] = {"status": "wontdo", "phase": "ready"}, True, True
+        t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "wontdo/ready", "by": "human"})
+        self.drop_worktree(tid)
+        self.drop_scout(tid)
+        return f"{tid}: note was deleted, ticket dropped"
+
+    def _board_edit(self, tid, meta, body):
+        """Act on a card a human dragged on the board: a kill or a started Idea is taken, any other move is put back.
+        Old labels are relabelled silently. Returns the event, or None when the card is where the state says."""
+        t = self.ticket(tid)
         seen = (machine.parse(meta.get("status"), machine.STATUSES), machine.parse(meta.get("phase"), machine.PHASES))
         seen = machine.current(seen)  # an old Idea note reads 🕰️ Pending: relabelled silently below
         last = self.state(tid)
@@ -2035,125 +2184,153 @@ class Factory:
             # silent migration of old labels (🌟-Done, 🎫-Ready, ✉️-Inbox) and hand-typed names
             meta["status"], meta["phase"] = machine.label(last)
             self.write(tid, meta, body)
-        if last in OFF_PR and t.get("pr_url"):
-            try:
-                pr = self._pr_state(tid)
-            except (WonkaError, OSError) as e:  # offline: the fix round goes on, the next tick asks again
-                store.log(f"{tid} wonka: could not check the PR ({' '.join(str(e).split())})")
-                pr = None
-            if (gone := self._pr_left(tid, pr)) is not None:
-                return gone
-        if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
-            t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
-            if t.pop("ci_stuck", None):  # a fresh budget of CI fix rounds
-                t.pop("ci_fixes", None)
-                t.pop("ci_handled_sha", None)
-            self.write(tid, meta, note.drop_section(body, "stuck"))
-            return f"{tid}: unstuck by a human"
-        if last == machine.IDEA:
-            sec = note.get_section(body, "start")
-            if sec is None:
-                self.write(tid, meta, note.set_section(body, "start", note.START_BOX))  # a deleted box comes back
-            elif note.started(sec):
-                return self._start_idea(tid, "Started")
-        elif last == ("triage", "awaiting"):
-            appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
-            if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
-                self.move(tid, ("triage", "ready"), "human", "Approved")
-                return f"{tid}: approved"
-        elif last == ("drafting", "awaiting") and t.get("spec_review_pending"):
-            return self._spec_reviewed(tid, note.get_section(body, "questions"))
-        elif last == ("drafting", "awaiting") and note.all_answered(note.get_section(body, "questions")):
-            self.move(tid, ("drafting", "progress"), "human", "Questions answered, the analyst resumes")
-            t["resume"] = True
-            return f"{tid}: answered, drafting resumes"
-        elif last == ("reviewing", "awaiting"):
-            sec = note.get_section(body, "review-questions")
-            if note.all_answered(sec):
-                issues = t.pop("round_issues", 1)  # tickets that were already waiting keep the old path
-                if note.picked_yes(sec, note.CLOSE_Q):
-                    self.move(tid, KILLED, "human", "Closed after review")
-                    return f"{tid}: closed after review"
-                self._log_decisions(tid, sec)  # before a redraft resets review_round
-                if note.picked_yes(sec, note.DRAFT_Q):
-                    t["review_round"] = 0
-                    t.pop("extra_rounds", None)
-                    t.pop("reviewed_head", None)
-                    self.move(tid, ("drafting", "pending"), "human", "Back to drafting after review")
-                    return f"{tid}: back to drafting"
-                if not issues:
-                    if note.all_recommended(sec, skip=(note.CLOSE_Q, note.DRAFT_Q)):
-                        self.move(tid, ("reviewing", "ready"), "human", "Review answers in, all as recommended: a good nut")
-                        self.move(tid, ("shipped", "pending"), "wonka")
-                        return f"{tid}: clean review answered, off to ship"
-                    t["extra_rounds"] = t.get("extra_rounds", 0) + 1
-                    return self._back_to_baking(
-                        tid, f"Review answers in, a clean round but the answers change the plan, back to baking "
-                             f"(round {t['review_round']}/{self._budget(t)}, 1 extra round granted)")
-                return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{self._budget(t)})")
-        elif last == ("shipped", "awaiting") and t["pr_url"]:
-            out = gh("pr", "view", t["pr_url"], "--json", "state,mergeable,baseRefName,headRefOid,statusCheckRollup",
-                     "-q", '.state + " " + .mergeable + " " + .baseRefName + " " + .headRefOid + " " '
-                           '+ (.statusCheckRollup | tojson)')
-            pr, mergeable, pr_base, head, rollup = (out.split(maxsplit=4) + [""] * 5)[:5]
-            if pr == "OPEN" and pr_base:
-                t["pr_base"] = pr_base  # the base may have been changed on GitHub since the ticket was added
-            if pr == "MERGED":
-                self.move(tid, ("shipped", "ready"), "github", "PR merged 🎉")
-                return f"{tid}: shipped"
-            if pr == "CLOSED":
-                self.move(tid, KILLED, "github", "PR closed without merging")
-                return f"{tid}: PR closed"
-            if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts") and (not t.get("stuck") or t.get("ci_stuck")):
-                lifted = t.pop("ci_stuck", None)
-                if lifted:  # CI cannot go green on a conflicting PR: conflicts come first, the CI budget stays spent
-                    t.pop("stuck", None)
-                    body = note.drop_section(body, "stuck")
-                    self.write(tid, meta, body)
-                    self.log_event(tid, "The PR has merge conflicts while stuck on red CI: unstuck so a fixer can rebase it "
-                                        "(CI is checked again on the rebased head)")
-                fixes = t.get("conflict_fixes", 0)
-                if fixes >= MAX_CONFLICT_FIXES:
-                    base = t.get("pr_base") or t["base_branch"]
-                    if not t.get("stuck") and not lifted:  # a CI stuck lifted just now was counted: same stuck, new reason
-                        _bump_stat(t, "stuck")
-                    t["stuck"] = True
-                    self.set_section(tid, "stuck", f"- [ ] Retry ({fixes} conflict fixes were pushed but GitHub still "
-                                                   f"reports the PR as conflicting with `{base}`: check the PR's base "
-                                                   "branch on GitHub or fix the conflicts by hand. See ~/.wonka/factory.log)")
-                    self.log_event(tid, f"The PR is still conflicting after {fixes} conflict fixes: stuck, needs a human")
-                    notify(tid, "stuck: tick Retry when it's fixed")
-                    return f"{tid}: stuck, PR still conflicting after {fixes} conflict fixes"
-                t["conflicts"] = True
-                self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
-                return f"{tid}: PR has merge conflicts"
-            if pr == "OPEN" and mergeable == "MERGEABLE":
-                t.pop("retries", None)  # conflicts gone (by hand or a fixer): the next episode gets the full budget
-                t.pop("conflict_fixes", None)
-                t.pop("conflict_error", None)
-                # fixed by hand before a fixer ran (or while it could not start): drop the banner's warning
-                dirty = bool(t.pop("conflicts", None))
-                # a CI stuck is cleared by green CI, Retry, merge or kill, never by the PR being mergeable
-                if not t.get("ci_stuck") and t.pop("stuck", None):  # a fixer that could not start, or a PR that stayed conflicting
-                    body, dirty = note.drop_section(body, "stuck"), True
-                    self.log_event(tid, "The PR is mergeable again: unstuck")
-                if dirty:
-                    self.write(tid, meta, body)
-            was_stuck = bool(t.get("stuck"))
-            ci = self._red_ci(tid, head, rollup) if pr == "OPEN" and mergeable == "MERGEABLE" else None
-            changes = note.get_section(body, "changes")
-            if changes is None:  # a PR opened before change requests existed gets the box too
-                self.set_section(tid, "changes", note.CHANGES_BOX)
-                ticked, notes = False, ""
-            else:
-                ticked, notes = note.requested_changes(changes)
-            if ticked:
-                return self._request_changes(tid, notes, ci)
-            if ci:
-                return self._ci_failed(tid, *ci)
-            if t.get("ci_stuck") and not was_stuck:
-                return f"{tid}: stuck, CI still red after {MAX_CI_FIXES} CI fix rounds"
         return None
+
+    def _unstick(self, tid, meta, body):
+        """The human ticked Retry on a stuck ticket: a fresh budget of retries, conflict fixes and CI fix rounds."""
+        t = self.ticket(tid)
+        t.pop("stuck"), t.pop("retries", None), t.pop("conflict_fixes", None)
+        if t.pop("ci_stuck", None):  # a fresh budget of CI fix rounds
+            t.pop("ci_fixes", None)
+            t.pop("ci_handled_sha", None)
+        self.write(tid, meta, note.drop_section(body, "stuck"))
+        return f"{tid}: unstuck by a human"
+
+    def _idea_box(self, tid, meta, body):
+        """An Idea starts when its Start box is ticked; a deleted box comes back."""
+        sec = note.get_section(body, "start")
+        if sec is None:
+            self.write(tid, meta, note.set_section(body, "start", note.START_BOX))
+        elif note.started(sec):
+            return self._start_idea(tid, "Started")
+        return None
+
+    def _triage_answered(self, tid, body):
+        """Triage's approval is ticked (or not needed) and its questions answered: on to drafting."""
+        appr, qs = note.get_section(body, "approval"), note.get_section(body, "questions")
+        if (appr is None or note.approved(appr)) and (qs is None or note.all_answered(qs)):
+            self.move(tid, ("triage", "ready"), "human", "Approved")
+            return f"{tid}: approved"
+        return None
+
+    def _questions_answered(self, tid, body):
+        """The analyst's questions are all answered: it resumes."""
+        if not note.all_answered(note.get_section(body, "questions")):
+            return None
+        self.move(tid, ("drafting", "progress"), "human", "Questions answered, the analyst resumes")
+        self.ticket(tid)["resume"] = True
+        return f"{tid}: answered, drafting resumes"
+
+    def _review_answered(self, tid, sec):
+        """The squirrels' questions are all answered: close, redraft, ship or rebake, as the answers say."""
+        t = self.ticket(tid)
+        if not note.all_answered(sec):
+            return None
+        issues = t.pop("round_issues", 1)  # tickets that were already waiting keep the old path
+        if note.picked_yes(sec, note.CLOSE_Q):
+            self.move(tid, KILLED, "human", "Closed after review")
+            return f"{tid}: closed after review"
+        self._log_decisions(tid, sec)  # before a redraft resets review_round
+        if note.picked_yes(sec, note.DRAFT_Q):
+            t["review_round"] = 0
+            t.pop("extra_rounds", None)
+            t.pop("reviewed_head", None)
+            self.move(tid, ("drafting", "pending"), "human", "Back to drafting after review")
+            return f"{tid}: back to drafting"
+        if not issues:
+            if note.all_recommended(sec, skip=(note.CLOSE_Q, note.DRAFT_Q)):
+                self.move(tid, ("reviewing", "ready"), "human", "Review answers in, all as recommended: a good nut")
+                self.move(tid, ("shipped", "pending"), "wonka")
+                return f"{tid}: clean review answered, off to ship"
+            t["extra_rounds"] = t.get("extra_rounds", 0) + 1
+            return self._back_to_baking(
+                tid, f"Review answers in, a clean round but the answers change the plan, back to baking "
+                     f"(round {t['review_round']}/{self._budget(t)}, 1 extra round granted)")
+        return self._back_to_baking(tid, f"Review answers in, back to baking (round {t['review_round']}/{self._budget(t)})")
+
+    def _watch_pr(self, tid, meta, body):
+        """The open PR waits on the human: record a merge or close, call a fixer for conflicts, start a fix round for
+        requested changes or red CI."""
+        t = self.ticket(tid)
+        pr, mergeable, pr_base, head, rollup = self._read(tid, "view", lambda: self._pr_view(tid))
+        if pr == "OPEN" and pr_base:
+            t["pr_base"] = pr_base  # the base may have been changed on GitHub since the ticket was added
+        if pr == "MERGED":
+            self.move(tid, ("shipped", "ready"), "github", "PR merged 🎉")
+            return f"{tid}: shipped"
+        if pr == "CLOSED":
+            self.move(tid, KILLED, "github", "PR closed without merging")
+            return f"{tid}: PR closed"
+        if pr == "OPEN" and mergeable == "CONFLICTING" and not t.get("conflicts") and (not t.get("stuck") or t.get("ci_stuck")):
+            return self._pr_conflicting(tid, meta, body)
+        if pr == "OPEN" and mergeable == "MERGEABLE":
+            body = self._pr_mergeable(tid, meta, body)
+        was_stuck = bool(t.get("stuck"))
+        ci = self._red_ci(tid, head, rollup) if pr == "OPEN" and mergeable == "MERGEABLE" else None
+        changes = note.get_section(body, "changes")
+        if changes is None:  # a PR opened before change requests existed gets the box too
+            self.set_section(tid, "changes", note.CHANGES_BOX)
+            ticked, notes = False, ""
+        else:
+            ticked, notes = note.requested_changes(changes)
+        if ticked:
+            return self._request_changes(tid, notes, ci)
+        if ci:
+            return self._ci_failed(tid, *ci)
+        if t.get("ci_stuck") and not was_stuck:
+            return f"{tid}: stuck, CI still red after {MAX_CI_FIXES} CI fix rounds"
+        return None
+
+    def _pr_view(self, tid):
+        """(state, mergeable, base branch, head sha, statusCheckRollup JSON) of the ticket's PR on GitHub."""
+        out = gh("pr", "view", self.ticket(tid)["pr_url"], "--json",
+                 "state,mergeable,baseRefName,headRefOid,statusCheckRollup",
+                 "-q", '.state + " " + .mergeable + " " + .baseRefName + " " + .headRefOid + " " '
+                       '+ (.statusCheckRollup | tojson)')
+        return tuple((out.split(maxsplit=4) + [""] * 5)[:5])
+
+    def _pr_conflicting(self, tid, meta, body):
+        """The open PR has merge conflicts: call a fixer, or go stuck after MAX_CONFLICT_FIXES fixes in a row. A stuck
+        on red CI is lifted first: CI cannot go green on a conflicting PR."""
+        t = self.ticket(tid)
+        lifted = t.pop("ci_stuck", None)
+        if lifted:  # CI cannot go green on a conflicting PR: conflicts come first, the CI budget stays spent
+            t.pop("stuck", None)
+            body = note.drop_section(body, "stuck")
+            self.write(tid, meta, body)
+            self.log_event(tid, "The PR has merge conflicts while stuck on red CI: unstuck so a fixer can rebase it "
+                                "(CI is checked again on the rebased head)")
+        fixes = t.get("conflict_fixes", 0)
+        if fixes >= MAX_CONFLICT_FIXES:
+            base = t.get("pr_base") or t["base_branch"]
+            if not t.get("stuck") and not lifted:  # a CI stuck lifted just now was counted: same stuck, new reason
+                _bump_stat(t, "stuck")
+            t["stuck"] = True
+            self.set_section(tid, "stuck", f"- [ ] Retry ({fixes} conflict fixes were pushed but GitHub still "
+                                           f"reports the PR as conflicting with `{base}`: check the PR's base "
+                                           "branch on GitHub or fix the conflicts by hand. See ~/.wonka/factory.log)")
+            self.log_event(tid, f"The PR is still conflicting after {fixes} conflict fixes: stuck, needs a human")
+            notify(tid, "stuck: tick Retry when it's fixed")
+            return f"{tid}: stuck, PR still conflicting after {fixes} conflict fixes"
+        t["conflicts"] = True
+        self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
+        return f"{tid}: PR has merge conflicts"
+
+    def _pr_mergeable(self, tid, meta, body):
+        """The open PR is mergeable: the conflict episode is over (by hand or a fixer). Returns the note body."""
+        t = self.ticket(tid)
+        t.pop("retries", None)  # conflicts gone (by hand or a fixer): the next episode gets the full budget
+        t.pop("conflict_fixes", None)
+        t.pop("conflict_error", None)
+        # fixed by hand before a fixer ran (or while it could not start): drop the banner's warning
+        dirty = bool(t.pop("conflicts", None))
+        # a CI stuck is cleared by green CI, Retry, merge or kill, never by the PR being mergeable
+        if not t.get("ci_stuck") and t.pop("stuck", None):  # a fixer that could not start, or a PR that stayed conflicting
+            body, dirty = note.drop_section(body, "stuck"), True
+            self.log_event(tid, "The PR is mergeable again: unstuck")
+        if dirty:
+            self.write(tid, meta, body)
+        return body
 
     def _start_idea(self, tid, why):
         """A human started an Idea (ticked Start or dragged it to Triage): drop the box, on to triage."""
@@ -2194,7 +2371,12 @@ class Factory:
             raise WonkaError(f"{tid} is an Idea: tick Start or drag it to 📏 Triage first")
         job = {"triage": "triage", "drafting": "draft", "baking": "bake", "reviewing": "review",
                "shipped": "conflicts"}[s[0]]
-        base_ref = None
+        base_ref = scout = None
+        if job in ("triage", "draft"):  # before any move: a failure is counted like a retry and nothing is handed out
+            try:
+                scout = self.fresh_scout(tid)
+            except (WonkaError, OSError) as e:  # never fall back to the main checkout: the agents must not read it
+                return self._setup_failed(tid, "make the scout (a fresh checkout of the base)", e)
         if s == ("drafting", "pending"):
             self.move(tid, ("drafting", "progress"), "wonka")
         elif s == ("baking", "pending"):
@@ -2243,13 +2425,7 @@ class Factory:
             except (WonkaError, OSError) as e:
                 return self._fixer_failed_to_start(tid, e)
             self.move(tid, ("shipped", "progress"), "wonka", "Merge conflicts on the PR: a fixer Oompa-Loompa is on it")
-        code, ref = t["worktree"], base_ref or self.base_ref(tid)
-        if job in ("triage", "draft"):
-            try:
-                code, ref = self.fresh_scout(tid)
-            except (WonkaError, OSError) as e:  # never strand the job: the draft has already moved to progress
-                self.log_event(tid, f"No fresh checkout of the base, the agent reads the main checkout ({e})")
-                code, ref = t["repo"], self.base_ref(tid)
+        code, ref = scout or (t["worktree"], base_ref or self.base_ref(tid))
         t.pop("resume", None)
         t["job_started_at"] = _iso(now())
         t["dispatch"] = t.get("dispatch", 0) + 1  # only ever goes up: tells a late agent from the live one
@@ -2284,13 +2460,18 @@ class Factory:
             self.ensure_worktree(tid)
             return None
         except (WonkaError, OSError) as e:
-            err = " ".join(str(e).split())
-            err = err if len(err) <= 150 else err[:149] + "…"
-            retries, stuck = self._count_failure(tid, f"could not set up the worktree: {err}")
-            self.log_event(tid, f"Could not set up the worktree (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): {err}")
-            if stuck:
-                return f"{tid}: ⚠️ could not set up the worktree, stuck: {err}"
-            return f"{tid}: ⚠️ could not set up the worktree (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
+            return self._setup_failed(tid, "set up the worktree", e)
+
+    def _setup_failed(self, tid, what, exc):
+        """A job could not be set up (`what` could not be done): count it like a retry, stuck after MAX_RETRIES, and
+        hand nothing out. Returns the event to report."""
+        err = " ".join(str(exc).split())
+        err = err if len(err) <= 150 else err[:149] + "…"
+        retries, stuck = self._count_failure(tid, f"could not {what}: {err}")
+        self.log_event(tid, f"Could not {what} (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): {err}")
+        if stuck:
+            return f"{tid}: ⚠️ could not {what}, stuck: {err}"
+        return f"{tid}: ⚠️ could not {what} (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
 
     def retry(self, tid, why="the last job did not finish", final=False):
         """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help)."""
@@ -2381,7 +2562,7 @@ class Factory:
             raise WonkaError(f"unknown agent {agent}; one of {', '.join(known)}")
         t, s = self.ticket(tid), self.state(tid)
         if self._stale_dispatch(tid, dispatch):
-            return f"{tid}: {agent} is from an earlier dispatch ({dispatch}, now {t['dispatch']}), ignored"
+            return self._stale_msg(tid, agent, dispatch)
         held = t.get("held_by")
         if (held and name in held.get("agents", [])
                 and (dispatch is None or held.get("dispatch") is None or held["dispatch"] == dispatch)):
@@ -2440,7 +2621,7 @@ class Factory:
                    if self.state(k) == ("triage", "pending") and self.ticket(k).get("job_started_at"))
 
     def tick(self, drop_missing=False):
-        self._base_cache = {}  # one base fetch per (repo, base) per tick
+        self._base_cache = dict(self._fetched.get("bases", {}))  # one base fetch per (repo, base) per tick
         try:
             events = self._find_renamed(self._foreign())
             self._check_notes(drop_missing)
