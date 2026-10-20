@@ -3,7 +3,8 @@
 The suite is also hermetic against the developer's git config: before any test runs, git is pointed at a private
 global config (only an identity in it) and the system config is skipped, so a global commit.gpgsign, core.hooksPath,
 core.editor or init.defaultBranch never reaches a test. `wonka git` drops every GIT_CONFIG_* and pins HOME to the passwd
-home (so an agent cannot pick its config), so for it the passwd home is faked to a private home holding that config."""
+home (so an agent cannot pick its config), so for it the passwd home is faked to a private home holding that config.
+WONKA_NO_NOTIFY is set for the whole run, so a test never pings the desktop; the notification tests unset it."""
 
 import atexit
 import os
@@ -19,7 +20,7 @@ GIT_CONFIG = os.path.join(GIT_HOME, ".gitconfig")
 with open(GIT_CONFIG, "w") as fh:
     fh.write("[user]\n\tname = t\n\temail = t@t\n")
 os.environ.update(GIT_CONFIG_GLOBAL=GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_EDITOR="true", GIT_PAGER="cat",
-                  GIT_TERMINAL_PROMPT="0")
+                  GIT_TERMINAL_PROMPT="0", WONKA_NO_NOTIFY="1")
 os.environ.pop("XDG_CONFIG_HOME", None)
 for _k in [k for k in os.environ if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))] + [
         "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_SYSTEM", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]:
