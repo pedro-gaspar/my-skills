@@ -2902,6 +2902,38 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(b, [j["id"] for j in tick["jobs"]])
         self.assertFalse(any("not a Wonka ticket" in e for e in tick["events"]))
 
+    def test_a_note_unreadable_for_one_tick_leaves_the_state_as_it_was(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s", dispatch=f.ticket(tid)["dispatch"])
+            path = f.path(tid)
+        before = self.f_ticket(tid)
+        saved = path.read_text()
+        path.unlink()
+        path.mkdir()
+        tick = self.tick()
+        self.assertTrue(any(e.startswith(f"{tid}: ⚠️") for e in tick["events"]), tick["events"])
+        self.assertEqual(self.state(tid), ("triage", "ready"))
+        self.assertEqual(self.f_ticket(tid)["history"], before["history"])
+        path.rmdir()
+        path.write_text(saved)
+        tick = self.tick()
+        self.assertIn(tid, [j["id"] for j in tick["jobs"]], "the analyst is dispatched once the note reads again")
+        self.assertEqual(self.state(tid), ("drafting", "progress"))
+
+    def test_a_failed_note_write_puts_the_move_back(self):
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s", dispatch=f.ticket(tid)["dispatch"])
+        before = self.f_ticket(tid)
+        with mock.patch.object(note, "write", side_effect=OSError("disk full")):
+            with self.f() as f, self.assertRaisesRegex(OSError, "disk full"):
+                f.move(tid, ("drafting", "pending"), by="wonka")
+            self.assertEqual(f.ticket(tid), before)
+        self.assertEqual(self.state(tid), ("triage", "ready"))
+
     def test_yaml_escapes_and_bad_bytes_in_a_note_do_not_stop_the_tick(self):
         a = self.add("Add a hello script")
         with self.f() as f:

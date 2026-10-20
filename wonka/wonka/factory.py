@@ -1,5 +1,6 @@
 """What the factory does to golden tickets. Every status change goes through Factory.move()."""
 
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -750,6 +751,10 @@ class Factory:
         if not machine.allowed(src, dst):
             raise WonkaError(f"{tid}: {fmt(src)} → {fmt(dst)} is not a legal move")
         final = dst in (("shipped", "ready"), KILLED)  # merged or killed: the ticket is finished
+        # The note is read before the state changes, and the state is put back if the note write fails: a tick saves
+        # the state after a per-ticket error, and a half-done move would strand the ticket with no job and no Retry.
+        meta, body = self.read(tid)
+        before = copy.deepcopy(t)
         t["last_valid"] = {"status": dst[0], "phase": dst[1]}
         t["history"].append({"at": _iso(now()), "from": "/".join(src), "to": "/".join(dst), "by": by,
                              **({"why": why} if why else {})})
@@ -761,13 +766,17 @@ class Factory:
             t.pop(k, None)
         if final:
             t["entered_done_at"] = _iso(now())
-        meta, body = self.read(tid)
         meta["status"], meta["phase"] = machine.label(dst)
         if final:
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
         if stuck:
             body = note.drop_section(body, "stuck")
-        self.write(tid, meta, body)
+        try:
+            self.write(tid, meta, body)
+        except Exception:
+            t.clear()
+            t.update(before)
+            raise
         store.log(f"{tid} {'/'.join(src)} → {'/'.join(dst)} by {by}" + (f": {why}" if why else ""))
         if final:
             self.drop_worktree(tid)
