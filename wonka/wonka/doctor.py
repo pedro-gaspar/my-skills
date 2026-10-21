@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from . import cilogs, note, store, testrun
-from .factory import notifier
+from .factory import WORKTREEINCLUDE, _run, notifier, worktree_includes
 
 SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
 
@@ -145,14 +145,38 @@ def _worktree_file_checks(cfg, tickets):
                 yield "ok", f"worktree files for {project} in {repo}: {len(paths)} present and gitignored"
 
 
+def _worktree_include_checks(tickets):
+    """(level, message) for each ticket repo with a .worktreeinclude: what it copies into worktrees and scouts, and
+    the matched files it never copies (tracked, or not gitignored: a builder could commit them)."""
+    repos = sorted({t["repo"] for t in tickets.values() if isinstance(t, dict) and t.get("repo")})
+    for repo in repos:
+        if not (Path(repo) / WORKTREEINCLUDE).is_file():
+            continue
+        try:
+            found = worktree_includes(repo)
+            tracked = [r for r in _run(["git", "ls-files", "--cached", "--ignored",
+                                        f"--exclude-from={WORKTREEINCLUDE}", "-z"], cwd=repo).split("\0") if r]
+        except store.WonkaError as e:
+            yield "warn", f"{repo}/{WORKTREEINCLUDE} could not be read ({e})"
+            continue
+        loose = [r for r in found if not _ok(["git", "-C", repo, "check-ignore", "-q", "--", r])]
+        if tracked:
+            yield "warn", (f"{repo}/{WORKTREEINCLUDE} matches tracked files, which worktrees already have: "
+                           + ", ".join(tracked[:5]) + (" …" if len(tracked) > 5 else ""))
+        if loose:
+            yield "warn", (f"{repo}/{WORKTREEINCLUDE} matches files git does not ignore, never copied (a builder could "
+                           "commit them): " + ", ".join(loose[:5]) + (" …" if len(loose) > 5 else ""))
+        yield "ok", f"{repo}/{WORKTREEINCLUDE}: {len(found) - len(loose)} file(s) copied into worktrees and scouts"
+
+
 # The subcommands background agents and the /loop manager run. The rest (init, config, set, move, block, unblock,
-# doctor) change settings or stand in for the human's ticks, so they must ask the human: an agent that read a
+# doctor, session) change settings, stand in for the human's ticks or take a ticket out of the factory, so they must ask the human: an agent that read a
 # hostile CI log or diff must not be able to switch the sandbox off (`wonka config test_commands.<p> bash`) or pass
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
 AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "baked",
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
-                  "retry")
-HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor")
+                  "retry", "worktree")
+HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor", "session")
 # Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
 # repo's git dir, and talk to GitHub. wonka test needs none of that (its lock is in the worktrees folder), so it stays
 # inside, and the test command it starts, a script the builder can edit, is confined with it.
@@ -333,6 +357,7 @@ def checks():
     except (OSError, ValueError, store.WonkaError) as e:
         yield "fail", f"state {path} is unreadable: {e}"
     yield from _worktree_file_checks(cfg, tickets)
+    yield from _worktree_include_checks(tickets)
 
     allow, dirs = _permissions()
     yield from _ci_log_checks(cfg, allow)

@@ -20,6 +20,7 @@ QUIPS = {
     ("baking", "pending"): "⏳ “Patience, my dear. A little nonsense now and then is relished by the wisest men.”",
     ("baking", "progress"): "🎶 Oompa-Loompa, doompadee-doo…",
     ("baking", "ready"): "🎶 …I've got another puzzle for you.",
+    ("baking", "awaiting"): "🎩 “Hold your breath, make a wish, count to three.”",
     ("reviewing", "pending"): "🐿️ The squirrels are cracking their knuckles.",
     ("reviewing", "progress"): "🐿️ Tap, tap, tap. Good nut or bad nut?",
     ("reviewing", "awaiting"): "🐿️ “Don't forget what happened to the man who suddenly got everything he wanted.”",
@@ -55,6 +56,33 @@ def _last_why(t):
     return next((h["why"] for h in reversed(t["history"]) if h.get("why")), "")
 
 
+def _manual_story(tid, t, s, cfg):
+    """A manual ticket's banner: a human works it in a Claude session and steps it on with 🕹️ Manual."""
+    pick = "Then tick one option in 🕹️ Manual below."
+    shell = f"`wonka session {tid}` opens the Claude shell again"
+    return {
+        ("idea", "awaiting"): ("tip", "🕹️ Manual: you are shaping the idea",
+                               f"Refine the 💡 Idea with Claude ({shell}). {pick}"),
+        ("triage", "awaiting"): ("question", "🕹️ Manual: you are triaging it",
+                                 f"Agree on the scope and set a size with `wonka set {tid} size <xs..xl>` ({shell}). {pick}"),
+        ("drafting", "awaiting"): ("question", "🕹️ Manual: you are drafting it",
+                                   f"Write the 📜 Spec and the plan [[{tid}-plan]] with Claude ({shell}). {pick}"),
+        ("baking", "awaiting"): ("question", "🕹️ Manual: you are baking it",
+                                 f"Code and commit in `{t.get('worktree')}` on `{t.get('branch')}` ({shell}). {pick}"),
+        ("reviewing", "pending"): ("info", "🕹️ Manual: waiting for the squirrels",
+                                   f"🐿️ {_reviewers(t)} review your bake on the next tick."),
+        ("reviewing", "progress"): ("info", "🕹️ Manual: the squirrels are reviewing your bake",
+                                    f"🐿️ {_reviewers(t)} ({_round(t, cfg)}). Your options come back when they are done."),
+        ("reviewing", "awaiting"): ("question", "🕹️ Manual: the squirrels are done",
+                                    f"Their findings ({_round(t, cfg)}) are in the plan [[{tid}-plan]]. {pick}"),
+        ("shipped", "pending"): ("info", "🕹️ Manual: opening the pull request", "🚢 On the next tick."),
+        ("shipped", "progress"): ("info", "🕹️ Manual: opening the pull request", "🚢 Pushing the branch and opening the PR."),
+        ("shipped", "awaiting"): ("question", "🕹️ Manual: the PR is yours", (
+            f"Push your changes to {t.get('pr_url')} from the session ({shell}) and merge it when it is ready: Wonka "
+            f"records the merge. Conflicts, CI and change requests are yours while it is manual. {pick}")),
+    }.get(s, ("info", "🕹️ Manual", f"A human works this ticket ({shell})."))
+
+
 def _story(tid, t, meta, cfg, waiting=(), dead=()):
     """(callout type, headline, what is going on / what to do)"""
     s = (t["last_valid"]["status"], t["last_valid"]["phase"])
@@ -64,6 +92,8 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
         return "warning", "🙋 Your turn: the factory is stuck", (
             "The last jobs for this ticket did not finish (details in `~/.wonka/factory.log`). "
             "Fix the cause, then tick **Retry** in 🎩 Stuck below.")
+    if t.get("manual") or s == ("baking", "awaiting"):  # only a manual ticket rests in baking/awaiting
+        return _manual_story(tid, t, s, cfg)
     s_blocked = s in (("triage", "ready"), ("drafting", "pending"), ("planned", "pending"),
                  ("baking", "pending")) \
         or (s == ("drafting", "progress") and t.get("resume"))
@@ -149,6 +179,8 @@ def render(tid, t, meta, cfg, waiting=(), dead=()):
     kind, headline, text = _story(tid, t, meta, cfg, waiting, dead)
     s = (t["last_valid"]["status"], t["last_valid"]["phase"])
     facts = [f"{' · '.join(machine.label(s))}", f"size **{meta.get('size') or '?'}**", f"`{t['project']}`"]
+    if t.get("manual"):
+        facts.append("🕹️ manual")
     if t.get("parent"):
         facts.append(f"parent [[{t['parent']}]]")
     if t.get("blocked_by"):

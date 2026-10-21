@@ -5,6 +5,9 @@ import copy
 import datetime as dt
 import importlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -74,6 +77,7 @@ def show_config(cfg):
           f"🔗 CI hosts         : {hosts}\n"
           f"📜 CI log command   : {logcmd}\n"
           f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
+          f"🕹️ session launcher : {cfg['session_launcher']}\n"
           f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
           f"📜 factory log      : {store.home() / 'factory.log'}")
 
@@ -182,7 +186,11 @@ def run(a, f):
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
                   spec_review="human" if a.review_spec else None, blocked_by=split_ids(a.blocked_by),
                   start="triage" if a.triage else "idea")
-        if a.triage:
+        if a.manual:
+            f.session(tid)
+            print(f"🎫 {tid} has a golden ticket, 🕹️ manual from the start: no agent works it until you hand it "
+                  f"back. Open it with: wonka session {tid}")
+        elif a.triage:
             print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
         else:
             print(f"🎫 {tid} has a golden ticket! It's a 💡 Idea: tick Start or drag it to 📏 Triage when it's ready: "
@@ -250,6 +258,15 @@ def run(a, f):
     elif c == "pr-comments":
         for row in prcomments.for_ticket(f.ticket(a.id), a.id):
             print(json.dumps(row, ensure_ascii=False))
+    elif c == "session":
+        tid = f.find(a.ref)
+        brief = f.session(tid, force=a.force, from_branch=a.from_branch)
+        t = f.ticket(tid)
+        return {"id": tid, "brief": brief, "worktree": t["worktree"], "pr_url": t.get("pr_url"),
+                "title": f.read(tid)[0].get("title") or tid}
+    elif c == "worktree":
+        tid = f.find(a.ref)
+        print(f.worktree_info(tid) if a.info else f.worktree_path(tid))
     elif c == "status":
         for k in f.live():
             try:
@@ -257,7 +274,44 @@ def run(a, f):
             except (WonkaError, OSError) as e:  # a lost or broken note never hides the other tickets
                 meta = {"title": f"⚠️ {e}"}
             print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('title', '')}"
+                  + ("  🕹️" if f.ticket(k).get("manual") else "")
                   + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
+
+
+def launch(a, cfg, s):
+    """Open the session's Claude in the ticket's worktree: --print only prints the brief; the orca launcher opens an
+    Orca tab there; the terminal launcher turns this process into claude (it never returns)."""
+    if a.print:
+        print(s["brief"])
+        return
+    how = "orca" if a.orca else "terminal" if a.terminal else cfg.get("session_launcher", "terminal")
+    if how == "orca":
+        _launch_orca(s)
+        return
+    if not shutil.which("claude"):
+        raise WonkaError(f"claude is not on PATH: {s['id']} is manual now; run wonka session {s['id']} --print and "
+                         "start claude in the worktree yourself")
+    os.chdir(s["worktree"])
+    os.execvp("claude", ["claude", s["brief"]])
+
+
+def _launch_orca(s):
+    orca = shutil.which("orca")
+    if not orca:
+        raise WonkaError(f"orca is not on PATH: {s['id']} is manual now; use --terminal or --print")
+    wt = f"path:{s['worktree']}"
+    label = [orca, "worktree", "set", "--worktree", wt, "--display-name", f"{s['id']} · {s['title']}"]
+    pr = (s.get("pr_url") or "").rstrip("/").rsplit("/", 1)[-1]
+    if pr.isdigit():
+        label += ["--pr", pr]
+    if subprocess.run(label, capture_output=True, text=True).returncode:  # only a label: the tab opens anyway
+        print(f"⚠️ wonka: could not name the Orca workspace {s['worktree']}", file=sys.stderr)
+    p = subprocess.run([orca, "agent", "launch", "--agent", "claude", "--worktree", wt, "--prompt", s["brief"],
+                        "--focus"], capture_output=True, text=True)
+    if p.returncode:
+        raise WonkaError(f"orca agent launch failed: {(p.stderr or p.stdout).strip()}; {s['id']} is manual now, use "
+                         "--terminal or --print")
+    print(f"🕹️ {s['id']}: Claude is open in Orca, in {s['worktree']}")
 
 
 def _key(value, table):
@@ -270,7 +324,7 @@ def _key(value, table):
 FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
 # read a snapshot of the state, so they never wait for a long tick
-READ_ONLY = ("status", "show", "repos", "metrics", "pr-comments")
+READ_ONLY = ("status", "show", "repos", "metrics", "pr-comments", "worktree")
 
 
 def _day(v):
@@ -303,6 +357,9 @@ def parser():
     s.add_argument("--triage", action="store_true",
                    help="skip the Idea column: an agent triages it on the next tick (use when you want it built now; "
                         "analyst splits use it)")
+    s.add_argument("--manual", action="store_true",
+                   help="take it into a Claude session at once, as wonka session does (🕹️ manual: no agent works it "
+                        "until you hand it back); open the session with wonka session <id>")
     s.add_argument("--title")
     s.add_argument("--repo", help="git repo the ticket builds in (default: cwd)")
     s.add_argument("--pr-repo", help="GitHub owner/name the PR targets (default: origin)")
@@ -399,6 +456,22 @@ def parser():
     s = sub.add_parser("tick", help="reconcile the factory and hand out jobs (JSON)")
     s.add_argument("--drop-missing", action="store_true",
                    help="drop every live ticket whose note is gone, even when all of them are (normally refused)")
+    s = sub.add_parser("session", help="take a ticket into a Claude session (🕹️ manual: no agent works it until you "
+                                       "hand it back) and open Claude in its worktree with what the factory did")
+    s.add_argument("ref", help="the ticket: WONKA-00012, or the Jira key in its note")
+    s.add_argument("--print", action="store_true", help="only print the brief (what /wonka session uses)")
+    how = s.add_mutually_exclusive_group()
+    how.add_argument("--terminal", action="store_true", help="run claude here, in the worktree")
+    how.add_argument("--orca", action="store_true", help="open claude in an Orca tab, in the worktree")
+    s.add_argument("--force", action="store_true", help="take it even while an agent works on it (its results are "
+                                                        "then ignored)")
+    s.add_argument("--from", dest="from_branch", metavar="BRANCH",
+                   help="start the ticket's branch from this branch's tip (work begun by hand elsewhere); only while "
+                        "the ticket's branch has no commits of its own")
+    s = sub.add_parser("worktree", help="where a ticket's worktree is (its path; --info for branch, commits, changes, "
+                                        "state and PR)")
+    s.add_argument("ref", help="the ticket: WONKA-00012, or the Jira key in its note")
+    s.add_argument("--info", action="store_true")
     s = sub.add_parser("show", help="a ticket's JSON state")
     s.add_argument("id")
     sub.add_parser("status", help="one line per live ticket")
@@ -447,7 +520,9 @@ def main(argv=None):
         # a tick reads GitHub and fetches before it takes the lock, so the agents' commands never wait on the network
         fetched = Factory(cfg, store.snapshot()).prefetch() if a.cmd == "tick" else None
         with store.state() as db:
-            run(a, Factory(cfg, db, fetched))
+            out = run(a, Factory(cfg, db, fetched))
+        if a.cmd == "session":
+            launch(a, cfg, out)  # after the lock: the session can run for hours
         return 0
     except WonkaError as e:
         store.log(f"{a.cmd} {getattr(a, 'id', '')}: {e}".replace("  ", " "))

@@ -14,6 +14,17 @@ class BannerTest(unittest.TestCase):
                 self.assertTrue(text.startswith("# 🎫 WONKA-00001\n\n> [!"), (status, sub))
                 self.assertIn(banner.QUIPS[(status, sub)], text)
 
+    def test_every_manual_state_tells_its_story(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        for s in (*machine.MANUAL_PARKED, ("reviewing", "pending"), ("reviewing", "progress"), ("reviewing", "awaiting"),
+                  ("shipped", "pending"), ("shipped", "progress")):
+            t = {"last_valid": {"status": s[0], "phase": s[1]}, "project": "app", "history": [], "manual": True,
+                 "review_round": 1, "reviewers": ["architect"], "pr_url": "https://github.com/acme/app/pull/7"}
+            text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+            with self.subTest(state=s):
+                self.assertIn("🕹️ Manual", text)
+                self.assertIn("🕹️ manual", text.splitlines()[-1])
+
     def test_blocked_by_fact(self):
         cfg = dict(store.DEFAULT_CONFIG)
         t = {"last_valid": {"status": "triage", "phase": "pending"}, "project": "app", "history": []}

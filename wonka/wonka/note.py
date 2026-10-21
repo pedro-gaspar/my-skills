@@ -21,6 +21,7 @@ HEADINGS = {
     "review-questions": "🐿️ Review Questions",
     "stuck": "🎩 Stuck",
     "changes": "🔁 Request changes",
+    "manual": "🕹️ Manual",
     "log": "🎩 Factory log",
 }
 
@@ -32,6 +33,7 @@ SPEC_OPTIONS = (
     "Re-draft: back to the analyst (write what to change under this question)",
     "Close: drop the ticket (Wont-Do)",
 )
+MANUAL_Q = "🕹️ Where to next?"
 CHANGES_BOX = "- [ ] 🔁 Request changes"
 START_BOX = "- [ ] Start (send it to triage)"
 
@@ -347,6 +349,11 @@ def render_questions(items):
         if item.get("other", True):
             out.append("  - [ ] Other (write below)")
     return "\n".join(out)
+
+
+def manual_question(options):
+    """The 🕹️ Manual section of a manual ticket: one question, one box per option, no recommendation."""
+    return render_questions([{"q": MANUAL_Q, "options": list(options), "other": False}])
 
 
 def archive_questions(body):

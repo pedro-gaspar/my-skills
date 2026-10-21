@@ -68,7 +68,56 @@ FLAG_LIFE = {
     "pr_base": (frozenset(s for s in _ALL if s[1] != "ready"), False),
     # the scout checkout, removed by drop_scout(): no triage or draft job is left to read it anywhere else
     "scout": (frozenset({("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")}), False),
+    "manual": (_UNFINISHED, False),  # a human works it in a Claude session until it is handed back, merged or killed
 }
+
+NEXT, BACK, FACTORY = "⏭️ Next", "⏮️ Back", "🎩 Back to the factory"
+# A manual ticket's 🕹️ Manual question in each state it rests in: option -> (where it moves, the box's text). The
+# factory option's target depends on the ticket, so Factory._hand_back() picks it.
+MANUAL_OPTIONS = {
+    ("idea", "awaiting"): {NEXT: (("triage", "awaiting"), "📏 Triage (you size it)"),
+                           FACTORY: (None, "📏 Triage, sized by the triage Oompa-Loompa")},
+    ("triage", "awaiting"): {NEXT: (("drafting", "awaiting"), "🧪 Drafting (you write the spec and the plan)"),
+                             BACK: (("idea", "awaiting"), "💡 Idea"),
+                             FACTORY: (None, "the analyst drafts it (an unsized ticket is triaged first)")},
+    ("drafting", "awaiting"): {NEXT: (("baking", "awaiting"), "🍫 Baking (you code it in the worktree)"),
+                               BACK: (("triage", "awaiting"), "📏 Triage"),
+                               FACTORY: (None, "🎫 Planned: a builder Oompa-Loompa bakes your plan")},
+    ("baking", "awaiting"): {NEXT: (("reviewing", "pending"), "🐿️ Reviewing: the squirrels review your commits, "
+                                                              "then it is back to you"),
+                             BACK: (("drafting", "awaiting"), "🧪 Drafting"),
+                             FACTORY: (None, "🐿️ Reviewing, then Wonka ships it as usual")},
+    ("reviewing", "awaiting"): {NEXT: (("shipped", "pending"), "🚢 Shipped: Wonka pushes the branch and opens or "
+                                                               "updates the draft PR"),
+                                BACK: (("baking", "awaiting"), "🍫 Baking (fix what the squirrels found)"),
+                                FACTORY: (None, "a builder fixes the squirrels' issues, or Wonka ships a good nut")},
+    ("shipped", "awaiting"): {BACK: (("baking", "awaiting"), "🍫 Baking (rework it, then ship it again)"),
+                              FACTORY: (None, "Wonka watches the PR again (conflicts, CI, 🔁 Request changes)")},
+}
+# what the 🕹️ Manual section says while the squirrels or the PR push are at work for a manual ticket
+MANUAL_BUSY = {"reviewing": "🐿️ The squirrels are reviewing your bake: the options come back here when they are done.",
+               "shipped": "🚢 Wonka is pushing the branch and opening the PR: the options come back here once it is open."}
+# what a session's brief asks of Claude in each stage
+SESSION_GUIDE = {
+    "idea": "We shape the 💡 Idea together: refine that section of the note. No code yet.",
+    "triage": "We agree on the scope and a size (xs, s, m, l or xl); I set the size with `wonka set {tid} size <size>`. "
+              "No code yet.",
+    "drafting": "We write the 📜 Spec (that section of the note) and the plan file together. No product code yet.",
+    "baking": "Implement the plan here and commit on {branch}. Do not push and do not open a PR: when the ticket ships, "
+              "Wonka pushes it and opens the PR with the marker it uses to recognise its own PRs.",
+    "reviewing": "The squirrels' findings are in the plan, under the last “🐿️ Review round”. While they are still "
+                 "reviewing, wait for them.",
+    "shipped": "The PR {pr} is open. Commit here and `git push origin {branch}` to update it; `wonka pr-comments {tid}` "
+               "lists the human review comments.",
+}
+
+
+def manual_text(state):
+    """The 🕹️ Manual section for a manual ticket in `state`: the question, or what is going on while it can't move."""
+    opts = MANUAL_OPTIONS.get(tuple(state))
+    if opts:
+        return note.manual_question(f"{key}: {text}" for key, (_, text) in opts.items())
+    return MANUAL_BUSY.get(state[0], "")
 
 
 def cleared_flags(dst, by):
@@ -327,6 +376,17 @@ def _worktree_branch(repo, path):
     return None
 
 
+def _branch_checkout(repo, branch):
+    """The folder of the registered worktree that has branch checked out, or None."""
+    cur = None
+    for line in git("worktree", "list", "--porcelain", cwd=repo).splitlines():
+        if line.startswith("worktree "):
+            cur = line[len("worktree "):]
+        elif line == f"branch refs/heads/{branch}":
+            return cur
+    return None
+
+
 def _rebasing(wt):
     """True while a rebase is unfinished in the worktree (it stopped on a conflict)."""
     return any(Path(git("rev-parse", "--path-format=absolute", "--git-path", d, cwd=wt)).exists()
@@ -554,6 +614,19 @@ def _default_title(idea):
     return idea.strip().splitlines()[0][:60]
 
 
+WORKTREEINCLUDE = ".worktreeinclude"
+
+
+def worktree_includes(repo):
+    """The untracked files of the main checkout matched by its .worktreeinclude (Claude Code's list of gitignored
+    files a new worktree needs, in .gitignore syntax), repo-relative; [] when the repo has none. Whether each is
+    really gitignored is checked where it is copied, as for worktree_files."""
+    if not (Path(repo) / WORKTREEINCLUDE).is_file():
+        return []
+    out = _run(["git", "ls-files", "--others", "--ignored", f"--exclude-from={WORKTREEINCLUDE}", "-z"], cwd=repo)
+    return sorted(rel for rel in out.split("\0") if rel)
+
+
 def project_test_prefixes(cfg, project):
     """The command prefixes `wonka test` may run for a project (config test_commands.<project>), or []."""
     return list((cfg.get("test_commands") or {}).get(project) or [])
@@ -746,9 +819,11 @@ class Factory:
         if self.state(tid) not in states:
             raise WonkaError(f"{tid} is {fmt(self.state(tid))}, expected {' or '.join(map(fmt, states))}")
 
-    def move(self, tid, dst, by, why=None):
+    def move(self, tid, dst, by, why=None, manual=None):
+        """`manual` overrides the ticket's own flag for the legality check: a hand-back clears the flag first, so the
+        note it writes no longer shows the 🕹️ Manual question, but still moves by the manual rules."""
         t, src = self.ticket(tid), self.state(tid)
-        if not machine.allowed(src, dst):
+        if not machine.allowed(src, dst, manual=bool(t.get("manual") if manual is None else manual)):
             raise WonkaError(f"{tid}: {fmt(src)} → {fmt(dst)} is not a legal move")
         final = dst in (("shipped", "ready"), KILLED)  # merged or killed: the ticket is finished
         # The note is read before the state changes, and the state is put back if the note write fails: a tick saves
@@ -771,6 +846,10 @@ class Factory:
             body = note.drop_section(body, "changes")  # a merged or closed PR takes no more change requests
         if stuck:
             body = note.drop_section(body, "stuck")
+        if t.get("manual"):
+            body = note.set_section(body, "manual", manual_text(dst))
+        else:
+            body = note.drop_section(body, "manual")
         try:
             self.write(tid, meta, body)
         except Exception:
@@ -784,7 +863,7 @@ class Factory:
                 self.drop_branch(tid)
         if "scout" in cleared and t.get("scout"):
             self.drop_scout(tid)
-        if dst[1] == "awaiting":
+        if dst[1] == "awaiting" and not (t.get("manual") and by == "human"):  # a human's own step needs no ping
             notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
 
     # -- intake -----------------------------------------------------------
@@ -1071,10 +1150,16 @@ class Factory:
         self._copy_worktree_files(tid, self.ticket(tid)["worktree"])
 
     def _copy_worktree_files(self, tid, dest):
-        """Copy the project's configured gitignored files (config worktree_files) from the main checkout into dest.
-        Never overwrites, never copies a path git does not ignore there (a builder could commit it), never raises."""
+        """Copy the project's configured gitignored files (config worktree_files, and the repo's .worktreeinclude) from
+        the main checkout into dest. Never overwrites, never copies a path git does not ignore there (a builder could commit it), never raises."""
         t = self.ticket(tid)
-        for rel in (self.cfg.get("worktree_files") or {}).get(t["project"], []):
+        listed = (self.cfg.get("worktree_files") or {}).get(t["project"], [])
+        try:
+            included = worktree_includes(t["repo"])
+        except WonkaError as e:
+            self.log_event(tid, f"{WORKTREEINCLUDE} not read ({e})")
+            included = []
+        for rel in dict.fromkeys([*listed, *included]):
             try:
                 if not store.safe_relpath(rel):
                     self.log_event(tid, f"Worktree file {rel} not copied: it must be relative to the repo, inside it")
@@ -1355,10 +1440,7 @@ class Factory:
                 raise WonkaError("nothing to dispute: --dispute is only for issues the squirrels raised in the last "
                                  "review round (not change requests, CI failures or a first bake)")
         all_disputed = bool(disputes) and len(disputes) >= _round_issues(t["rounds"][-1])
-        if git("status", "--porcelain", cwd=t["worktree"]):
-            raise WonkaError("the worktree has uncommitted changes: commit them first")
-        if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
-            raise WonkaError(f"no commits on {t['branch']} yet")
+        self._require_commits(tid)
         no_new = t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]
         if no_new and not all_disputed:
             raise WonkaError(f"no new commits on {t['branch']} since the last review: commit the fixes first "
@@ -1376,6 +1458,14 @@ class Factory:
                                 f"round {entry['round']}" + (", no new commits" if no_new else ""))
         self.move(tid, ("baking", "ready"), "builder")
         self.move(tid, ("reviewing", "pending"), "wonka")
+
+    def _require_commits(self, tid):
+        """A bake is done only as committed work: a clean worktree with commits of its own."""
+        t = self.ticket(tid)
+        if git("status", "--porcelain", cwd=t["worktree"]):
+            raise WonkaError("the worktree has uncommitted changes: commit them first")
+        if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
+            raise WonkaError(f"no commits on {t['branch']} yet")
 
     def _baked_flaky(self, tid, flaky):
         """The builder judged a CI fix round's red checks flaky: no new code, back to the open PR."""
@@ -1483,6 +1573,8 @@ class Factory:
                 self.add(f["idea"], title, t["repo"], t["pr_repo"], parent=tid, start="idea")
                 _bump_stat(t, "followups_filed")
                 seen.add(title.casefold())
+        if t.get("manual"):
+            return self._manual_verdict(tid, rnd, reps)
         issues = [(name, i) for name, rep in reps.items() for i in rep.get("issues", [])]
         if issues and t["plan"] and Path(t["plan"]).exists():
             log = [f"## 🐿️ Review round {rnd}"]  # only squirrels with issues: a clean verdict is noise to the builder
@@ -1632,9 +1724,17 @@ class Factory:
             out = mine["url"] if mine else ""
             reused = bool(mine)
             if not reused:
-                out = gh("pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
-                         "--title", pr_title(tid, meta),
-                         "--body", pr_text)
+                create = ["pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
+                          "--title", pr_title(tid, meta), "--body", pr_text]
+                try:
+                    out = gh(*create[:3], "--assignee", "@me", *create[3:])
+                except WonkaError as e:
+                    # gh refuses the whole create when its account can't be assigned on the repo (not a collaborator)
+                    if "could not assign user" not in str(e):
+                        raise
+                    out = gh(*create)
+                    self.log_event(tid, "The PR is not assigned to you: GitHub refused to assign gh's account on "
+                                        f"{t['pr_repo']}")
                 if not out.strip():  # the next try finds the PR, if it was opened, by its marker
                     raise WonkaError("gh pr create printed no PR URL")
                 t["pr_body_sha"] = _body_sha(pr_text)
@@ -1654,7 +1754,8 @@ class Factory:
             outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
         t["pr_url"] = out.strip().splitlines()[-1]
-        self.set_section(tid, "changes", note.CHANGES_BOX)
+        if not t.get("manual"):  # a manual ticket's changes are made in the session
+            self.set_section(tid, "changes", note.CHANGES_BOX)
         if reused:
             self._refresh_pr_body(tid, mine["body"], pr_text)
             what = ("PR updated with the requested changes" if t.get("change_requests") else
@@ -2042,7 +2143,7 @@ class Factory:
 
     def _prefetch_ticket(self, tid, keep, bases):
         t, s = self.ticket(tid), self.state(tid)
-        if s in OFF_PR and t.get("pr_url"):
+        if (s in OFF_PR or t.get("manual")) and t.get("pr_url"):
             keep(tid, "state", lambda: self._pr_state(tid))
         elif s == ("shipped", "awaiting") and t.get("pr_url"):
             if view := keep(tid, "view", lambda: self._pr_view(tid)):
@@ -2079,6 +2180,271 @@ class Factory:
             return
         for rid in self._red_runs(tid, red)[:CI_LOG_RUNS]:
             keep(tid, ("log", rid), lambda: self._run_log(tid, rid))
+
+    # -- manual tickets: a human works them in a Claude session ---------------
+
+    def find(self, ref):
+        """A live ticket by its id (WONKA-00012) or by the Jira key in its note (DATA-3806, any case)."""
+        ref = (ref or "").strip()
+        if ref.upper() in self.db["tickets"]:
+            return ref.upper()
+        found = []
+        for k in self.live():
+            try:
+                jira = note.one_line(self.read(k)[0].get("jira"))
+            except (WonkaError, OSError):
+                continue
+            if jira and jira.casefold() == ref.casefold():
+                found.append(k)
+        if not found:
+            raise WonkaError(f"no ticket {ref}: give a WONKA id, or the Jira key in a live ticket's jira field")
+        if len(found) > 1:
+            raise WonkaError(f"{ref} is the Jira key of {', '.join(found)}: give the WONKA id instead")
+        return found[0]
+
+    def session(self, tid, force=False, from_branch=None):
+        """A human takes the ticket into a Claude session: it rests in its stage's manual state (see
+        machine.MANUAL_PARKED) and no agent works it until it is handed back with the note's 🕹️ Manual question.
+        Returns the session's brief. A ticket that is already manual only gets its worktree checked and the brief."""
+        t, s = self.ticket(tid), self.state(tid)
+        if s in (machine.MERGED, KILLED):
+            raise WonkaError(f"{tid} is {fmt(s)}: it is finished, there is nothing left to work on")
+        if t.get("manual"):
+            if from_branch:
+                raise WonkaError(f"{tid} is already manual: --from only seeds the worktree when a session takes it")
+            self._session_worktree(tid)
+            return self._brief(tid)
+        busy = bool(t.get("job_started_at")) or s[1] == "progress"
+        if busy and not force:
+            raise WonkaError(f"{tid} is {fmt(s)}: an Oompa-Loompa is at work on it. Wait for it to finish, or pass "
+                             "--force to take it anyway (its results are then ignored)")
+        self._session_worktree(tid, from_branch)  # first: a failure leaves the ticket where it was
+        if busy:
+            if s == ("shipped", "progress") and t.get("conflicts"):
+                self._undo_fixer(tid)  # before the move drops fix_head
+            if s == ("reviewing", "progress"):
+                t["review_round"] -= 1
+                t.pop("reports", None)
+                t.pop("finished", None)
+            t["dispatch"] = t.get("dispatch", 0) + 1  # the agent's results and git writes are refused from now on
+        stage = machine.MANUAL_ENTRY[s[0]]
+        if stage == "shipped" and not t.get("pr_url"):
+            stage = "baking"  # a ship that never opened its PR: the human bakes it and ships it again
+        dst = (stage, "awaiting")
+        meta, body = self.read(tid)
+        for key in ("start", "approval", "stuck", "changes", *(("questions",) if stage == "triage" else ())):
+            body = note.drop_section(body, key)
+        if t.pop("spec_review_pending", None):  # the human drafts it now: nothing is left to approve
+            body = note.drop_section(body, "questions")  # holds only the approval: earlier rounds are in ✅ Answers
+            self.log_event(tid, "The spec review question was dropped: the spec is yours to finish in the session",
+                           by="human")
+        for key in ("resume", "stuck", "ci_stuck", "retries", "conflicts", "conflict_error", "job_started_at"):
+            t.pop(key, None)
+        t["manual"] = True
+        if self.plan_path(tid).exists():
+            t["plan"] = str(self.plan_path(tid))
+        why = "Taken into a Claude session (wonka session): 🕹️ manual, no Oompa-Loompa works it until it is handed back"
+        if s == dst:
+            self.write(tid, meta, note.set_section(body, "manual", manual_text(dst)))
+            self.log_event(tid, why, by="human")
+        else:
+            self.write(tid, meta, body)
+            self.move(tid, dst, "human", why)
+        return self._brief(tid)
+
+    def _session_worktree(self, tid, from_branch=None):
+        """The ticket's own worktree for a session: reused as it is (no reset, rebase or stash), recreated from its
+        branch, or made from the latest base (from from_branch's tip with --from). Never a checkout Wonka did not
+        make: a branch checked out elsewhere is refused."""
+        t = self.ticket(tid)
+        if from_branch:
+            self._seed_branch(tid, from_branch)
+        wt = t["worktree"]
+        if not (wt and Path(wt).is_dir()) and t["branch"]:
+            holder = _branch_checkout(t["repo"], t["branch"])
+            mine = store.worktrees_dir() / t["project"] / tid
+            if holder and Path(holder).is_dir() and Path(holder).resolve() != mine.resolve():
+                raise WonkaError(f"{t['branch']} is checked out in {holder}: switch that checkout to another branch, "
+                                 "then run wonka session again (Wonka only works in the worktrees it makes)")
+        self.ensure_worktree(tid)
+
+    def _seed_branch(self, tid, start):
+        """--from: the ticket's branch starts at start's tip (work begun by hand, in another checkout), only while it
+        has no commits of its own. The other checkout is never touched."""
+        t = self.ticket(tid)
+        try:
+            sha = git("rev-parse", "--verify", "--quiet", f"{start}^{{commit}}", cwd=t["repo"])
+        except WonkaError:
+            raise WonkaError(f"no branch or commit {start} in {t['repo']}")
+        branch = t["branch"] or f"wonka/{tid}-{slug(self.read(tid)[0].get('title', ''))}"
+        wt = t["worktree"] if t["worktree"] and Path(t["worktree"]).is_dir() else None
+        if _ref_exists(t["repo"], f"refs/heads/{branch}"):
+            own = git("rev-list", "--count", f"{self.base_ref(tid)}..{branch}", cwd=t["repo"])
+            if own != "0":
+                raise WonkaError(f"{branch} already has {own} commit(s) of its own: cherry-pick or merge {start} in "
+                                 f"{wt or 'its worktree'} instead")
+            if wt:
+                if git("status", "--porcelain", cwd=wt):
+                    raise WonkaError(f"{wt} has uncommitted changes: commit or drop them before --from {start}")
+                git("reset", "--hard", "--quiet", sha, cwd=wt)  # nothing of its own on the branch: nothing is lost
+            else:
+                git("branch", "--force", "--no-track", branch, sha, cwd=t["repo"])
+        else:
+            git("branch", "--no-track", branch, sha, cwd=t["repo"])
+        t.setdefault("base_ref", self._latest_base(t))  # so its own commits count from the base, not from start
+        t["branch"] = branch
+        self.log_event(tid, f"{branch} starts from {start} ({sha[:7]}): work begun by hand", by="human")
+
+    def _brief(self, tid):
+        """The first prompt of a session's Claude: where everything is, what this stage asks, how to move on."""
+        t, s = self.ticket(tid), self.state(tid)
+        meta = self.read(tid)[0]
+        plan = self.plan_path(tid)
+        title = note.one_line(meta.get("title")) or tid
+        lines = [f"We are working Wonka golden ticket {tid}, “{title}”, by hand. Wonka took it out of its factory "
+                 "(🕹️ manual): no Oompa-Loompa works on it until I hand it back.", "", f"- Stage: {fmt(s)}"]
+        if jira := note.one_line(meta.get("jira")):
+            lines.append(f"- Jira: {jira}")
+        lines += [f"- Note: {self.path(tid)} (the 💡 Idea, the 📜 Spec, my answers, and the 🕹️ Manual question at "
+                  "the bottom)",
+                  f"- Plan: {plan}" + ("" if plan.exists() else " (not written yet: write it there)"),
+                  f"- Worktree: {t['worktree']}, on branch {t['branch']} (base {t.get('pr_base') or t['base_branch']}): "
+                  "work only here"]
+        if t.get("pr_url"):
+            lines.append(f"- PR: {t['pr_url']}")
+        if waiting := self.waiting_on(tid):
+            lines.append(f"- Waits on: {', '.join(waiting)} (not merged yet)")
+        lines += ["", SESSION_GUIDE[s[0]].format(tid=tid, branch=t["branch"], pr=t.get("pr_url") or "-"), "",
+                  "To move the ticket on, back, or back to the factory, tick one option of “🕹️ Where to next?” in the "
+                  "note's 🕹️ Manual section once I agree; Wonka acts on it at its next tick (`/wonka tick`, or the "
+                  "/loop). Never edit the note's frontmatter, banner or 🎩 Factory log, and never run `wonka move`, "
+                  "`wonka set` or `wonka config` yourself.", "",
+                  "Start by reading the note and the plan, then tell me in a few lines where the ticket stands and ask "
+                  "me what to do."]
+        return "\n".join(lines)
+
+    def worktree_path(self, tid):
+        wt = self.ticket(tid).get("worktree")
+        if not (wt and Path(wt).is_dir()):
+            raise WonkaError(f"{tid} has no worktree yet: `wonka session {tid}` makes one")
+        return wt
+
+    def worktree_info(self, tid):
+        """`wonka worktree --info`: the worktree and where its branch stands. Only reads."""
+        t, wt = self.ticket(tid), self.worktree_path(tid)
+        base = self.base_ref(tid)
+        try:
+            ahead = git("rev-list", "--count", f"{base}..HEAD", cwd=wt)
+        except WonkaError:
+            ahead = "?"
+        changed = len(git("status", "--porcelain", cwd=wt).splitlines())
+        rows = [("path", wt), ("branch", f"{t['branch']} (base {t.get('pr_base') or t['base_branch']})"),
+                ("commits", f"{ahead} ahead of {base}"),
+                ("changes", f"{changed} uncommitted file(s)" if changed else "none, the tree is clean"),
+                ("state", fmt(self.state(tid)) + ("  🕹️ manual" if t.get("manual") else "")),
+                ("PR", t.get("pr_url") or "-")]
+        return "\n".join(f"{k:8} {v}" for k, v in rows)
+
+    def _manual_box(self, tid, meta, body):
+        """A manual ticket: act on the option ticked in its 🕹️ Manual question (see MANUAL_OPTIONS)."""
+        s = self.state(tid)
+        sec = note.get_section(body, "manual")
+        if sec is None:  # deleted by hand: it comes back
+            self.write(tid, meta, note.set_section(body, "manual", manual_text(s)))
+            return None
+        opts = MANUAL_OPTIONS.get(s)
+        picks = note.picked(sec, note.MANUAL_Q) if opts else []
+        if not picks:
+            return None
+        if len(picks) > 1:
+            return self._manual_refused(tid, "more than one option ticked in 🕹️ Manual: tick just one")
+        key = next((k for k in opts if picks[0].startswith(k)), None)
+        if key is None:
+            return self._manual_refused(tid, f"{picks[0]!r} is not an option for {fmt(s)}")
+        t = self.ticket(tid)
+        if self.plan_path(tid).exists():
+            t["plan"] = str(self.plan_path(tid))
+        try:
+            if key == FACTORY:
+                return self._hand_back(tid)
+            dst, text = opts[key]
+            if s == ("baking", "awaiting") and key == NEXT:
+                self._require_commits(tid)
+            self.move(tid, dst, "human", f"🕹️ {key}: {text}")
+            return f"{tid}: 🕹️ {key.split(' ', 1)[1].lower()}, now {fmt(dst)}"
+        except (WonkaError, OSError) as e:
+            return self._manual_refused(tid, " ".join(str(e).split()))
+
+    def _manual_refused(self, tid, why):
+        """The ticked 🕹️ Manual option can't be taken now: untick it and say why in the ticket's log."""
+        meta, body = self.read(tid)
+        self.write(tid, meta, note.set_section(body, "manual", manual_text(self.state(tid))))
+        self.log_event(tid, f"🕹️ Not moved: {why}")
+        return f"{tid}: 🕹️ not moved, {why}"
+
+    def _hand_back(self, tid):
+        """🎩 Back to the factory: the agents take the ticket on from its stage, as if it had never left."""
+        t, s = self.ticket(tid), self.state(tid)
+        if s == ("idea", "awaiting"):
+            dst = ("triage", "pending")
+        elif s == ("triage", "awaiting"):
+            dst = ("triage", "ready") if self.read(tid)[0].get("size") else ("triage", "pending")
+        elif s == ("drafting", "awaiting"):
+            if not self.plan_path(tid).exists():
+                raise WonkaError(f"no plan yet: write it at {self.plan_path(tid)} first, the builder bakes from it")
+            dst = ("planned", "pending")
+        elif s == ("baking", "awaiting"):
+            self._require_commits(tid)
+            dst = ("reviewing", "pending")
+        elif s == ("reviewing", "awaiting"):
+            last = (t.get("rounds") or [{}])[-1]
+            dst = ("baking", "pending") if last.get("round") == t["review_round"] and _round_issues(last) else \
+                ("reviewing", "ready")
+        else:
+            dst = None  # shipped/awaiting: Wonka watches the open PR again
+        why = "🎩 Handed back to the factory"
+        t.pop("manual")
+        try:
+            if dst is None:
+                meta, body = self.read(tid)
+                self.write(tid, meta, note.set_section(note.drop_section(body, "manual"), "changes", note.CHANGES_BOX))
+                self.log_event(tid, f"{why}: Wonka watches the PR again", by="human")
+            else:
+                self.move(tid, dst, "human", why, manual=True)
+        except Exception:
+            t["manual"] = True
+            raise
+        if dst == ("reviewing", "ready"):
+            self.move(tid, ("shipped", "pending"), "wonka")
+        return f"{tid}: 🎩 handed back to the factory, now {fmt(self.state(tid))}"
+
+    def _manual_verdict(self, tid, rnd, reps):
+        """A manual ticket's review round: all the squirrels said goes in the plan, and the human decides what next
+        (no rebake, no ship, no kill on the review-round budget)."""
+        t = self.ticket(tid)
+        log = [f"## 🐿️ Review round {rnd}"]
+        for name, rep in reps.items():
+            if not (rep.get("issues") or rep.get("questions") or rep.get("suggest")):
+                continue
+            log.append(f"### squirrel-{name}: {rep.get('verdict', '?')}")
+            log += [f"- {i}" for i in rep.get("issues") or []]
+            log += [f"- ❓ {q['q']} ({' / '.join(q.get('options') or [])})" for q in rep.get("questions") or []]
+            if rep.get("suggest"):
+                what = "closing the ticket" if rep["suggest"] == "close" else "going back to Drafting"
+                log.append(f"- 💡 Suggests {what}: {rep.get('why') or 'no reason given'}")
+        if len(log) > 1:
+            if not (t.get("plan") and Path(t["plan"]).exists()):
+                path = self.plan_path(tid)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.exists():
+                    store.write_atomic(path, f"# {tid} plan\n")
+                t["plan"] = str(path)
+            self._write_log(tid, ["\n".join(log)], age=False)
+        issues = sum(len(rep.get("issues") or []) for rep in reps.values())
+        verdict = f"{issues} issue(s)" if issues else "a good nut"
+        self.move(tid, ("reviewing", "awaiting"), "squirrels",
+                  f"Review round {rnd}: {verdict}, logged in the plan; your call (🕹️ manual)")
+        return f"{tid}: 🕹️ review round {rnd} done ({verdict}), back to the human"
 
     # -- the tick ---------------------------------------------------------
 
@@ -2129,7 +2495,7 @@ class Factory:
         if (moved := self._board_edit(tid, meta, body)) is not None:
             return moved
         last = self.state(tid)
-        if last in OFF_PR and t.get("pr_url"):
+        if (last in OFF_PR or t.get("manual")) and t.get("pr_url"):
             try:
                 pr = self._read(tid, "state", lambda: self._pr_state(tid))
             except (WonkaError, OSError) as e:  # offline: the fix round goes on, the next tick asks again
@@ -2139,6 +2505,8 @@ class Factory:
                 return gone
         if t.get("stuck") and note.approved_retry(note.get_section(body, "stuck")):
             return self._unstick(tid, meta, body)
+        if t.get("manual"):
+            return self._manual_box(tid, meta, body)
         if last == machine.IDEA:
             return self._idea_box(tid, meta, body)
         if last == ("triage", "awaiting"):
@@ -2180,7 +2548,7 @@ class Factory:
             if seen[0] == "wontdo" and machine.allowed(last, KILLED):  # a merged ticket is put back below
                 self.move(tid, KILLED, "human", "Dragged to Wont Do by a human")
                 return f"{tid}: killed by a human"
-            if last == machine.IDEA and seen in (("triage", "pending"), ("triage", "awaiting")):
+            if last == machine.IDEA and seen in (("triage", "pending"), ("triage", "awaiting")) and not t.get("manual"):
                 return self._start_idea(tid, "Dragged to Triage by a human")
             shown = f"{meta.get('status')}/{meta.get('phase')}"
             meta["status"], meta["phase"] = machine.label(last)
@@ -2660,6 +3028,8 @@ class Factory:
                 t, s = self.ticket(k), self.state(k)
                 if t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
                     continue
+                if t.get("manual") and s not in (("reviewing", "pending"), ("shipped", "pending")):
+                    continue  # a human works it: only the squirrels' review and the PR push run for it
                 if s in (("drafting", "pending"), ("drafting", "progress"), ("baking", "pending")) and self._blocked(k):
                     continue  # waits for its blockers to merge; an analyst already running is not interrupted
                 if s == ("shipped", "pending"):

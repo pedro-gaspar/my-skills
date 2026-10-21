@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | status | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|session|worktree|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | status | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
 model: sonnet
 ---
 
@@ -42,8 +42,27 @@ Quoting: pass every free text (the idea, `--title`) in single quotes, writing ea
 user wants to review the spec before it is built (sensitive tickets). With `--parent <id>` the repo, PR repo
 and Jira key default to the parent's (the PR repo only when the child builds in the parent's repo). Pass `--blocked-by <id>[,<id>]` when the user says the ticket depends on (must wait for) other tickets. To change dependencies later, use `wonka block <id> <blocker>` / `wonka unblock <id> [<blocker>]` (only before baking). Pass `--triage` when the user asks to build or start the ticket now; otherwise leave it out and the ticket is a 💡 Idea that waits until the user ticks Start or drags it to 📏 Triage. Say which one in the reply. Then run a tick.
 
+Pass `--manual` when the user wants to work the ticket by hand from the start ("add it as manual", "add it and open a session"): it is created 🕹️ manual, as if `/wonka session` had taken it, in 💡 Idea (📏 Triage with `--triage`). Run no tick; carry straight on with the session steps below for the new id.
+
 ## status
 `wonka status` and show the lines as they are.
+
+## session
+Take a ticket out of the factory so the user works it by hand with Claude (🕹️ manual). The argument is a WONKA id or
+a Jira key; quote it as in add.
+1. Run `wonka config` and read its `session launcher` line.
+2. With `orca`: run `wonka session '<ref>' --orca` (it opens a Claude tab in the ticket's worktree) and pass on the
+   line it prints. Otherwise run `wonka session '<ref>' --print`: never without `--print` or `--orca` here, it would
+   start a claude inside this one. Pass `--force` only when the user says to take the ticket from a working agent,
+   and `--from <branch>` only when they name a branch of their own to start from.
+3. With `--print`, the output is a brief: follow it in this conversation from now on, as the user's pair. Work only in
+   the worktree it names, by absolute path, and read the note and plan first as it says. Tell the user once that
+   `wonka session <ref>` in a terminal opens a fresh claude in that worktree.
+4. Moving the ticket is the user's: they tick one option of 🕹️ Manual in the note (or ask you to), and the next tick
+   acts on it. Never run `wonka move`, `set` or `config` for them.
+
+## worktree
+`wonka worktree '<ref>' --info` and show the lines as they are.
 
 ## retro
 Look back over the recent tickets with the inspector. Follow the steps literally.
@@ -81,7 +100,7 @@ Look back over the recent tickets with the inspector. Follow the steps literally
    `wonka retry` yourself for a finished agent.
 4. For each `stale` id with no agent of yours still running, run `wonka retry <id>`.
 5. Reply with a short factory report, Wonka-style: open with one line of film flavour (🎩🍫🎫🐿️), then events,
-   jobs dispatched, and tickets awaiting a human (🙋 they tick checkboxes in the note; this includes tickets blocked by a Won't-do ticket, the `⛓️ … Won't do: needs a human` events: report them with the `wonka unblock` / kill hint). Keep the facts plain; the
+   jobs dispatched, and tickets awaiting a human (🙋 they tick checkboxes in the note; mark the 🕹️ manual ones, from `wonka status`, which a human works in a session; this includes tickets blocked by a Won't-do ticket, the `⛓️ … Won't do: needs a human` events: report them with the `wonka unblock` / kill hint). Keep the facts plain; the
    humour is one line, never in the way. Nothing happened? Say so in one line ("🍫 All quiet on the chocolate
    river.").
 

@@ -128,6 +128,20 @@ class MachineTest(unittest.TestCase):
         self.assertTrue(machine.allowed(("drafting", "awaiting"), ("planned", "pending")))
         self.assertFalse(machine.allowed(("triage", "awaiting"), ("planned", "pending")))
 
+    def test_manual_moves_only_for_a_manual_ticket(self):
+        for src, dst in ((("baking", "progress"), ("baking", "awaiting")), (("idea", "awaiting"), ("triage", "awaiting")),
+                         (("drafting", "awaiting"), ("planned", "pending")), (("baking", "awaiting"), ("reviewing", "pending")),
+                         (("reviewing", "awaiting"), ("shipped", "pending")), (("baking", "awaiting"), ("shipped", "ready"))):
+            with self.subTest(src=src, dst=dst):
+                self.assertTrue(machine.allowed(src, dst, manual=True))
+                if dst != ("planned", "pending"):  # also the spec approval edge
+                    self.assertFalse(machine.allowed(src, dst))
+        self.assertTrue(machine.valid(("baking", "awaiting")))
+        for dst in (("baking", "awaiting"), ("reviewing", "awaiting"), ("planned", "pending")):
+            with self.subTest(dst=dst):
+                self.assertFalse(machine.allowed(machine.MERGED, dst, manual=True), "merged is final")
+        self.assertFalse(machine.allowed(("idea", "awaiting"), ("baking", "progress"), manual=True))
+
 
 if __name__ == "__main__":
     unittest.main()
