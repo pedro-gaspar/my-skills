@@ -46,7 +46,7 @@ VALID = {
     "triage": {"pending", "awaiting", "ready"},
     "drafting": {"pending", "progress", "awaiting"},
     "planned": {"pending"},
-    "baking": {"pending", "progress", "ready"},
+    "baking": {"pending", "progress", "ready", "awaiting"},  # awaiting: only a manual ticket, baked by a human
     "reviewing": {"pending", "progress", "awaiting", "ready"},
     "shipped": {"pending", "progress", "awaiting", "ready"},
     "wontdo": {"ready"},
@@ -95,13 +95,34 @@ _EDGES += [(src, "shipped/ready") for src in ("baking/pending", "baking/progress
                                               "shipped/pending", "shipped/progress")]
 EDGES = {tuple(tuple(side.split("/")) for side in edge) for edge in _EDGES}
 
+# A manual ticket (`wonka session`) is worked by a human in a Claude session, who steps it through the stages with the
+# note's 🕹️ Manual question. It rests in one of these states between steps; only the squirrels and the PR push still run.
+MANUAL_PARKED = frozenset({("idea", "awaiting"), ("triage", "awaiting"), ("drafting", "awaiting"),
+                           ("baking", "awaiting"), ("shipped", "awaiting")})
+# the stage a ticket enters manual mode in, by its status (shipped without a PR is baked again: see Factory.session)
+MANUAL_ENTRY = {"idea": "idea", "triage": "triage", "drafting": "drafting", "planned": "baking", "baking": "baking",
+                "reviewing": "baking", "shipped": "shipped"}
+_MANUAL_EDGES = [
+    ("baking/awaiting", "reviewing/pending"),  # Next (or back to the factory): the squirrels review the human's bake
+    ("reviewing/awaiting", "shipped/pending"),  # Next: Wonka pushes and opens the PR
+    ("drafting/awaiting", "planned/pending"),  # back to the factory: the builder bakes the human's plan
+    ("triage/awaiting", "triage/pending"),  # back to the factory with no size: the triage agent sizes it
+]
+_MANUAL_EDGES += [(src, "shipped/ready") for src in ("idea/awaiting", "triage/awaiting", "drafting/awaiting",
+                                                     "baking/awaiting", "reviewing/awaiting")]
+MANUAL_EDGES = {tuple(tuple(side.split("/")) for side in edge) for edge in _MANUAL_EDGES}
 
-def allowed(src, dst):
+
+def allowed(src, dst, manual=False):
     """Any ticket may be killed except a finished one (killed or merged: a merged PR can't be undone); everything
-    else must be an edge in the table."""
+    else must be an edge in the table. A manual ticket may also go from any unfinished state to a MANUAL_PARKED one
+    (entering manual mode, Next or Back) and take the MANUAL_EDGES."""
+    src, dst = tuple(src), tuple(dst)
     if dst == KILLED:
-        return tuple(src) not in (KILLED, MERGED)
-    return (tuple(src), tuple(dst)) in EDGES
+        return src not in (KILLED, MERGED)
+    if manual and src not in (KILLED, MERGED) and (dst in MANUAL_PARKED or (src, dst) in MANUAL_EDGES):
+        return True
+    return (src, dst) in EDGES
 
 
 def valid(state):

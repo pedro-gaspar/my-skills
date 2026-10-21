@@ -31,7 +31,9 @@ DEFAULT_CONFIG = {
     "ci_hosts": {},  # project -> hosts `wonka ci-logs` may fetch from
     "ci_log_command": {},  # project -> the CI log tool's command prefix, run by `wonka ci-logs`
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
+    "session_launcher": "terminal",  # how `wonka session` opens Claude: terminal (exec claude here) or orca (an Orca tab)
 }
+SESSION_LAUNCHERS = ("terminal", "orca")
 SETTINGS = {  # wonka config <key> <value>
     "wip.triage": int, "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
     "max_review_rounds": int, "max_followup_depth": int,
@@ -128,8 +130,13 @@ def set_setting(cfg, key, raw):
             cur.pop(project, None)
         cfg["ci_log_command"] = cur
         return
+    if key == "session_launcher":
+        if raw.strip() not in SESSION_LAUNCHERS:
+            raise WonkaError(f"session_launcher must be {' or '.join(SESSION_LAUNCHERS)}")
+        cfg[key] = raw.strip()
+        return
     if key not in SETTINGS:
-        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, worktree_files.<project>, "
+        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, session_launcher, worktree_files.<project>, "
                          "test_commands.<project>, ci_hosts.<project>, ci_log_command.<project>")
     try:
         value = SETTINGS[key](raw)
@@ -209,6 +216,8 @@ def _check_config(cfg, path):
     for key in SETTINGS:
         if "." not in key and not _number(cfg[key]):
             raise bad(key, "a number")
+    if cfg["session_launcher"] not in SESSION_LAUNCHERS:
+        raise bad("session_launcher", " or ".join(SESSION_LAUNCHERS))
     for key in ("worktree_files", "test_commands", "ci_hosts", "ci_log_command"):
         if cfg[key] is None:
             cfg[key] = {}

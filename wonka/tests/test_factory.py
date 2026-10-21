@@ -5935,7 +5935,7 @@ class FactoryTest(unittest.TestCase):
         if by != "wonka" or final:
             out |= {"ci_stuck", "stuck", "retries"}
         if final:
-            out |= {"ci_fixes", "cleanup"}
+            out |= {"ci_fixes", "cleanup", "manual"}  # manual: added with wonka session, it ends with the ticket
         if dst[1] == "ready":
             out.add("pr_base")
         if dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
