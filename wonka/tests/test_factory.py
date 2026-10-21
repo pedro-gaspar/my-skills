@@ -262,7 +262,9 @@ class FactoryTest(unittest.TestCase):
         self.bake(tid)
         self.review(tid, architect={"verdict": "good nut"})
         self.tick()
-        self.assertIn("--draft\n", Path(f"{self.pr_state}.args").read_text())
+        args = Path(f"{self.pr_state}.args").read_text()
+        self.assertIn("--draft\n", args)
+        self.assertIn("--assignee\n@me\n", args)  # assigned to whoever gh is logged in as: the human
 
     def test_pr_description_without_jira_has_only_the_wonka_id(self):
         tid = self.add()

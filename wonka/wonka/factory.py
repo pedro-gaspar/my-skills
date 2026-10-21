@@ -1632,8 +1632,8 @@ class Factory:
             out = mine["url"] if mine else ""
             reused = bool(mine)
             if not reused:
-                out = gh("pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
-                         "--title", pr_title(tid, meta),
+                out = gh("pr", "create", "--draft", "--assignee", "@me", "--repo", t["pr_repo"], "--base",
+                         t["base_branch"], "--head", head, "--title", pr_title(tid, meta),
                          "--body", pr_text)
                 if not out.strip():  # the next try finds the PR, if it was opened, by its marker
                     raise WonkaError("gh pr create printed no PR URL")
