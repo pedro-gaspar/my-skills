@@ -1724,9 +1724,17 @@ class Factory:
             out = mine["url"] if mine else ""
             reused = bool(mine)
             if not reused:
-                out = gh("pr", "create", "--draft", "--assignee", "@me", "--repo", t["pr_repo"], "--base",
-                         t["base_branch"], "--head", head, "--title", pr_title(tid, meta),
-                         "--body", pr_text)
+                create = ["pr", "create", "--draft", "--repo", t["pr_repo"], "--base", t["base_branch"], "--head", head,
+                          "--title", pr_title(tid, meta), "--body", pr_text]
+                try:
+                    out = gh(*create[:3], "--assignee", "@me", *create[3:])
+                except WonkaError as e:
+                    # gh refuses the whole create when its account can't be assigned on the repo (not a collaborator)
+                    if "could not assign user" not in str(e):
+                        raise
+                    out = gh(*create)
+                    self.log_event(tid, "The PR is not assigned to you: GitHub refused to assign gh's account on "
+                                        f"{t['pr_repo']}")
                 if not out.strip():  # the next try finds the PR, if it was opened, by its marker
                     raise WonkaError("gh pr create printed no PR URL")
                 t["pr_body_sha"] = _body_sha(pr_text)

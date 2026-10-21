@@ -266,6 +266,18 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("--draft\n", args)
         self.assertIn("--assignee\n@me\n", args)  # assigned to whoever gh is logged in as: the human
 
+    def test_pr_opens_unassigned_when_github_refuses_the_assignee(self):
+        tid = self.add()
+        self.to_planned(tid)
+        self.bake(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        self.set_gh(FAKE_GH.replace('  "pr create")', '  "pr create") case "$*" in *--assignee*) '
+                                    'echo "could not assign user: bot not found" >&2; exit 1 ;; esac;', 1))
+        self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("--assignee", Path(f"{self.pr_state}.args").read_text())
+        self.assertIn("The PR is not assigned to you", self.note(tid)[1])
+
     def test_pr_description_without_jira_has_only_the_wonka_id(self):
         tid = self.add()
         self.to_planned(tid)
