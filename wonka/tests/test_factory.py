@@ -1736,7 +1736,7 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("job_started_at", t)
         body = self.note(tid)[1]
         self.assertIn("Retry 1/3", body)
-        self.assertIn("Bad credentials", body)
+        self.assertRegex(body, r"Retry 1/3: could not open the PR: `[^`\n]*Bad credentials`")
 
         self.tick()
         events = self.tick()["events"]
@@ -4909,7 +4909,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         t = self.f_ticket(tid)
         self.assertEqual(t["retries"], 1)
-        self.assertTrue(t["conflict_error"].startswith("try 1/3: "), t["conflict_error"])
+        self.assertTrue(t["conflict_error"].startswith("try 1/3: `"), t["conflict_error"])
 
     def test_failed_fetch_keeps_the_ticket_awaiting(self):
         tid = self.add()
@@ -4933,7 +4933,7 @@ class FactoryTest(unittest.TestCase):
             self.assertEqual([j for j in tick["jobs"] if j["id"] == tid], [])
             t = self.f_ticket(tid)
             self.assertEqual(t["retries"], n)
-            self.assertTrue(t["conflict_error"].startswith(f"try {n}/3: "), t["conflict_error"])
+            self.assertTrue(t["conflict_error"].startswith(f"try {n}/3: `"), t["conflict_error"])
             if n < 3:
                 self.assertNotIn("stuck", t)
                 self.assertIn("could not start", self.note(tid)[1])
@@ -5413,6 +5413,8 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: PR failed: boom; back in the queue", events)
         self.assertEqual(self.state(tid), ("shipped", "pending"))
         self.assertEqual(self.f_ticket(tid)["retries"], 1)
+        whys = [h.get("why") for h in self.f_ticket(tid)["history"]]
+        self.assertIn("Retry 1/3: could not open the PR: `boom`", whys)
         self.tick()
         self.assertEqual(self.state(tid), ("shipped", "awaiting"))
 
@@ -5472,6 +5474,12 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(f"{tid}: ⚠️ could not set up the worktree (try 1/3), retried next tick: disk full", events)
         self.assertIn(f"{tid}: ⚠️ could not set up the worktree, stuck: disk full", events)
         self.assertTrue(self.f_ticket(tid)["stuck"])
+        self.assertEqual(
+            note.get_section(self.note(tid)[1], "stuck").strip(),
+            "- [ ] Retry (3 tries failed, the last one: could not set up the worktree: `disk full`. "
+            "See ~/.wonka/factory.log)")
+        whys = [h.get("why") for h in self.f_ticket(tid)["history"]]
+        self.assertIn("Could not set up the worktree (try 1/3): `disk full`", whys)
         self.assertEqual(self.state(tid), ("baking", "pending"))
         self.assertEqual(self.tick()["jobs"], [], "a stuck ticket waits for Retry")
 
@@ -6056,8 +6064,8 @@ class FactoryTest(unittest.TestCase):
     def test_a_failed_jira_create_is_logged_and_dropped(self):
         self.configure_jira_create()
         tid = self.add(create_jira=True)
-        line = self.created(tid, failed="no Atlassian MCP")
-        self.assertEqual(line, "Jira issue not created in CALC: no Atlassian MCP")
+        line = self.created(tid, failed="no access to ![x](https://e.x/p.png)")
+        self.assertEqual(line, "Jira issue not created in CALC: `no access to ![x](https://e.x/p.png)`")
         self.assertNotIn("jira_create", self.f_ticket(tid))
         self.assertEqual((self.note(tid)[0]["jira"], self.state(tid)), ("", ("triage", "pending")))
         self.assertIn(line, self.note(tid)[1])
