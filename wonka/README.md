@@ -10,7 +10,7 @@ ticket, the Nut Room **squirrels** test it (good nut or bad nut?), then Wonka sh
 
 Needs Python 3.11+ (stdlib only), git, `gh` (logged in) and Obsidian 1.14+ (Bases kanban view). Desktop pings use
 `notify-send` (and `xdg-open` for clicks) on Linux. On macOS they use `terminal-notifier` if installed (`brew install
-terminal-notifier`, a click opens the PR), else the built-in `osascript` (a click opens nothing).
+terminal-notifier`, a click opens the PR, or the ticket's note when there is none; pings carry a Wonka image and `wonka doctor` reports what `terminal-notifier -diagnose` finds: approve the first prompt, set the alert style to Banners in System Settings > Notifications), else the built-in `osascript` (a click opens nothing).
 
 ```bash
 git clone https://github.com/pedro-gaspar/my-skills ~/Work/my-skills   # any path; Wonka's retro files ideas in it

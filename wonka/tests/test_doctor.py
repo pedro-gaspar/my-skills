@@ -485,10 +485,19 @@ class NpxCheckTest(unittest.TestCase):
 
 
 class NotifierCheckTest(unittest.TestCase):
-    def lines(self, tools):
+    NO_PROBLEMS = "terminal-notifier 3.1.0\n  authorization       granted\n"
+    PROBLEMS = (
+        "terminal-notifier 3.1.0\n  authorization       not requested yet\n\nProblems found:\n"
+        "  - Permission has never been requested. Send one notification and approve the prompt.\n"
+        "  - Alert style is None. Set it to Banners or Alerts in System Settings > Notifications.\n")
+
+    def lines(self, tools, diagnose=NO_PROBLEMS):
         which = lambda name: f"/usr/bin/{name}" if name in tools else None  # noqa: E731
+        run = mock.Mock(side_effect=diagnose) if isinstance(diagnose, BaseException) else mock.Mock(
+            return_value=subprocess.CompletedProcess([], 3, stdout=diagnose))
         with mock.patch.object(doctor.shutil, "which", side_effect=which), \
-                mock.patch("wonka.factory.shutil.which", side_effect=which):
+                mock.patch("wonka.factory.shutil.which", side_effect=which), \
+                mock.patch.object(doctor.subprocess, "run", run):
             return list(doctor._notifier_checks())
 
     def test_linux(self):
@@ -497,7 +506,18 @@ class NotifierCheckTest(unittest.TestCase):
 
     def test_macos_prefers_terminal_notifier(self):
         self.assertEqual(self.lines({"terminal-notifier", "osascript"}),
-                         [("ok", "terminal-notifier (desktop pings when a ticket needs you; a click opens the PR)")])
+                         [("ok", "terminal-notifier (desktop pings when a ticket needs you; a click opens the PR or the "
+                                 "ticket's note)")])
+
+    def test_terminal_notifier_diagnose_problems_warn(self):
+        ok, *warns = self.lines({"terminal-notifier"}, self.PROBLEMS)
+        self.assertEqual(ok[0], "ok")
+        self.assertEqual([lv for lv, _ in warns], ["warn", "warn"])
+        self.assertIn("Permission has never been requested. Send one notification and approve the prompt.", warns[0][1])
+        self.assertIn("Alert style is None. Set it to Banners or Alerts in System Settings > Notifications.", warns[1][1])
+
+    def test_terminal_notifier_that_cannot_diagnose_adds_nothing(self):
+        self.assertEqual([lv for lv, _ in self.lines({"terminal-notifier"}, OSError())], ["ok"])
 
     def test_macos_osascript_only_warns_about_clicks(self):
         (level, msg), = self.lines({"osascript"})

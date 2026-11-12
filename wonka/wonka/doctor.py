@@ -258,14 +258,31 @@ def sandbox_mode_checks(enabled, excluded):
         yield "ok", "sandbox on: wonka test runs inside it (test commands are confined), every other wonka command outside"
 
 
+def _terminal_notifier_problems():
+    """What `terminal-notifier -diagnose` lists under 'Problems found:'; empty when it cannot run or lists none."""
+    try:
+        out = subprocess.run(["terminal-notifier", "-diagnose"], capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL, timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    lines = out.splitlines()
+    if "Problems found:" not in (line.strip() for line in lines):
+        return []
+    after = lines[[line.strip() for line in lines].index("Problems found:") + 1:]
+    return [line.strip()[2:] for line in after if line.strip().startswith("- ")]
+
+
 def _notifier_checks():
     """Desktop pings: notify-send (+ xdg-open for the click) on Linux, terminal-notifier or osascript on macOS."""
     tool = notifier()
     if tool == "notify-send":
         yield "ok", "notify-send (desktop pings when a ticket needs you)"
-        yield ("ok" if shutil.which("xdg-open") else "warn"), "xdg-open (clicking a PR notification opens the PR)"
+        yield ("ok" if shutil.which("xdg-open") else "warn"), "xdg-open (clicking a notification opens the PR or the ticket's note)"
     elif tool == "terminal-notifier":
-        yield "ok", "terminal-notifier (desktop pings when a ticket needs you; a click opens the PR)"
+        yield "ok", ("terminal-notifier (desktop pings when a ticket needs you; a click opens the PR or the "
+                     "ticket's note)")
+        for problem in _terminal_notifier_problems():
+            yield "warn", f"terminal-notifier: {problem} Until then pings stay hidden."
     elif tool == "osascript":
         yield "warn", ("osascript (desktop pings work, but clicking a PR notification opens nothing: "
                        "brew install terminal-notifier)")
