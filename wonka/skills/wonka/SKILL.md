@@ -42,7 +42,7 @@ Quoting: pass every free text (the idea, `--title`) in single quotes, writing ea
 user wants to review the spec before it is built (sensitive tickets). With `--parent <id>` the repo, PR repo
 and Jira key default to the parent's (the PR repo only when the child builds in the parent's repo). Pass `--blocked-by <id>[,<id>]` when the user says the ticket depends on (must wait for) other tickets. To change dependencies later, use `wonka block <id> <blocker>` / `wonka unblock <id> [<blocker>]` (only before baking). Pass `--triage` when the user asks to build or start the ticket now; otherwise leave it out and the ticket is a 💡 Idea that waits until the user ticks Start or drags it to 📏 Triage. Say which one in the reply. Then run a tick.
 
-Pass `--create-jira-ticket` when the user asks for a Jira ticket to be created (e.g. writes `--create-jira-ticket` after
+Pass `--create-jira` when the user asks for a Jira ticket to be created (e.g. writes `--create-jira` after
 the idea); never together with `--jira` or `--parent`. If `wonka add` fails because the project has no `jira_project` or
 `jira_issue_type`, ask the user (one AskUserQuestion) for the Jira project key and the issue type (recommend `Task`), run
 `wonka config jira_project.<project> <KEY>` and `wonka config jira_issue_type.<project> <type>` with their answers
