@@ -84,12 +84,28 @@ class StateTest(unittest.TestCase):
             ({"vault": "/x", "worktree_files": {"app": [".env", 1]}}, "worktree_files.app must be a list of strings"),
             ({"vault": "/x", "ci_hosts": ["ci.example.com"]}, "ci_hosts must be an object keyed by project"),
             ({"vault": "/x", "ci_log_command": ["beyond ci logs"]}, "ci_log_command must be an object"),
+            ({"vault": "/x", "jira_project": ["CALC"]}, "jira_project must be an object"),
+            ({"vault": "/x", "jira_issue_type": {"app": ["Task"]}}, "jira_issue_type.app must be a string"),
         ]
         for data, msg in cases:
             with self.subTest(data=data):
                 (self.tmp / "config.json").write_text(json.dumps(data))
                 with self.assertRaisesRegex(store.CriticalError, msg):
                     store.load_config()
+
+    def test_set_setting_jira_maps(self):
+        cfg = {}
+        store.set_setting(cfg, "jira_project.app", " calc ")
+        store.set_setting(cfg, "jira_issue_type.app", " Task ")
+        self.assertEqual((cfg["jira_project"], cfg["jira_issue_type"]), ({"app": "CALC"}, {"app": "Task"}))
+        refused = {"jira_project.app": "not a key", "jira_issue_type.app": "Task\nBug", "jira_project.": "CALC"}
+        for key, raw in refused.items():
+            with self.subTest(key):
+                with self.assertRaises(store.WonkaError):
+                    store.set_setting(cfg, key, raw)
+        store.set_setting(cfg, "jira_project.app", "")
+        store.set_setting(cfg, "jira_issue_type.app", "")
+        self.assertEqual((cfg["jira_project"], cfg["jira_issue_type"]), ({}, {}))
 
     def test_config_non_finite_numbers_are_refused(self):
         for raw in ("Infinity", "NaN"):

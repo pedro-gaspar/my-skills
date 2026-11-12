@@ -65,6 +65,10 @@ def show_config(cfg):
     tests = "; ".join(f"{proj}: {', '.join(c)}" for proj, c in cmds) or "none"
     hosts = "; ".join(f"{proj}: {', '.join(h)}" for proj, h in sorted((cfg.get("ci_hosts") or {}).items())) or "none"
     logcmd = "; ".join(f"{proj}: {c}" for proj, c in sorted((cfg.get("ci_log_command") or {}).items())) or "none"
+    jira_projects = cfg.get("jira_project") or {}
+    jira_types = cfg.get("jira_issue_type") or {}
+    jira = "; ".join(f"{proj}: {jira_projects.get(proj, '-')} ({jira_types.get(proj, '-')})"
+                     for proj in sorted({*jira_projects, *jira_types})) or "none"
     print(f"📏 triage at once   : {cfg['wip']['triage']}\n"
           f"🧪 drafting at once : {cfg['wip']['drafting']}\n"
           f"🍫 baking at once   : {cfg['wip']['baking']}\n"
@@ -76,6 +80,7 @@ def show_config(cfg):
           f"🧪 test commands    : {tests}\n"
           f"🔗 CI hosts         : {hosts}\n"
           f"📜 CI log command   : {logcmd}\n"
+          f"🎟️ Jira projects    : {jira}\n"
           f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
           f"🕹️ session launcher : {cfg['session_launcher']}\n"
           f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
@@ -185,16 +190,19 @@ def run(a, f):
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
                   spec_review="human" if a.review_spec else None, blocked_by=split_ids(a.blocked_by),
-                  start="triage" if a.triage else "idea")
+                  start="triage" if a.triage else "idea", create_jira=a.create_jira_ticket)
+        jira_note = " 🎟️ its Jira issue is created on the next tick" if a.create_jira_ticket else ""
         if a.manual:
             f.session(tid)
             print(f"🎫 {tid} has a golden ticket, 🕹️ manual from the start: no agent works it until you hand it "
                   f"back. Open it with: wonka session {tid}")
         elif a.triage:
-            print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}")
+            print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}{jira_note}")
         else:
             print(f"🎫 {tid} has a golden ticket! It's a 💡 Idea: tick Start or drag it to 📏 Triage when it's ready: "
-                  f"{f.path(tid)}")
+                  f"{f.path(tid)}{jira_note}")
+    elif c == "jira-created":
+        print(f.jira_created(a.id, a.key, a.failed))
     elif c == "block":
         f.block(a.id, a.blockers)
         print(f.summary(a.id))
@@ -368,6 +376,9 @@ def parser():
     s.add_argument("--parent")
     s.add_argument("--size", choices=machine.SIZES)
     s.add_argument("--jira")
+    s.add_argument("--create-jira-ticket", action="store_true",
+                   help="have the /wonka manager create a Jira issue for it on the next tick, in the project's "
+                        "jira_project with its jira_issue_type")
     s.add_argument("--review-spec", action="store_true",
                    help="a human approves the spec and plan before baking (spec_review: human)")
     s.add_argument("--blocked-by", action="append",
@@ -454,6 +465,12 @@ def parser():
     s.add_argument("id")
     s.add_argument("--action", required=True, choices=tuple(JIRA_SYNCS))
     s.add_argument("--failed", metavar="WHY", help="the sync failed: logged on the ticket, which carries on")
+    s = sub.add_parser("jira-created", help="manager: record the Jira issue created from the tick's jira_create list, "
+                                            "or why it failed")
+    s.add_argument("id")
+    group = s.add_mutually_exclusive_group(required=True)
+    group.add_argument("--key", help="the new issue's key, e.g. CALC-7")
+    group.add_argument("--failed", metavar="WHY", help="the create failed: logged on the ticket, which carries on")
     s = sub.add_parser("move", help="a manual move, still checked by the state machine")
     s.add_argument("id")
     s.add_argument("status")

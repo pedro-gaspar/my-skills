@@ -30,6 +30,8 @@ DEFAULT_CONFIG = {
     "test_commands": {},  # project -> argv prefixes `wonka test` may run, under a per-project lock
     "ci_hosts": {},  # project -> hosts `wonka ci-logs` may fetch from
     "ci_log_command": {},  # project -> the CI log tool's command prefix, run by `wonka ci-logs`
+    "jira_project": {},  # project -> the Jira project key new issues go to with `wonka add --create-jira-ticket`
+    "jira_issue_type": {},  # project -> the issue type of those new issues
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
     "session_launcher": "terminal",  # how `wonka session` opens Claude: terminal (exec claude here) or orca (an Orca tab)
 }
@@ -130,6 +132,26 @@ def set_setting(cfg, key, raw):
             cur.pop(project, None)
         cfg["ci_log_command"] = cur
         return
+    for map_key in ("jira_project", "jira_issue_type"):
+        if not key.startswith(f"{map_key}."):
+            continue
+        project = key.split(".", 1)[1]
+        if not project:
+            raise WonkaError(f"usage: wonka config {map_key}.<project> <value>")
+        value = raw.strip()
+        if map_key == "jira_project":
+            value = value.upper()
+            if value and not re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
+                raise WonkaError(f"jira_project.{project} must be a Jira project key like CALC")
+        elif "\n" in value or "\r" in value:
+            raise WonkaError(f"jira_issue_type.{project} must be one line")
+        cur = dict(cfg.get(map_key) or {})
+        if value:
+            cur[project] = value
+        else:
+            cur.pop(project, None)
+        cfg[map_key] = cur
+        return
     if key == "session_launcher":
         if raw.strip() not in SESSION_LAUNCHERS:
             raise WonkaError(f"session_launcher must be {' or '.join(SESSION_LAUNCHERS)}")
@@ -137,7 +159,8 @@ def set_setting(cfg, key, raw):
         return
     if key not in SETTINGS:
         raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, session_launcher, worktree_files.<project>, "
-                         "test_commands.<project>, ci_hosts.<project>, ci_log_command.<project>")
+                         "test_commands.<project>, ci_hosts.<project>, ci_log_command.<project>, "
+                         "jira_project.<project>, jira_issue_type.<project>")
     try:
         value = SETTINGS[key](raw)
     except ValueError:
@@ -218,11 +241,16 @@ def _check_config(cfg, path):
             raise bad(key, "a number")
     if cfg["session_launcher"] not in SESSION_LAUNCHERS:
         raise bad("session_launcher", " or ".join(SESSION_LAUNCHERS))
-    for key in ("worktree_files", "test_commands", "ci_hosts", "ci_log_command"):
+    for key in ("worktree_files", "test_commands", "ci_hosts", "ci_log_command", "jira_project", "jira_issue_type"):
         if cfg[key] is None:
             cfg[key] = {}
         if not isinstance(cfg[key], dict):
             raise bad(key, "an object keyed by project")
+        if key in ("jira_project", "jira_issue_type"):
+            for project, value in cfg[key].items():
+                if not isinstance(value, str):
+                    raise bad(f"{key}.{project}", "a string")
+            continue
         if key == "ci_log_command":
             continue  # a bad command stops only its project: wonka ci-logs refuses it and the doctor warns
         for project, value in cfg[key].items():
