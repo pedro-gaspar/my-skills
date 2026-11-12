@@ -3006,7 +3006,7 @@ class Factory:
         if failed is not None:
             why = " ".join(str(failed).split())
             why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
-            line = f"Jira {key}: could not move to {status}: {why}"
+            line = f"Jira {key}: could not move to {status}: {note.code_span(why)}"
         else:
             line = f"Jira {key}: " + ("assigned to you and " if assigned else "") + f"moved to {status}"
         self.log_event(tid, line)

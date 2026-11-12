@@ -191,6 +191,17 @@ def one_line(text):
     return " ".join(part.strip() for part in str(text or "").splitlines() if part.strip())
 
 
+def code_span(text):
+    """text as a Markdown inline code span: untrusted text (echoed Jira content) then renders literally in the note,
+    with no links, embeds, HTML or emphasis."""
+    if not text:
+        return ""
+    longest_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    ticks = "`" * (longest_run + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{ticks}{pad}{text}{pad}{ticks}"
+
+
 _OPENER = re.compile(r"(`{3,}|~{3,})(.*)")
 
 

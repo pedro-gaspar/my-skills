@@ -155,6 +155,21 @@ class NoteTest(unittest.TestCase):
         self.assertEqual(note.one_line(" a\nb \u2028 c\r\n"), "a b c")
         self.assertEqual(note.one_line(None), "")
 
+    def test_code_span(self):
+        cases = {
+            "plain": ("x", "`x`"),
+            "inline hazards stay literal": ("![a](https://e.x/p.png) [[Note]] #tag <b>",
+                                            "`![a](https://e.x/p.png) [[Note]] #tag <b>`"),
+            "single backtick run": ("a `b` c", "``a `b` c``"),
+            "longest backtick run wins": ("a ``b", "```a ``b```"),
+            "leading backtick is padded": ("`x", "`` `x ``"),
+            "trailing backtick is padded": ("x`", "`` x` ``"),
+            "empty": ("", ""),
+        }
+        for name, (text, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(note.code_span(text), expected)
+
     def test_new_questions_archives_an_answered_round(self):
         body = note.set_section("", "idea", "an idea")
         body = note.set_section(body, "log", "> - event")
