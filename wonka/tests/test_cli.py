@@ -537,6 +537,12 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("wonka add", body)
         self.assertNotIn("oompa-loompa-inspector", factory.JOB_AGENTS)
 
+    def test_skill_tick_documents_the_jira_syncs(self):
+        text = (Path(cli.__file__).resolve().parent.parent / "skills/wonka/SKILL.md").read_text()
+        section = text.split("## tick", 1)[1].split("\n## ", 1)[0]
+        for want in ("wonka jira-synced", "--failed", "Atlassian"):
+            self.assertIn(want, section)
+
     def test_skill_documents_retro(self):
         text = (Path(cli.__file__).resolve().parent.parent / "skills/wonka/SKILL.md").read_text()
         section = text.split("## retro", 1)[1].split("\n## ", 1)[0]
@@ -803,6 +809,12 @@ class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
         self.tick()
         self.assertEqual(self.state(tid), ("drafting", "progress"))
         return tid
+
+    def test_jira_synced_prints_the_recorded_line(self):
+        with self.f() as f:
+            tid = f.add("Add a hello script", repo=str(self.repo), pr_repo="acme/app", jira="CALC-42")
+        code, out, err = self.cli("jira-synced", tid, "--action", "start")
+        self.assertEqual((code, out, err), (0, "Jira CALC-42: assigned to you and moved to In Progress\n", ""))
 
     def test_triage_forwards_the_dispatch(self):
         tid = self.add()

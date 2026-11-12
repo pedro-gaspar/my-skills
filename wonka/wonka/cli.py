@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from . import machine, prcomments, store
-from .factory import Factory, alert, fmt, split_ids
+from .factory import JIRA_SYNCS, Factory, alert, fmt, split_ids
 from .store import WonkaError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -239,6 +239,8 @@ def run(a, f):
         print(f.retry(a.id))
     elif c == "finished":
         print(f.finished(a.id, a.agent, a.dispatch))
+    elif c == "jira-synced":
+        print(f.jira_synced(a.id, a.action, a.failed))
     elif c == "move":
         f.move(a.id, (_key(a.status, machine.STATUSES), _key(a.phase, machine.PHASES)), "human", a.why)
         print(f.summary(a.id))
@@ -448,6 +450,10 @@ def parser():
     s.add_argument("id")
     s.add_argument("--agent", required=True, help="the agent dispatched, e.g. wonka:squirrel-backend")
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
+    s = sub.add_parser("jira-synced", help="manager: record a Jira sync from the tick's jira list as done or failed")
+    s.add_argument("id")
+    s.add_argument("--action", required=True, choices=tuple(JIRA_SYNCS))
+    s.add_argument("--failed", metavar="WHY", help="the sync failed: logged on the ticket, which carries on")
     s = sub.add_parser("move", help="a manual move, still checked by the state machine")
     s.add_argument("id")
     s.add_argument("status")

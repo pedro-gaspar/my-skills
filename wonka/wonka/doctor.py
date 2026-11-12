@@ -175,7 +175,7 @@ def _worktree_include_checks(tickets):
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
 AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "baked",
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
-                  "retry", "worktree")
+                  "retry", "worktree", "jira-synced")
 HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor", "session")
 # Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
 # repo's git dir, and talk to GitHub. wonka test needs none of that (its lock is in the worktrees folder), so it stays

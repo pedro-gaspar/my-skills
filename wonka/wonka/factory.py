@@ -24,6 +24,9 @@ MAX_CI_FIXES = 3  # CI fix rounds in a row whose new head is still red
 CI_RED = frozenset({"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"})
 CI_LOG_LINES = 150  # lines of each failed Actions log that go into the plan
 CI_LOG_RUNS = 3  # Actions runs whose logs are fetched per round
+JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
+# action -> (the Jira status it moves the issue to, whether the issue is assigned to the user first)
+JIRA_SYNCS = {"start": ("In Progress", True), "review": ("In Review", False)}
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("triage", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
@@ -68,6 +71,7 @@ FLAG_LIFE = {
     "pr_base": (frozenset(s for s in _ALL if s[1] != "ready"), False),
     # the scout checkout, removed by drop_scout(): no triage or draft job is left to read it anywhere else
     "scout": (frozenset({("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")}), False),
+    "jira_sync": (_UNFINISHED, False),  # a killed or merged ticket never moves its Jira issue
     "manual": (_UNFINISHED, False),  # a human works it in a Claude session until it is handed back, merged or killed
 }
 
@@ -118,6 +122,11 @@ def manual_text(state):
     if opts:
         return note.manual_question(f"{key}: {text}" for key, (_, text) in opts.items())
     return MANUAL_BUSY.get(state[0], "")
+
+
+def _queue_jira_sync(t, meta, action):
+    if note.one_line(meta.get("jira")) and action not in (t.get("jira_sync") or []):
+        t["jira_sync"] = [*(t.get("jira_sync") or []), action]
 
 
 def cleared_flags(dst, by):
@@ -839,6 +848,8 @@ class Factory:
         stuck = "stuck" in cleared and t.get("stuck")
         for k in cleared - {"scout"}:  # the scout is a checkout: drop_scout() removes it below
             t.pop(k, None)
+        if src[0] == "idea" and dst[0] == "triage":
+            _queue_jira_sync(t, meta, "start")
         if final:
             t["entered_done_at"] = _iso(now())
         meta["status"], meta["phase"] = machine.label(dst)
@@ -910,6 +921,8 @@ class Factory:
         }
         if parent_t:
             parent_t["children"].append(tid)
+        if start == "triage" and parent is None:
+            _queue_jira_sync(self.db["tickets"][tid], meta, "start")
         body = note.set_section("", "idea", mdlint.guard(idea))
         if start == "idea":
             body = note.set_section(body, "start", note.START_BOX)
@@ -1698,6 +1711,7 @@ class Factory:
 
     def _ship(self, tid):
         t = self.ticket(tid)
+        first_pr = not t.get("pr_url")
         try:
             if not t["pr_repo"]:
                 raise WonkaError("no pr_repo: set it with `wonka set ID pr_repo owner/name`")
@@ -1754,6 +1768,8 @@ class Factory:
             outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
         t["pr_url"] = out.strip().splitlines()[-1]
+        if first_pr:
+            _queue_jira_sync(t, meta, "review")
         if not t.get("manual"):  # a manual ticket's changes are made in the session
             self.set_section(tid, "changes", note.CHANGES_BOX)
         if reused:
@@ -2972,6 +2988,50 @@ class Factory:
             return f"{tid}: no report from {', '.join(missing)}, " + self.retry(tid).split(": ", 1)[1]
         return f"{tid}: squirrel-{squirrel} done, every squirrel reported"
 
+    def jira_synced(self, tid, action, failed=None):
+        """The manager's report on a Jira sync from the tick's jira list: logs it on the ticket, never moves it."""
+        if action not in JIRA_SYNCS:
+            raise WonkaError(f"action must be one of {', '.join(JIRA_SYNCS)}")
+        t = self.ticket(tid)
+        queued = t.get("jira_sync") or []
+        if action not in queued:
+            return f"{tid}: no Jira {action} sync pending, nothing to record"
+        queued = [a for a in queued if a != action]
+        if queued:
+            t["jira_sync"] = queued
+        else:
+            t.pop("jira_sync", None)
+        status, assigned = JIRA_SYNCS[action]
+        key = (note.one_line(self._jira_of(tid)) or "-").upper()
+        if failed is not None:
+            why = " ".join(str(failed).split())
+            why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+            line = f"Jira {key}: could not move to {status}: {why}"
+        else:
+            line = f"Jira {key}: " + ("assigned to you and " if assigned else "") + f"moved to {status}"
+        self.log_event(tid, line)
+        return line
+
+    def _list_jira_syncs(self):
+        syncs = []
+        for k in self.live():
+            if self.ticket(k).get("jira_sync"):
+                out = self._safe(k, self._offer_jira_syncs)
+                if isinstance(out, list):
+                    syncs += out
+        return syncs
+
+    def _offer_jira_syncs(self, tid):
+        t = self.ticket(tid)
+        key = note.one_line(self._jira_of(tid)).upper()
+        if not JIRA_KEY.fullmatch(key):
+            t.pop("jira_sync", None)
+            self.log_event(tid, f"Jira sync skipped: {key!r} is not a Jira issue key" if key
+                           else "Jira sync skipped: the ticket has no Jira key")
+            return []
+        return [{"id": tid, "key": key, "action": action, "status": JIRA_SYNCS[action][0],
+                 "assign": JIRA_SYNCS[action][1]} for action in t["jira_sync"]]
+
     def _count(self, status):
         """Tickets an Oompa-Loompa works on in this column. A blocked ticket with no running job uses no slot."""
         return sum(1 for k in self.live()
@@ -3046,6 +3106,7 @@ class Factory:
                      and _age(self.ticket(k)["job_started_at"]) > stale_after]
             awaiting = [k for k in self.live() if self.state(k)[1] == "awaiting"]
             awaiting += [k for k in self.live() if k not in awaiting and self._pre_baking(k) and self._blockers(k)[1]]
-            return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale}
+            return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale,
+                    "jira": self._list_jira_syncs()}
         finally:
             self._base_cache = None
