@@ -6030,6 +6030,20 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("jira_create", self.f_ticket(tid))
         self.assertIn("Jira create skipped", self.note(tid)[1])
 
+    def test_a_jira_key_set_by_hand_after_the_offer_is_kept(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        self.tick()
+        with self.f() as f:
+            f.set_field(tid, "jira", "CALC-9")
+        line = self.created(tid, key="CALC-7")
+        self.assertEqual(line, "Jira CALC-9: kept the key set by hand; CALC-7 created in CALC is not linked")
+        self.assertEqual(self.note(tid)[0]["jira"], "CALC-9")
+        self.assertIn(line, self.note(tid)[1])
+        self.assertNotIn("jira_create", self.f_ticket(tid))
+        res = self.tick()
+        self.assertEqual((res["jira_create"], res["jira"]), ([], []))
+
     def test_killing_a_ticket_drops_its_pending_jira_create(self):
         self.configure_jira_create()
         tid = self.add(create_jira=True)
