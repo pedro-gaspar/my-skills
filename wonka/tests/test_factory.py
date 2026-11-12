@@ -5874,6 +5874,84 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.path(tid)
 
+    # -- jira --
+
+    def synced(self, tid, action, **kw):
+        with self.f() as f:
+            return f.jira_synced(tid, action, **kw)
+
+    def start_offer(self, tid, key="CALC-42"):
+        return {"id": tid, "key": key, "action": "start", "status": "In Progress", "assign": True}
+
+    def test_starting_an_idea_with_a_jira_key_offers_the_start_sync_until_recorded(self):
+        tid = self.idea(jira="calc-42")
+        self.assertEqual(self.tick()["jira"], [])
+        self.tick_box(tid, "Start")
+        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
+        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
+        line = "Jira CALC-42: assigned to you and moved to In Progress"
+        self.assertEqual(self.synced(tid, "start"), line)
+        self.assertEqual(self.tick()["jira"], [])
+        self.assertIn(line, self.note(tid)[1])
+        self.assertEqual(self.synced(tid, "start"), f"{tid}: no Jira start sync pending, nothing to record")
+
+    def test_jira_start_sync_is_queued_only_for_keyed_tickets_entering_triage(self):
+        parent = self.add(jira="CALC-42")
+        self.assertEqual([o["id"] for o in self.tick()["jira"]], [parent], "added straight to triage")
+        self.synced(parent, "start")
+        cases = {
+            "idea with no key, started": lambda: self.tick_box(self.idea(), "Start"),
+            "child of a keyed ticket": lambda: self.add(parent=parent, start="triage"),
+            "keyed idea never started": lambda: self.idea(jira="CALC-43"),
+        }
+        for name, make in cases.items():
+            with self.subTest(name):
+                make()
+                self.assertEqual(self.tick()["jira"], [])
+
+    def test_an_invalid_jira_key_drops_the_sync_and_says_why(self):
+        tid = self.idea(jira="not a key")
+        self.tick_box(tid, "Start")
+        self.assertEqual(self.tick()["jira"], [])
+        self.assertNotIn("jira_sync", self.f_ticket(tid))
+        self.assertIn("Jira sync skipped: 'NOT A KEY' is not a Jira issue key", self.note(tid)[1])
+
+    def test_a_failed_jira_sync_is_logged_and_the_ticket_carries_on(self):
+        tid = self.add(jira="CALC-42")
+        before = self.f_ticket(tid)
+        line = self.synced(tid, "start", failed="no Atlassian MCP")
+        self.assertEqual(line, "Jira CALC-42: could not move to In Progress: no Atlassian MCP")
+        after = self.f_ticket(tid)
+        self.assertEqual((self.state(tid), after.get("retries"), after.get("stuck")),
+                         (("triage", "pending"), before.get("retries"), before.get("stuck")))
+        self.assertNotIn("jira_sync", after)
+        self.assertIn(line, self.note(tid)[1])
+
+    def test_opening_the_pr_offers_the_review_sync_once(self):
+        tid = self.add(jira="CALC-42")
+        self.synced(tid, "start")
+        self.to_awaiting_merge(tid)
+        review_offer = {"id": tid, "key": "CALC-42", "action": "review", "status": "In Review", "assign": False}
+        self.assertEqual(self.tick()["jira"], [review_offer])
+        self.assertEqual(self.synced(tid, "review"), "Jira CALC-42: moved to In Review")
+        job = [j for j in self.request_changes(tid, "again")["jobs"] if j["id"] == tid][0]
+        self.commit_and_bake(Path(job["worktree"]), "test.sh")
+        with self.f() as f:
+            f.baked(tid)
+        self.review(tid, architect={"verdict": "good nut"})
+        res = self.tick()
+        self.assertEqual(self.state(tid), ("shipped", "awaiting"))
+        self.assertNotIn("jira_sync", self.f_ticket(tid))
+        self.assertEqual(res["jira"], [])
+
+    def test_killing_a_ticket_drops_its_queued_jira_sync(self):
+        tid = self.add(jira="CALC-42")
+        self.assertIn("jira_sync", self.f_ticket(tid))
+        with self.f() as f:
+            f.move(tid, KILLED, "human")
+        self.assertNotIn("jira_sync", self.f_ticket(tid))
+        self.assertEqual(self.tick()["jira"], [])
+
     # -- a fixer that stopped after its rebase ------------------------------
 
     def test_fixer_that_stops_after_rebasing_is_reset_and_called_again(self):
@@ -5947,7 +6025,7 @@ class FactoryTest(unittest.TestCase):
         if by != "wonka" or final:
             out |= {"ci_stuck", "stuck", "retries"}
         if final:
-            out |= {"ci_fixes", "cleanup", "manual"}  # manual: added with wonka session, it ends with the ticket
+            out |= {"ci_fixes", "cleanup", "manual", "jira_sync"}  # manual: added with wonka session, it ends with the ticket
         if dst[1] == "ready":
             out.add("pr_base")
         if dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
