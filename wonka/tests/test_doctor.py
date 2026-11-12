@@ -134,12 +134,13 @@ class PermissionChecksTest(unittest.TestCase):
 
     def test_wonka_home_or_a_parent_in_additional_directories_warns(self):
         """Edit and Write could change the config and state; only the worktrees and factory folders belong there."""
-        with mock.patch.dict(os.environ, {"WONKA_HOME": "/tmp/wh/.wonka"}):
+        home = "/tmp/wh/.wonka"
+        with mock.patch.dict(os.environ, {"WONKA_HOME": home}):
             for d in ("/tmp/wh/.wonka", "/tmp/wh/.wonka/", "/tmp/wh", "/tmp", "/"):
                 with self.subTest(d=d):
                     result = list(doctor.permission_checks(self.AGENT, self.DIRS + [d], self.DIRS))
                     self.assertEqual([lv for lv, _ in result], ["ok", "warn"])
-                    self.assertIn("additionalDirectories lets Edit and Write change /tmp/wh/.wonka", result[1][1])
+                    self.assertIn(f"additionalDirectories lets Edit and Write change {Path(home).resolve()}", result[1][1])
                     self.assertIn(d, result[1][1])
             for d in ("/tmp/wh/.wonka/worktrees", "/tmp/wh/vault/wonka", "/tmp/other"):
                 with self.subTest(d=d):
