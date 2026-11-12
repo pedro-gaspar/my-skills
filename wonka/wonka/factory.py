@@ -3040,7 +3040,7 @@ class Factory:
 
     def _offer_jira_syncs(self, tid):
         t = self.ticket(tid)
-        key = note.one_line(self._jira_of(tid)).upper()
+        key = note.one_line(self.read(tid)[0].get("jira")).upper()
         if not JIRA_KEY.fullmatch(key):
             t.pop("jira_sync", None)
             self.log_event(tid, f"Jira sync skipped: {key!r} is not a Jira issue key" if key
