@@ -5916,6 +5916,18 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("jira_sync", self.f_ticket(tid))
         self.assertIn("Jira sync skipped: 'NOT A KEY' is not a Jira issue key", self.note(tid)[1])
 
+    def test_a_note_unreadable_for_one_tick_keeps_its_queued_jira_sync(self):
+        tid = self.add(jira="CALC-42")
+        path = self.f_path(tid)
+        saved = path.read_text()
+        path.unlink()
+        path.mkdir()
+        self.assertEqual(self.tick()["jira"], [])
+        self.assertEqual(self.f_ticket(tid)["jira_sync"], ["start"])
+        path.rmdir()
+        path.write_text(saved)
+        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
+
     def test_a_failed_jira_sync_is_logged_and_the_ticket_carries_on(self):
         tid = self.add(jira="CALC-42")
         before = self.f_ticket(tid)
