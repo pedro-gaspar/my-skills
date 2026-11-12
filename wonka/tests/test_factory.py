@@ -5920,8 +5920,8 @@ class FactoryTest(unittest.TestCase):
     def test_a_failed_jira_sync_is_logged_and_the_ticket_carries_on(self):
         tid = self.add(jira="CALC-42")
         before = self.f_ticket(tid)
-        line = self.synced(tid, "start", failed="no Atlassian MCP")
-        self.assertEqual(line, "Jira CALC-42: could not move to In Progress: no Atlassian MCP")
+        line = self.synced(tid, "start", failed="no access to ![x](https://e.x/p.png)")
+        self.assertEqual(line, "Jira CALC-42: could not move to In Progress: `no access to ![x](https://e.x/p.png)`")
         after = self.f_ticket(tid)
         self.assertEqual((self.state(tid), after.get("retries"), after.get("stuck")),
                          (("triage", "pending"), before.get("retries"), before.get("stuck")))
