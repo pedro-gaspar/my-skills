@@ -72,6 +72,7 @@ FLAG_LIFE = {
     # the scout checkout, removed by drop_scout(): no triage or draft job is left to read it anywhere else
     "scout": (frozenset({("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")}), False),
     "jira_sync": (_UNFINISHED, False),  # a killed or merged ticket never moves its Jira issue
+    "jira_create": (_UNFINISHED, False),  # a killed or merged ticket never gets a Jira issue
     "manual": (_UNFINISHED, False),  # a human works it in a Claude session until it is handed back, merged or killed
 }
 
@@ -880,7 +881,7 @@ class Factory:
     # -- intake -----------------------------------------------------------
 
     def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None,
-            spec_review=None, blocked_by=None, start="triage"):
+            spec_review=None, blocked_by=None, start="triage", create_jira=False):
         if not (idea or "").strip():
             raise WonkaError("the idea is empty: say what the ticket should build")
         if start not in machine.START:
@@ -889,10 +890,24 @@ class Factory:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
         if spec_review is not None and spec_review not in machine.SPEC_REVIEWS:
             raise WonkaError("spec_review must be agent or human")
+        if create_jira and jira:
+            raise WonkaError("pass --jira or --create-jira-ticket, not both")
+        if create_jira and parent:
+            raise WonkaError("a child takes its parent's Jira key: --create-jira-ticket is for top-level tickets")
         parent_t = self.ticket(parent) if parent else None  # fail before touching anything
         blocked_by = split_ids(blocked_by)
         self._check_blockers(None, blocked_by)
         top, base, origin = repo_info(repo or (parent_t and parent_t["repo"]) or os.getcwd())
+        project = Path(top).name
+        jira_create = None
+        if create_jira:
+            jira_project = (self.cfg.get("jira_project") or {}).get(project)
+            issue_type = (self.cfg.get("jira_issue_type") or {}).get(project)
+            commands = [f"wonka config {key}.{project} {example}" for key, value, example in
+                        (("jira_project", jira_project, "<KEY>"), ("jira_issue_type", issue_type, "<type>")) if not value]
+            if commands:
+                raise WonkaError(f"no Jira project or issue type for {project}: run " + " and ".join(commands))
+            jira_create = {"project": jira_project, "type": issue_type}
         if parent_t:
             # A child defaults to its parent's repo, PR target and Jira key. The PR target only
             # carries over when the child builds in the parent's repo; elsewhere it means nothing.
@@ -913,7 +928,7 @@ class Factory:
         meta["status"], meta["phase"] = machine.label(state)
         store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
-            "project": Path(top).name, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
+            "project": project, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
             "review_round": 0, "parent": parent, "children": [], "blocked_by": blocked_by,
             "last_valid": {"status": state[0], "phase": state[1]},
@@ -923,6 +938,8 @@ class Factory:
             parent_t["children"].append(tid)
         if start == "triage" and parent is None:
             _queue_jira_sync(self.db["tickets"][tid], meta, "start")
+        if jira_create:
+            self.db["tickets"][tid]["jira_create"] = jira_create
         body = note.set_section("", "idea", mdlint.guard(idea))
         if start == "idea":
             body = note.set_section(body, "start", note.START_BOX)
@@ -3032,6 +3049,56 @@ class Factory:
         return [{"id": tid, "key": key, "action": action, "status": JIRA_SYNCS[action][0],
                  "assign": JIRA_SYNCS[action][1]} for action in t["jira_sync"]]
 
+    def jira_created(self, tid, key=None, failed=None):
+        """The manager's report on a Jira issue from the tick's jira_create list: the new key goes into the note, or
+        the failure is logged and the create dropped."""
+        if (key is None) == (failed is None):
+            raise WonkaError("pass exactly one of --key or --failed")
+        t = self.ticket(tid)
+        pending = t.get("jira_create")
+        if not pending:
+            return f"{tid}: no Jira create pending, nothing to record"
+        project = pending["project"]
+        if failed is not None:
+            why = " ".join(str(failed).split())
+            why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+            t.pop("jira_create", None)
+            line = f"Jira issue not created in {project}: {why}"
+            self.log_event(tid, line)
+            return line
+        key = note.one_line(key).upper()
+        if not JIRA_KEY.fullmatch(key):
+            raise WonkaError(f"{key!r} is not a Jira issue key like {project}-1")
+        t.pop("jira_create", None)
+        meta, body = self.read(tid)
+        meta["jira"] = key
+        self.write(tid, meta, body)
+        if self.state(tid)[0] != "idea":
+            _queue_jira_sync(t, meta, "start")
+        line = f"Jira {key}: created in {project}"
+        self.log_event(tid, line)
+        return line
+
+    def _list_jira_creates(self):
+        creates = []
+        for k in self.live():
+            if self.ticket(k).get("jira_create"):
+                out = self._safe(k, self._offer_jira_create)
+                if isinstance(out, list):
+                    creates += out
+        return creates
+
+    def _offer_jira_create(self, tid):
+        t = self.ticket(tid)
+        meta, body = self.read(tid)
+        key = note.one_line(meta.get("jira"))
+        if key:
+            t.pop("jira_create", None)
+            self.log_event(tid, f"Jira create skipped: the ticket already has {key}")
+            return []
+        return [{"id": tid, "project": t["jira_create"]["project"], "type": t["jira_create"]["type"],
+                 "summary": meta["title"], "description": note.get_section(body, "idea") or ""}]
+
     def _count(self, status):
         """Tickets an Oompa-Loompa works on in this column. A blocked ticket with no running job uses no slot."""
         return sum(1 for k in self.live()
@@ -3107,6 +3174,6 @@ class Factory:
             awaiting = [k for k in self.live() if self.state(k)[1] == "awaiting"]
             awaiting += [k for k in self.live() if k not in awaiting and self._pre_baking(k) and self._blockers(k)[1]]
             return {"events": events, "jobs": jobs, "awaiting_human": awaiting, "stale": stale,
-                    "jira": self._list_jira_syncs()}
+                    "jira": self._list_jira_syncs(), "jira_create": self._list_jira_creates()}
         finally:
             self._base_cache = None

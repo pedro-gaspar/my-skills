@@ -5,6 +5,7 @@ import io
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -5952,6 +5953,91 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("jira_sync", self.f_ticket(tid))
         self.assertEqual(self.tick()["jira"], [])
 
+    def configure_jira_create(self, project="CALC", issue_type="Task"):
+        self.cfg["jira_project"] = {"app": project} if project else {}
+        self.cfg["jira_issue_type"] = {"app": issue_type} if issue_type else {}
+
+    def created(self, tid, **kw):
+        with self.f() as f:
+            return f.jira_created(tid, **kw)
+
+    def test_create_jira_ticket_is_offered_until_created_then_the_key_and_start_sync_follow(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        offer = {"id": tid, "project": "CALC", "type": "Task", "summary": "Add a hello script",
+                 "description": "Add a hello script"}
+        self.assertEqual(self.tick()["jira_create"], [offer])
+        self.assertEqual(self.tick()["jira_create"], [offer])
+        self.assertEqual(self.created(tid, key="calc-7"), "Jira CALC-7: created in CALC")
+        self.assertEqual(self.note(tid)[0]["jira"], "CALC-7")
+        res = self.tick()
+        self.assertEqual((res["jira_create"], res["jira"]), ([], [self.start_offer(tid, "CALC-7")]))
+        self.assertEqual(self.created(tid, key="CALC-8"), f"{tid}: no Jira create pending, nothing to record")
+
+    def test_a_created_key_on_an_idea_waits_for_start(self):
+        self.configure_jira_create()
+        tid = self.idea(create_jira=True)
+        self.created(tid, key="CALC-7")
+        self.assertEqual(self.tick()["jira"], [])
+        self.tick_box(tid, "Start")
+        self.assertEqual(self.tick()["jira"], [self.start_offer(tid, "CALC-7")])
+
+    def test_create_jira_ticket_is_refused(self):
+        cases = {
+            "with --jira": (dict(jira="CALC-1"), "CALC", "Task", "not both"),
+            "with --parent": (None, "CALC", "Task", "takes its parent's Jira key"),
+            "no jira_project": ({}, None, "Task", "wonka config jira_project.app <KEY>"),
+            "no jira_issue_type": ({}, "CALC", None, "wonka config jira_issue_type.app <type>"),
+        }
+        for name, (kw, project, issue_type, message) in cases.items():
+            with self.subTest(name):
+                self.configure_jira_create(project, issue_type)
+                if kw is None:
+                    kw = dict(parent=self.add())
+                before = self.f_ticket(kw["parent"]) if "parent" in kw else None
+                with self.f() as f:
+                    next_id = f.db["next_id"]
+                with self.assertRaisesRegex(WonkaError, re.escape(message)):
+                    self.add(create_jira=True, **kw)
+                with self.f() as f:
+                    self.assertEqual(f.db["next_id"], next_id)
+                if before is not None:
+                    self.assertEqual(self.f_ticket(kw["parent"])["children"], before["children"])
+
+    def test_a_failed_jira_create_is_logged_and_dropped(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        line = self.created(tid, failed="no Atlassian MCP")
+        self.assertEqual(line, "Jira issue not created in CALC: no Atlassian MCP")
+        self.assertNotIn("jira_create", self.f_ticket(tid))
+        self.assertEqual((self.note(tid)[0]["jira"], self.state(tid)), ("", ("triage", "pending")))
+        self.assertIn(line, self.note(tid)[1])
+        self.assertEqual(self.tick()["jira_create"], [])
+
+    def test_jira_created_refuses_a_bad_key_and_keeps_the_offer(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        with self.assertRaises(WonkaError):
+            self.created(tid, key="not a key")
+        self.assertEqual([o["id"] for o in self.tick()["jira_create"]], [tid])
+
+    def test_a_jira_key_set_by_hand_skips_the_create(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        with self.f() as f:
+            f.set_field(tid, "jira", "CALC-9")
+        self.assertEqual(self.tick()["jira_create"], [])
+        self.assertNotIn("jira_create", self.f_ticket(tid))
+        self.assertIn("Jira create skipped", self.note(tid)[1])
+
+    def test_killing_a_ticket_drops_its_pending_jira_create(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        with self.f() as f:
+            f.move(tid, KILLED, "human")
+        self.assertNotIn("jira_create", self.f_ticket(tid))
+        self.assertEqual(self.tick()["jira_create"], [])
+
     # -- a fixer that stopped after its rebase ------------------------------
 
     def test_fixer_that_stops_after_rebasing_is_reset_and_called_again(self):
@@ -6025,7 +6111,7 @@ class FactoryTest(unittest.TestCase):
         if by != "wonka" or final:
             out |= {"ci_stuck", "stuck", "retries"}
         if final:
-            out |= {"ci_fixes", "cleanup", "manual", "jira_sync"}  # manual: added with wonka session, it ends with the ticket
+            out |= {"ci_fixes", "cleanup", "manual", "jira_sync", "jira_create"}  # manual: added with wonka session, it ends with the ticket
         if dst[1] == "ready":
             out.add("pr_base")
         if dst not in (("triage", "pending"), ("drafting", "pending"), ("drafting", "progress")):
