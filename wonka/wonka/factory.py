@@ -3051,7 +3051,7 @@ class Factory:
 
     def jira_created(self, tid, key=None, failed=None):
         """The manager's report on a Jira issue from the tick's jira_create list: the new key goes into the note, or
-        the failure is logged and the create dropped."""
+        the failure is logged and the create dropped. A key set by hand meanwhile wins; the new key is only logged."""
         if (key is None) == (failed is None):
             raise WonkaError("pass exactly one of --key or --failed")
         t = self.ticket(tid)
@@ -3071,6 +3071,11 @@ class Factory:
             raise WonkaError(f"{key!r} is not a Jira issue key like {project}-1")
         t.pop("jira_create", None)
         meta, body = self.read(tid)
+        kept = note.one_line(meta.get("jira") or "").upper()
+        if kept and kept != key:
+            line = f"Jira {kept}: kept the key set by hand; {key} created in {project} is not linked"
+            self.log_event(tid, line)
+            return line
         meta["jira"] = key
         self.write(tid, meta, body)
         if self.state(tid)[0] != "idea":
