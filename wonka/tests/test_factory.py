@@ -5980,11 +5980,37 @@ class FactoryTest(unittest.TestCase):
                  "description": "Add a hello script"}
         self.assertEqual(self.tick()["jira_create"], [offer])
         self.assertEqual(self.tick()["jira_create"], [offer])
-        self.assertEqual(self.created(tid, key="calc-7"), "Jira CALC-7: created in CALC")
+        line = self.created(tid, key="calc-7")
+        self.assertEqual(line, "Jira CALC-7: created in CALC and assigned to you; move it from the backlog to the board")
+        self.assertIn(line, self.note(tid)[1])
         self.assertEqual(self.note(tid)[0]["jira"], "CALC-7")
         res = self.tick()
         self.assertEqual((res["jira_create"], res["jira"]), ([], [self.start_offer(tid, "CALC-7")]))
         self.assertEqual(self.created(tid, key="CALC-8"), f"{tid}: no Jira create pending, nothing to record")
+
+    def test_a_created_issue_that_could_not_be_assigned_keeps_the_key_and_says_why(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        line = self.created(tid, key="CALC-7", not_assigned="no permission")
+        self.assertEqual(line, "Jira CALC-7: created in CALC, not assigned to you: `no permission`; "
+                               "move it from the backlog to the board")
+        self.assertIn(line, self.note(tid)[1])
+        self.assertEqual(self.note(tid)[0]["jira"], "CALC-7")
+        self.assertEqual(self.tick()["jira"], [self.start_offer(tid, "CALC-7")])
+
+    def test_a_not_assigned_reason_is_cut_and_flattened_to_one_line(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        line = self.created(tid, key="CALC-7", not_assigned="no\npermission " + "x" * 300)
+        self.assertNotIn("\n", line)
+        self.assertIn("`no permission " + "x" * 185 + "…`", line)
+
+    def test_not_assigned_without_a_key_is_refused_and_keeps_the_offer(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        with self.assertRaisesRegex(WonkaError, "--not-assigned needs --key"):
+            self.created(tid, failed="no MCP", not_assigned="no permission")
+        self.assertEqual([o["id"] for o in self.tick()["jira_create"]], [tid])
 
     def test_a_created_key_on_an_idea_waits_for_start(self):
         self.configure_jira_create()

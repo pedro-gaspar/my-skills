@@ -202,7 +202,7 @@ def run(a, f):
             print(f"🎫 {tid} has a golden ticket! It's a 💡 Idea: tick Start or drag it to 📏 Triage when it's ready: "
                   f"{f.path(tid)}{jira_note}")
     elif c == "jira-created":
-        print(f.jira_created(a.id, a.key, a.failed))
+        print(f.jira_created(a.id, a.key, a.failed, a.not_assigned))
     elif c == "block":
         f.block(a.id, a.blockers)
         print(f.summary(a.id))
@@ -471,6 +471,8 @@ def parser():
     group = s.add_mutually_exclusive_group(required=True)
     group.add_argument("--key", help="the new issue's key, e.g. CALC-7")
     group.add_argument("--failed", metavar="WHY", help="the create failed: logged on the ticket, which carries on")
+    s.add_argument("--not-assigned", metavar="WHY", help="the issue was created but could not be assigned to you: "
+                                                         "logged on the ticket, with the key kept")
     s = sub.add_parser("move", help="a manual move, still checked by the state machine")
     s.add_argument("id")
     s.add_argument("status")

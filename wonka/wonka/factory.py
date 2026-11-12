@@ -417,6 +417,11 @@ def _push_rejected(err):
 _REASON_MAX = 200  # retry() cuts longer reasons, which would lose the closing "then tick Retry"
 
 
+def _one_line_reason(why):
+    why = " ".join(str(why).split())
+    return why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+
+
 def _push_rejected_reason(branch):
     """What to do after a rejected push. Names the branch when it fits in _REASON_MAX, else uses the
     current-branch form of the same command (the worktree is on that branch)."""
@@ -2893,8 +2898,7 @@ class Factory:
         retries = t.get("retries", 0) + 1
         if final:
             retries = max(retries, MAX_RETRIES)
-        why = " ".join(str(why).split())
-        why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+        why = _one_line_reason(why)
         if s == ("shipped", "progress") and t.get("conflicts"):
             self._undo_fixer(tid)  # before move() drops fix_head
         if s[1] == "progress":
@@ -3021,8 +3025,7 @@ class Factory:
         status, assigned = JIRA_SYNCS[action]
         key = (note.one_line(self._jira_of(tid)) or "-").upper()
         if failed is not None:
-            why = " ".join(str(failed).split())
-            why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+            why = _one_line_reason(failed)
             line = f"Jira {key}: could not move to {status}: {note.code_span(why)}"
         else:
             line = f"Jira {key}: " + ("assigned to you and " if assigned else "") + f"moved to {status}"
@@ -3049,21 +3052,21 @@ class Factory:
         return [{"id": tid, "key": key, "action": action, "status": JIRA_SYNCS[action][0],
                  "assign": JIRA_SYNCS[action][1]} for action in t["jira_sync"]]
 
-    def jira_created(self, tid, key=None, failed=None):
+    def jira_created(self, tid, key=None, failed=None, not_assigned=None):
         """The manager's report on a Jira issue from the tick's jira_create list: the new key goes into the note, or
         the failure is logged and the create dropped. A key set by hand meanwhile wins; the new key is only logged."""
         if (key is None) == (failed is None):
             raise WonkaError("pass exactly one of --key or --failed")
+        if not_assigned is not None and key is None:
+            raise WonkaError("--not-assigned needs --key")
         t = self.ticket(tid)
         pending = t.get("jira_create")
         if not pending:
             return f"{tid}: no Jira create pending, nothing to record"
         project = pending["project"]
         if failed is not None:
-            why = " ".join(str(failed).split())
-            why = why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
             t.pop("jira_create", None)
-            line = f"Jira issue not created in {project}: {why}"
+            line = f"Jira issue not created in {project}: {_one_line_reason(failed)}"
             self.log_event(tid, line)
             return line
         key = note.one_line(key).upper()
@@ -3080,7 +3083,11 @@ class Factory:
         self.write(tid, meta, body)
         if self.state(tid)[0] != "idea":
             _queue_jira_sync(t, meta, "start")
-        line = f"Jira {key}: created in {project}"
+        if not_assigned is None:
+            line = f"Jira {key}: created in {project} and assigned to you; move it from the backlog to the board"
+        else:
+            line = (f"Jira {key}: created in {project}, not assigned to you: "
+                    f"{note.code_span(_one_line_reason(not_assigned))}; move it from the backlog to the board")
         self.log_event(tid, line)
         return line
 
