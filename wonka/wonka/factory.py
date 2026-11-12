@@ -579,6 +579,7 @@ NOTIFIERS = ("notify-send", "terminal-notifier", "osascript")  # Linux; macOS wi
 # macOS's built-in notifier: the text goes in as arguments, never into the AppleScript source
 _OSASCRIPT = ["osascript", "-e", "on run argv", "-e",
               "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run"]
+PING_IMAGE = Path(__file__).resolve().parent / "wonka.png"
 _QUIET = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
 
 
@@ -587,9 +588,10 @@ def notifier():
     return next((n for n in NOTIFIERS if shutil.which(n)), None)
 
 
-def _ping(title, body, url=None, urgent=False):
-    """Ping the desktop with whatever notifier this machine has. With a url, clicking opens it (notify-send waits
-    detached, never blocks; osascript cannot open anything, so there the click does nothing)."""
+def _ping(title, body, url=None, link="PR", urgent=False):
+    """Ping the desktop with whatever notifier this machine has. With a url, clicking opens it (the PR or the
+    ticket's note; notify-send waits detached, never blocks; osascript cannot open anything, so there the click
+    does nothing)."""
     if os.environ.get("WONKA_NO_NOTIFY"):
         return
     tool = notifier()
@@ -599,14 +601,15 @@ def _ping(title, body, url=None, urgent=False):
             if not url:
                 subprocess.run(cmd, check=False)
                 return
-            cmd[-1] += "\nClick to open the PR"
-            cmd += ["-A", "default=Open PR"]
+            cmd[-1] += f"\nClick to open the {link}"
+            cmd += ["-A", f"default=Open {link}"]
             opener = os.environ.get("WONKA_OPEN", "xdg-open")
             subprocess.Popen(["sh", "-c", _OPEN_ON_CLICK, "wonka-notify", url, opener, *cmd], **_QUIET,
                              start_new_session=True)
         elif tool == "terminal-notifier":
             cmd = ["terminal-notifier", "-title", "Wonka", "-subtitle", title,
-                   "-message", body + ("\nClick to open the PR" if url else "")]
+                   "-message", body + (f"\nClick to open the {link}" if url else ""),
+                   "-contentImage", str(PING_IMAGE)]
             cmd += (["-open", url] if url else []) + (["-sound", "default"] if urgent else [])
             subprocess.run(cmd, check=False, **_QUIET)
         elif tool == "osascript":
@@ -615,9 +618,10 @@ def _ping(title, body, url=None, urgent=False):
         pass
 
 
-def notify(tid, title, url=None):
-    """Ping the desktop when a ticket needs a human. With a url, clicking the notification opens it."""
-    _ping("🎩 Wonka needs you", f"{tid} — {title}", url)
+def notify(tid, title, note, pr_url=None):
+    """Ping the desktop when a ticket needs a human. Clicking the notification opens the PR when there is one,
+    else the ticket's note."""
+    _ping("🎩 Wonka needs you", f"{tid} — {title}", pr_url or note.resolve().as_uri(), "PR" if pr_url else "note")
 
 
 def alert(message):
@@ -766,7 +770,7 @@ class Factory:
         for b in fresh:
             why = f"⛓️ blocked by {b}, which is Won't do: needs a human (wonka unblock {tid} {b}, or kill it)"
             self.log_event(tid, why)
-            notify(tid, f"blocked by {b}, which is Won't do: unblock or kill it")
+            notify(tid, f"blocked by {b}, which is Won't do: unblock or kill it", self.path(tid))
             events.append(f"{tid}: {why}")
         return events
 
@@ -881,7 +885,8 @@ class Factory:
         if "scout" in cleared and t.get("scout"):
             self.drop_scout(tid)
         if dst[1] == "awaiting" and not (t.get("manual") and by == "human"):  # a human's own step needs no ping
-            notify(tid, meta.get("title", ""), t.get("pr_url") if dst == ("shipped", "awaiting") else None)
+            notify(tid, meta.get("title", ""), self.path(tid),
+                   pr_url=t.get("pr_url") if dst == ("shipped", "awaiting") else None)
 
     # -- intake -----------------------------------------------------------
 
@@ -1922,7 +1927,7 @@ class Factory:
             t["stuck"] = t["ci_stuck"] = True
             self.set_section(tid, "stuck", f"- [ ] Retry ({_ci_stuck_reason(n, red)}. See ~/.wonka/factory.log)")
             self.log_event(tid, f"CI is still red on {head[:7]} after {n} CI fix rounds in a row: stuck, needs a human")
-            notify(tid, "stuck: tick Retry when it's fixed")
+            notify(tid, "stuck: tick Retry when it's fixed", self.path(tid))
             return None
         return head, red
 
@@ -2725,7 +2730,7 @@ class Factory:
                                            f"reports the PR as conflicting with `{base}`: check the PR's base "
                                            "branch on GitHub or fix the conflicts by hand. See ~/.wonka/factory.log)")
             self.log_event(tid, f"The PR is still conflicting after {fixes} conflict fixes: stuck, needs a human")
-            notify(tid, "stuck: tick Retry when it's fixed")
+            notify(tid, "stuck: tick Retry when it's fixed", self.path(tid))
             return f"{tid}: stuck, PR still conflicting after {fixes} conflict fixes"
         t["conflicts"] = True
         self.log_event(tid, "The PR has merge conflicts: a fixer Oompa-Loompa is called")
@@ -2958,7 +2963,7 @@ class Factory:
         t["stuck"] = True
         failed = "" if final else f"{retries} tries failed, the last one: "
         self.set_section(tid, "stuck", f"- [ ] Retry ({failed}{why}. See ~/.wonka/factory.log)")
-        notify(tid, "stuck: tick Retry when it's fixed")
+        notify(tid, "stuck: tick Retry when it's fixed", self.path(tid))
         return retries, True
 
     def finished(self, tid, agent, dispatch=None):

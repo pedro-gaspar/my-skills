@@ -2779,29 +2779,23 @@ class FactoryTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_notify_without_url_runs_notify_send_once(self):
+    def test_notify_waits_for_a_click_in_the_background(self):
         self.notify_env()
         self.on("notify-send")
-        with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
-            factory.notify("WONKA-00001", "Hi")
-        run.assert_called_once_with(["notify-send", "-a", "Wonka", "🎩 Wonka needs you", "WONKA-00001 — Hi"], check=False)
-        popen.assert_not_called()
-
-    def test_notify_with_url_waits_for_a_click_in_the_background(self):
-        self.notify_env()
-        self.on("notify-send")
-        url = "https://x/pull/7"
-        with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
-            factory.notify("WONKA-00001", "Hi", url)
-        run.assert_not_called()
-        popen.assert_called_once()
-        argv, kwargs = popen.call_args.args[0], popen.call_args.kwargs
-        self.assertEqual(argv[:2], ["sh", "-c"])
-        self.assertNotIn(url, argv[2], "the URL is an argument, not part of the script")
-        self.assertIn(url, argv[3:])
-        i = argv.index("-A")
-        self.assertEqual(argv[i + 1], "default=Open PR")
-        self.assertTrue(kwargs["start_new_session"])
+        note = self.tmp / "WONKA-00001.md"
+        for link, pr_url, url in (("PR", "https://x/pull/7", "https://x/pull/7"),
+                                  ("note", None, note.resolve().as_uri())):
+            with self.subTest(link=link), mock.patch.object(factory.subprocess, "run") as run, \
+                    mock.patch.object(factory.subprocess, "Popen") as popen:
+                factory.notify("WONKA-00001", "Hi", note, pr_url=pr_url)
+                run.assert_not_called()
+                popen.assert_called_once()
+                argv, kwargs = popen.call_args.args[0], popen.call_args.kwargs
+                self.assertEqual(argv[:2], ["sh", "-c"])
+                self.assertNotIn(url, argv[2], "the URL is an argument, not part of the script")
+                self.assertIn(url, argv[3:])
+                self.assertEqual(argv[argv.index("-A") + 1], f"default=Open {link}")
+                self.assertTrue(kwargs["start_new_session"])
 
     def test_alert_is_urgent(self):
         self.notify_env()
@@ -2815,20 +2809,32 @@ class FactoryTest(unittest.TestCase):
         self.notify_env()
         self.on("terminal-notifier")
         with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
-            factory.notify("WONKA-00001", "Hi", "https://x/pull/7")
+            factory.notify("WONKA-00001", "Hi", self.tmp / "WONKA-00001.md", pr_url="https://x/pull/7")
         popen.assert_not_called()
         argv = run.call_args.args[0]
         self.assertEqual(argv[0], "terminal-notifier")
+        self.assertEqual(argv[argv.index("-contentImage") + 1], str(factory.PING_IMAGE))
+        self.assertTrue(factory.PING_IMAGE.is_file())
         self.assertEqual(argv[argv.index("-open") + 1], "https://x/pull/7")
         self.assertEqual(argv[argv.index("-message") + 1], "WONKA-00001 — Hi\nClick to open the PR")
         self.assertEqual(argv[argv.index("-subtitle") + 1], "🎩 Wonka needs you")
+
+    def test_macos_terminal_notifier_opens_the_note_without_a_pr(self):
+        self.notify_env()
+        self.on("terminal-notifier")
+        note = self.tmp / "WONKA-00001.md"
+        with mock.patch.object(factory.subprocess, "run") as run:
+            factory.notify("WONKA-00001", "Hi", note)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index("-open") + 1], note.resolve().as_uri())
+        self.assertEqual(argv[argv.index("-message") + 1], "WONKA-00001 — Hi\nClick to open the note")
 
     def test_macos_osascript_passes_the_text_as_arguments(self):
         self.notify_env()
         self.on("osascript")
         title = 'Hi" & (do shell script "touch /tmp/pwned") & "'
         with mock.patch.object(factory.subprocess, "run") as run:
-            factory.notify("WONKA-00001", title, "https://x/pull/7")
+            factory.notify("WONKA-00001", title, self.tmp / "WONKA-00001.md", pr_url="https://x/pull/7")
         argv = run.call_args.args[0]
         self.assertEqual(argv[:len(factory._OSASCRIPT)], factory._OSASCRIPT)
         self.assertEqual(argv[len(factory._OSASCRIPT):], ["🎩 Wonka needs you", f"WONKA-00001 — {title}"])
@@ -2838,7 +2844,7 @@ class FactoryTest(unittest.TestCase):
         self.notify_env()
         self.on(None)
         with mock.patch.object(factory.subprocess, "run") as run, mock.patch.object(factory.subprocess, "Popen") as popen:
-            factory.notify("WONKA-00001", "Hi", "https://x/pull/7")
+            factory.notify("WONKA-00001", "Hi", self.tmp / "WONKA-00001.md", pr_url="https://x/pull/7")
             factory.alert("stopped")
         run.assert_not_called()
         popen.assert_not_called()
@@ -2869,7 +2875,7 @@ class FactoryTest(unittest.TestCase):
         opened = self.fake_notify("#!/bin/sh\necho default\n")
         url = "https://github.com/acme/app/pull/7"
         pwned = self.tmp / "pwned"
-        factory.notify("WONKA-00001", f"Hi; $(touch {pwned})", url)
+        factory.notify("WONKA-00001", f"Hi; $(touch {pwned})", self.tmp / "WONKA-00001.md", pr_url=url)
         deadline = time.monotonic() + 5
         while not opened.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -2881,7 +2887,7 @@ class FactoryTest(unittest.TestCase):
         opened = self.fake_notify("#!/bin/sh\nexit 0\n")
         procs, popen = [], factory.subprocess.Popen
         with mock.patch.object(factory.subprocess, "Popen", lambda *a, **kw: procs.append(popen(*a, **kw)) or procs[-1]):
-            factory.notify("WONKA-00001", "Hi", "https://github.com/acme/app/pull/7")
+            factory.notify("WONKA-00001", "Hi", self.tmp / "WONKA-00001.md", pr_url="https://github.com/acme/app/pull/7")
         self.assertEqual(len(procs), 1)
         self.assertEqual(procs[0].wait(5), 1, "the click handler ends without exec'ing the opener")
         self.assertFalse(opened.exists())
@@ -2890,11 +2896,14 @@ class FactoryTest(unittest.TestCase):
         tid = self.add()
         with mock.patch.object(factory, "notify") as n:
             self.to_awaiting_merge(tid)
-        calls = [c.args for c in n.call_args_list if c.args[0] == tid]
-        self.assertEqual(calls[-1], (tid, "Add a hello script", "https://github.com/acme/app/pull/7"))
-        self.assertTrue(all(c[2] is None for c in calls[:-1]))
+        with self.f() as f:
+            note = f.path(tid)
+        calls = [c for c in n.call_args_list if c.args[0] == tid]
+        self.assertEqual(calls[-1], mock.call(tid, "Add a hello script", note,
+                                              pr_url="https://github.com/acme/app/pull/7"))
+        self.assertTrue(all(c.kwargs["pr_url"] is None for c in calls[:-1]))
 
-    def test_other_awaiting_notifications_have_no_url(self):
+    def test_other_awaiting_notifications_open_the_note(self):
         tid = self.add()
         self.tick()
         with self.f() as f:
@@ -2903,7 +2912,9 @@ class FactoryTest(unittest.TestCase):
             with self.f() as f:
                 f.triage(tid, "m", questions=[{"q": "Bash or Python?", "options": ["Bash", "Python"]}])
         self.assertEqual(self.state(tid), ("triage", "awaiting"))
-        n.assert_called_once_with(tid, "Add a hello script", None)
+        with self.f() as f:
+            note = f.path(tid)
+        n.assert_called_once_with(tid, "Add a hello script", note, pr_url=None)
 
     def test_one_unreadable_note_does_not_block_other_tickets(self):
         a = self.add("Add a hello script")
