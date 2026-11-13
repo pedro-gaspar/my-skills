@@ -213,7 +213,7 @@ class FactoryTest(unittest.TestCase):
         later = factory.now() + dt.timedelta(days=8)
         with mock.patch.object(factory, "now", lambda: later):
             self.assertIn(f"{tid}: archived", self.tick()["events"])
-        archive = Path(self.cfg["vault"]) / "wonka/archive"
+        archive = Path(self.cfg["vault"]) / "wonka/archive/shipped"
         self.assertTrue((archive / f"{tid}.md").exists())
         self.assertTrue((archive / f"{tid}-plan.md").exists(), "plans are archived with their tickets")
         self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-plan.md").exists())
@@ -468,7 +468,7 @@ class FactoryTest(unittest.TestCase):
         later = factory.now() + dt.timedelta(days=8)
         with mock.patch.object(factory, "now", lambda: later):
             self.tick()
-        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive" / f"{tid}-pr.md").exists())
+        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive/shipped" / f"{tid}-pr.md").exists())
         self.assertFalse((Path(self.cfg["vault"]) / "wonka/plans" / f"{tid}-pr.md").exists())
 
     def test_first_ship_never_takes_over_a_pr_opened_by_hand(self):
@@ -5261,7 +5261,7 @@ class FactoryTest(unittest.TestCase):
         self.assertTrue(t["archived"])
         self.assertNotIn("lost", t)
         self.assertFalse(plan.exists())
-        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive" / plan.name).exists())
+        self.assertTrue((Path(self.cfg["vault"]) / "wonka/archive/shipped" / plan.name).exists())
         with self.f() as f:
             self.assertEqual(f.waiting_on(blocked), [])
         self.assertEqual(self.tick()["events"], [], "nothing more to do")
@@ -5903,6 +5903,54 @@ class FactoryTest(unittest.TestCase):
     def f_path(self, tid):
         with self.f() as f:
             return f.path(tid)
+
+    # -- archive --
+
+    def archive(self):
+        with self.f() as f:
+            return f.archive_all()
+
+    def test_archive_moves_merged_and_wont_do_tickets_now_and_leaves_the_rest(self):
+        merged, open_pr, killed, live = self.add(), self.add("Open PR"), self.add("Killed"), self.add("Live")
+        self.to_awaiting_merge(merged)
+        self.merge(merged)
+        with self.f() as f:
+            f.ticket(open_pr)["last_valid"] = {"status": "shipped", "phase": "awaiting"}
+            f.move(killed, KILLED, "human")
+            plan = f.plan_path(merged)
+        self.assertEqual(self.archive(), [f"{merged}: archived to archive/shipped",
+                                          f"{killed}: archived to archive/wont-do"])
+        archive = Path(self.cfg["vault"]) / "wonka/archive"
+        self.assertTrue((archive / "shipped" / f"{merged}.md").exists())
+        self.assertTrue((archive / "shipped" / plan.name).exists(), "the plan goes with its ticket")
+        self.assertTrue((archive / "wont-do" / f"{killed}.md").exists())
+        self.assertFalse(plan.exists())
+        with self.f() as f:
+            self.assertEqual(f.live(), [open_pr, live], "an open PR and a live ticket stay on the board")
+            self.assertEqual(f.read(merged)[0]["id"], merged, "an archived note is still found")
+        self.assertEqual(self.archive(), [])
+
+    def test_archive_skips_a_killed_ticket_whose_agent_is_still_at_work(self):
+        tid = self.add()
+        with self.f() as f:
+            f.move(tid, KILLED, "human")
+            f.ticket(tid)["job_started_at"] = "2026-01-01T00:00:00+00:00"
+        self.assertEqual(self.archive(), [f"{tid}: skipped, an agent is still at work on it"])
+        self.assertFalse(self.f_ticket(tid).get("archived"))
+
+    def test_tick_moves_tickets_archived_flat_into_their_folder(self):
+        tid = self.add()
+        with self.f() as f:
+            f.move(tid, KILLED, "human")
+            flat = store.archive_dir(self.cfg)
+            flat.mkdir(parents=True, exist_ok=True)
+            shutil.move(f.path(tid), flat / f"{tid}.md")
+            (flat / f"{tid}-plan.md").write_text("# plan\n")
+            f.ticket(tid).update(archived=True, plan=str(flat / f"{tid}-plan.md"))
+        self.assertIn("archive: 1 archived tickets moved into archive/shipped and archive/wont-do", self.tick()["events"])
+        self.assertTrue((flat / "wont-do" / f"{tid}.md").exists())
+        self.assertEqual(self.f_ticket(tid)["plan"], str(flat / "wont-do" / f"{tid}-plan.md"))
+        self.assertFalse([e for e in self.tick()["events"] if e.startswith("archive:")], "moved once")
 
     # -- priority --
 

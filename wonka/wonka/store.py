@@ -385,6 +385,9 @@ def archive_dir(cfg):
     return board(cfg) / "archive"
 
 
+ARCHIVE_FOLDERS = {"shipped": "shipped", "wontdo": "wont-do"}  # how a ticket ended -> its folder in the archive
+
+
 def worktrees_dir():
     return home() / "worktrees"
 
