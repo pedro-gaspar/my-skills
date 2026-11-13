@@ -25,8 +25,8 @@ CI_RED = frozenset({"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"
 CI_LOG_LINES = 150  # lines of each failed Actions log that go into the plan
 CI_LOG_RUNS = 3  # Actions runs whose logs are fetched per round
 JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
-# action -> (the Jira status it moves the issue to, whether the issue is assigned to the user first)
-JIRA_SYNCS = {"start": ("In Progress", True), "review": ("In Review", False)}
+# action -> (the Jira status it moves the issue to, or None to keep it, whether the issue is assigned to the user)
+JIRA_SYNCS = {"assign": (None, True), "start": ("In Progress", False), "review": ("In Review", False)}
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("triage", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
@@ -859,6 +859,8 @@ class Factory:
         for k in cleared - {"scout"}:  # the scout is a checkout: drop_scout() removes it below
             t.pop(k, None)
         if src[0] == "idea" and dst[0] == "triage":
+            _queue_jira_sync(t, meta, "assign")
+        if src[0] == "triage" and dst[0] == "drafting":  # a redraft after review finds the issue already In Progress
             _queue_jira_sync(t, meta, "start")
         if final:
             t["entered_done_at"] = _iso(now())
@@ -947,7 +949,7 @@ class Factory:
         if parent_t:
             parent_t["children"].append(tid)
         if start == "triage" and parent is None:
-            _queue_jira_sync(self.db["tickets"][tid], meta, "start")
+            _queue_jira_sync(self.db["tickets"][tid], meta, "assign")
         if jira_create:
             self.db["tickets"][tid]["jira_create"] = jira_create
         body = note.set_section("", "idea", mdlint.guard(idea))
@@ -3027,13 +3029,14 @@ class Factory:
             t["jira_sync"] = queued
         else:
             t.pop("jira_sync", None)
-        status, assigned = JIRA_SYNCS[action]
+        status = JIRA_SYNCS[action][0]
         key = (note.one_line(self._jira_of(tid)) or "-").upper()
         if failed is not None:
             why = _clip(failed)
-            line = f"Jira {key}: could not move to {status}: {note.code_span(why)}"
+            what = f"move to {status}" if status else "assign to you"
+            line = f"Jira {key}: could not {what}: {note.code_span(why)}"
         else:
-            line = f"Jira {key}: " + ("assigned to you and " if assigned else "") + f"moved to {status}"
+            line = f"Jira {key}: " + (f"moved to {status}" if status else "assigned to you")
         self.log_event(tid, line)
         return line
 
@@ -3087,7 +3090,10 @@ class Factory:
             return line
         meta["jira"] = key
         self.write(tid, meta, body)
-        if self.state(tid)[0] != "idea":
+        status = self.state(tid)[0]
+        if status != "idea":
+            _queue_jira_sync(t, meta, "assign")
+        if status not in ("idea", "triage"):
             _queue_jira_sync(t, meta, "start")
         if not_assigned is None:
             line = f"Jira {key}: created in {project} and assigned to you; move it from the backlog to the board"
