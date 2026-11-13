@@ -28,7 +28,7 @@ for _k in [k for k in os.environ if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG
 REAL_PASSWD_HOME = gitwrap._passwd_home  # for the tests of _passwd_home itself
 gitwrap._passwd_home = lambda: GIT_HOME
 
-RUN_TMP = tempfile.mkdtemp(prefix="wonka-tests-")
+RUN_TMP = os.path.realpath(tempfile.mkdtemp(prefix="wonka-tests-"))
 atexit.register(shutil.rmtree, RUN_TMP, ignore_errors=True)
 tempfile.tempdir = RUN_TMP
 
