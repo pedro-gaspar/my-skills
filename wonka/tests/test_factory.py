@@ -4410,7 +4410,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("1 checks", one)
         self.assertTrue(one.endswith("fix by hand then tick Retry"))
 
-    def test_short_reason_folds_whitespace_and_cuts_past_the_max(self):
+    def test_clip_folds_whitespace_and_cuts_past_the_max(self):
         cases = {
             "folds whitespace": ("a \n\t b  ", "a b"),
             "at the max, kept": ("x" * factory._REASON_MAX, "x" * factory._REASON_MAX),
@@ -4418,7 +4418,7 @@ class FactoryTest(unittest.TestCase):
         }
         for name, (text, expected) in cases.items():
             with self.subTest(name):
-                self.assertEqual(factory._short_reason(text), expected)
+                self.assertEqual(factory._clip(text), expected)
 
     def test_change_request_on_a_ci_stuck_ticket_unsticks(self):
         tid = self.add()
