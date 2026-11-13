@@ -1889,7 +1889,7 @@ class FactoryTest(unittest.TestCase):
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text("groupOrder:\n  - 🎫-Ready\n# mine\n")
         self.assertIn(event, self.tick()["events"])
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 🎫 Planned\n# mine\n")
+        self.assertEqual(base.read_text().split("formulas:\n")[0], "groupOrder:\n  - 🎫 Planned\n# mine\n")  # the 🎫 priority formula follows
         self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
 
     def test_tick_migrates_a_hyphenated_factory_base(self):
@@ -1899,7 +1899,7 @@ class FactoryTest(unittest.TestCase):
         base.write_text('groupOrder:\n  - 💡-Idea\n  - 📏-Triage\n  - 🗑️-Wont-Do\nfilter: phase == "🙋-Awaiting-Human"\n')
         events = self.tick()["events"]
         self.assertIn("🍫 Factory.base: column 🗑️-Wont-Do renamed to 🗑️ Wont Do", events)
-        self.assertEqual(base.read_text(),
+        self.assertEqual(base.read_text().split("formulas:\n")[0],  # the 🎫 priority formula follows it
                          'groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n  - 🗑️ Wont Do\nfilter: phase == "🙋 Awaiting Human"\n')
         self.assertFalse([e for e in self.tick()["events"] if "Factory.base" in e], "migrated once")
 
@@ -1912,7 +1912,7 @@ class FactoryTest(unittest.TestCase):
         events = self.tick()["events"]
         self.assertIn(event, events)
         self.assertIn("🍫 Factory.base: column 💡 Idea added", events)
-        self.assertEqual(base.read_text(), "groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n# mine\n")
+        self.assertEqual(base.read_text().split("formulas:\n")[0], "groupOrder:\n  - 💡 Idea\n  - 📏 Triage\n# mine\n")  # the 🎫 priority formula follows
         self.assertNotIn(event, self.tick()["events"], "reported once, not on every tick")
 
     def test_add_with_unknown_parent_leaves_nothing_behind(self):
@@ -5903,6 +5903,60 @@ class FactoryTest(unittest.TestCase):
     def f_path(self, tid):
         with self.f() as f:
             return f.path(tid)
+
+    # -- priority --
+
+    def test_priority_is_a_number_from_1_to_5(self):
+        for value, want in (("5", 5), (" 3 ", 3), (1, 1), ("0", None), ("6", None), ("2.0", None), ("high", None),
+                            ("", None), (None, None)):
+            with self.subTest(value):
+                self.assertEqual(machine.parse_priority(value), want)
+
+    def test_add_defaults_to_priority_1_and_takes_a_priority(self):
+        self.assertEqual(self.note(self.add())[0]["priority"], "1")
+        self.assertEqual(self.note(self.add(priority="5"))[0]["priority"], "5")
+        with self.assertRaisesRegex(WonkaError, "priority must be a number from 1 to 5 \\(5 is the highest\\)"):
+            self.add(priority="6")
+
+    def test_set_priority(self):
+        tid = self.add()
+        with self.f() as f:
+            f.set_field(tid, "priority", "4")
+        self.assertEqual(self.note(tid)[0]["priority"], "4")
+        with self.f() as f, self.assertRaises(WonkaError):
+            f.set_field(tid, "priority", "0")
+
+    def test_the_highest_priority_is_triaged_first_then_the_oldest(self):
+        self.cfg["wip"] = {**self.cfg["wip"], "triage": 1}
+        old, urgent = self.add(), self.add(priority="5")
+        self.assertEqual([j["id"] for j in self.tick()["jobs"]], [urgent])
+        with self.f() as f:
+            later = f.add("Another", repo=str(self.repo), pr_repo="acme/app", priority="5")
+            f.ticket(later)["created_at"] = f.ticket(old)["created_at"]
+            self.assertEqual(f.by_priority(), [urgent, later, old])
+
+    def test_the_highest_priority_ticket_takes_the_free_drafting_slot(self):
+        old, urgent = self.add(), self.add(priority="3")
+        self.tick()
+        with self.f() as f:
+            f.triage(old, "s")
+            f.triage(urgent, "s")
+        self.tick()
+        self.assertEqual((self.state(urgent)[0], self.state(old)), ("drafting", ("triage", "ready")))
+
+    def test_tick_backfills_and_reverts_note_priorities(self):
+        cases = {"": "1", "priority: 3": "3", "priority: urgent": "1"}
+        ids = {}
+        for line, _ in cases.items():
+            tid = ids[line] = self.add()
+            self.edit_note(tid, lambda text, line=line: text.replace("priority: 1", line))
+        events = self.tick()["events"]
+        for line, want in cases.items():
+            with self.subTest(line or "missing"):
+                self.assertEqual(self.note(ids[line])[0]["priority"], want)
+        self.assertIn(f"{ids['priority: urgent']}: reverted unknown priority 'urgent' to 1", events)
+        self.assertIn("Reverted priority `urgent`: not a priority, back to 1",
+                      self.note(ids["priority: urgent"])[1])
 
     # -- jira --
 

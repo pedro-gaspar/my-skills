@@ -831,6 +831,17 @@ class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
         self.assertEqual((code, out, err), (0, "Jira CALC-7: created in CALC and assigned to you; "
                                                "move it from the backlog to the board\n", ""))
 
+    def test_add_priority_then_status_lists_the_most_urgent_first(self):
+        self.cli("add", "Later", "--repo", str(self.repo))
+        self.assertEqual(self.cli("add", "Now", "--priority", "5", "--repo", str(self.repo))[0], 0)
+        code, out, err = self.cli("status")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([line.split()[0] for line in out.splitlines()], ["WONKA-00002", "WONKA-00001"])
+        self.assertEqual(out.splitlines()[0].split()[-3:], ["-", "5", "Now"])
+        code, _, err = self.cli("add", "Bad", "--priority", "6", "--repo", str(self.repo))
+        self.assertNotEqual(code, 0)
+        self.assertIn("priority must be a number from 1 to 5", err)
+
     def test_jira_created_not_assigned_prints_the_reason(self):
         self.cfg["jira_project"] = {"app": "CALC"}
         self.cfg["jira_issue_type"] = {"app": "Task"}

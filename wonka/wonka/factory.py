@@ -125,6 +125,13 @@ def manual_text(state):
     return MANUAL_BUSY.get(state[0], "")
 
 
+def _priority_arg(value):
+    if (priority := machine.parse_priority(value)) is None:
+        raise WonkaError(f"priority must be a number from {min(machine.PRIORITIES)} to {max(machine.PRIORITIES)} "
+                         f"({max(machine.PRIORITIES)} is the highest)")
+    return priority
+
+
 def _queue_jira_sync(t, meta, action):
     if note.one_line(meta.get("jira")) and action not in (t.get("jira_sync") or []):
         t["jira_sync"] = [*(t.get("jira_sync") or []), action]
@@ -893,13 +900,14 @@ class Factory:
     # -- intake -----------------------------------------------------------
 
     def add(self, idea, title=None, repo=None, pr_repo=None, parent=None, size=None, jira=None,
-            spec_review=None, blocked_by=None, start="triage", create_jira=False):
+            spec_review=None, blocked_by=None, start="triage", create_jira=False, priority=None):
         if not (idea or "").strip():
             raise WonkaError("the idea is empty: say what the ticket should build")
         if start not in machine.START:
             raise WonkaError(f"start must be {' or '.join(machine.START)}")
         if size and size not in machine.SIZES:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
+        priority = _priority_arg(priority) if priority is not None else machine.DEFAULT_PRIORITY
         if spec_review is not None and spec_review not in machine.SPEC_REVIEWS:
             raise WonkaError("spec_review must be agent or human")
         if create_jira and jira:
@@ -934,7 +942,7 @@ class Factory:
         tid = f"WONKA-{self.db['next_id']:05d}"
         self.db["next_id"] += 1
         title = note.one_line(title) or _default_title(idea)
-        meta = {"id": tid, "title": title, "size": size or "", "jira": note.one_line(jira),
+        meta = {"id": tid, "title": title, "size": size or "", "priority": priority, "jira": note.one_line(jira),
                 "spec_review": spec_review or "agent"}
         state = machine.IDEA if start == "idea" else (start, "pending")
         meta["status"], meta["phase"] = machine.label(state)
@@ -963,14 +971,16 @@ class Factory:
             raise WonkaError(f"size must be one of {', '.join(machine.SIZES)}")
         if field == "spec_review" and value not in machine.SPEC_REVIEWS:
             raise WonkaError("spec_review must be agent or human")
-        if field in ("title", "size", "jira", "spec_review"):
+        if field == "priority":
+            value = _priority_arg(value)
+        if field in ("title", "size", "priority", "jira", "spec_review"):
             meta, body = self.read(tid)
             meta[field] = note.one_line(value) if field in ("title", "jira") else value
             self.write(tid, meta, body)
         elif field == "pr_repo":
             self.ticket(tid)["pr_repo"] = value
         else:
-            raise WonkaError("settable fields: title, size, jira, pr_repo, spec_review")
+            raise WonkaError("settable fields: title, size, priority, jira, pr_repo, spec_review")
 
     def triage(self, tid, size, title=None, questions=None, duplicate_of=None, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
@@ -2539,6 +2549,8 @@ class Factory:
         meta, body = self.read(tid)
         if (moved := self._board_edit(tid, meta, body)) is not None:
             return moved
+        if (fixed := self._priority_edit(tid, meta, body)) is not None:
+            return fixed
         last = self.state(tid)
         if (last in OFF_PR or t.get("manual")) and t.get("pr_url"):
             try:
@@ -2581,6 +2593,20 @@ class Factory:
         self.drop_worktree(tid)
         self.drop_scout(tid)
         return f"{tid}: note was deleted, ticket dropped"
+
+    def _priority_edit(self, tid, meta, body):
+        """Fill a missing priority with the default silently; put an unknown one back to the default and say so.
+        Returns the event, or None."""
+        shown = note.one_line(meta.get("priority"))
+        if machine.parse_priority(shown) is not None:
+            return None
+        meta["priority"] = machine.DEFAULT_PRIORITY
+        self.write(tid, meta, body)
+        if not shown:
+            return None
+        self.log_event(tid, f"Reverted priority {note.code_span(_clip(shown))}: not a priority, "
+                            f"back to {machine.DEFAULT_PRIORITY}")
+        return f"{tid}: reverted unknown priority {shown!r} to {machine.DEFAULT_PRIORITY}"
 
     def _board_edit(self, tid, meta, body):
         """Act on a card a human dragged on the board: a kill or a started Idea is taken, any other move is put back.
@@ -3132,6 +3158,18 @@ class Factory:
     def live(self):
         return sorted(k for k, t in self.db["tickets"].items() if not t.get("archived"))
 
+    def by_priority(self):
+        """Live tickets in the order they are worked on: highest priority first, then the oldest."""
+        return sorted(self.live(), key=lambda k: (-self._priority(k), self.ticket(k).get("created_at") or "", k))
+
+    def _priority(self, tid):
+        """The ticket's priority number; a note that can't be read counts as the default, so it never stops a tick."""
+        try:
+            priority = machine.parse_priority(self.read(tid)[0].get("priority"))
+        except (WonkaError, OSError):
+            priority = None
+        return machine.DEFAULT_PRIORITY if priority is None else priority
+
     def _safe(self, tid, fn):
         try:
             return fn(tid)
@@ -3156,6 +3194,7 @@ class Factory:
             for old, new in store.migrate_base(self.cfg):
                 events.append(f"🍫 Factory.base: column {new} added" if old is None
                               else f"🍫 Factory.base: column {old} renamed to {new}")
+            events += [m for m in (store.add_priority_to_base(self.cfg), store.sort_kanban_by_priority(self.cfg)) if m]
             events += [m for k in self.live()
                        for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
@@ -3169,13 +3208,14 @@ class Factory:
             for k in self.live():
                 out = self._safe(k, self._watch_blockers)
                 events += out if isinstance(out, list) else [out]
+            order = self.by_priority()
             for src, dst, limit in ((("triage", "ready"), ("drafting", "pending"), "drafting"),
                                     (("planned", "pending"), ("baking", "pending"), "baking")):
-                for k in self.live():
+                for k in order:
                     if self.state(k) == src and not self._blocked(k) and self._count(dst[0]) < self.cfg["wip"][limit]:
                         events.append(self._safe(k, lambda k: self.move(k, dst, "wonka") or f"{k}: → {fmt(dst)}"))
             jobs = []
-            for k in self.live():
+            for k in order:
                 t, s = self.ticket(k), self.state(k)
                 if t.get("stuck") or (t.get("job_started_at") and not t.get("resume")):
                     continue

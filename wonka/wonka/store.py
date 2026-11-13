@@ -313,6 +313,74 @@ def migrate_base(cfg):
     return done
 
 
+def tickets_formula():
+    """The board's 🎫 priority: one ticket per point; number() takes the value as Obsidian typed it, number or text."""
+    return f'"🎫".repeat(if(priority, number(priority), {machine.DEFAULT_PRIORITY}))'
+
+
+def add_priority_to_base(cfg):
+    """Add the 🎫 priority formula to a board made before it and show it on the kanban cards after the phase. Returns
+    the event, or None when there is no board or it already has the formula."""
+    path = board(cfg) / BASE_FILE
+    if not path.exists():
+        return None
+    text = path.read_text()
+    if "formula.tickets" in text:
+        return None
+    kanban, view = _kanban_view(text)
+    card = re.search(r"^([ \t]*)- phase[ \t]*$", view, re.M)
+    if card:
+        at = kanban + card.end()
+        text = text[:at] + f"\n{card.group(1)}- formula.tickets" + text[at:]
+    text = _add_under(text, "formulas", f"  tickets: '{tickets_formula()}'")
+    text = _add_under(text, "properties", "  formula.tickets:\n    displayName: Priority")
+    write_atomic(path, text)
+    if card:
+        return "🍫 Factory.base: 🎫 priority added to the cards"
+    return ("🍫 Factory.base: 🎫 priority formula added, but the kanban view has no `- phase` card line to put it "
+            "after: add formula.tickets to its order by hand")
+
+
+def sort_kanban_by_priority(cfg):
+    """Sort a board's kanban cards by priority, then oldest first (ids are sequential), when it still has the original
+    file-name sort. A sort changed by hand is left alone. Returns the event, or None."""
+    path = board(cfg) / BASE_FILE
+    if not path.exists():
+        return None
+    text = path.read_text()
+    kanban, view = _kanban_view(text)
+    found = _DEFAULT_SORT.search(view)
+    if not found:
+        return None
+    item, key = found.group(1), found.group(2)
+    at = kanban + found.start(1)
+    text = text[:at] + f"{item}- property: priority\n{key}direction: DESC\n" + text[at:]
+    write_atomic(path, text)
+    return "🍫 Factory.base: kanban cards sorted by priority, then oldest first"
+
+
+# the kanban's sort as wonka init wrote it before priorities: one file-name entry and nothing after it
+_DEFAULT_SORT = re.compile(r"^[ \t]*sort:[ \t]*\n([ \t]*)- property: file\.name[ \t]*\n([ \t]*)direction: ASC[ \t]*"
+                           r"(?:\n(?![ \t]*- )|\Z)", re.M)
+
+
+def _kanban_view(text):
+    """(offset, text) of the board's kanban view, up to the next view; (0, "") when the board has none."""
+    start = text.find("type: kanban")
+    if start < 0:
+        return 0, ""
+    end = text.find("- type:", start)
+    return start, text[start:end if end >= 0 else len(text)]
+
+
+def _add_under(text, key, lines):
+    """Put lines under a top-level YAML key, adding the key at the end when the base has none."""
+    found = re.search(rf"^{key}:[ \t]*$", text, re.M)
+    if found:
+        return text[:found.end()] + "\n" + lines + text[found.end():]
+    return text.rstrip("\n") + f"\n{key}:\n{lines}\n"
+
+
 def archive_dir(cfg):
     return board(cfg) / "archive"
 
