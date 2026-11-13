@@ -190,8 +190,8 @@ def run(a, f):
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
                   spec_review="human" if a.review_spec else None, blocked_by=split_ids(a.blocked_by),
-                  start="triage" if a.triage else "idea", create_jira=a.create_jira_ticket)
-        jira_note = " 🎟️ its Jira issue is created on the next tick" if a.create_jira_ticket else ""
+                  start="triage" if a.triage else "idea", create_jira=a.create_jira)
+        jira_note = " 🎟️ its Jira issue is created on the next tick" if a.create_jira else ""
         if a.manual:
             f.session(tid)
             print(f"🎫 {tid} has a golden ticket, 🕹️ manual from the start: no agent works it until you hand it "
@@ -376,7 +376,7 @@ def parser():
     s.add_argument("--parent")
     s.add_argument("--size", choices=machine.SIZES)
     s.add_argument("--jira")
-    s.add_argument("--create-jira-ticket", action="store_true",
+    s.add_argument("--create-jira", action="store_true",
                    help="have the /wonka manager create a Jira issue for it on the next tick, in the project's "
                         "jira_project with its jira_issue_type")
     s.add_argument("--review-spec", action="store_true",

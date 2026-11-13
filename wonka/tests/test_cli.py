@@ -543,7 +543,8 @@ class CliTest(unittest.TestCase):
         for want in ("wonka jira-synced", "wonka jira-created", "jira_create", "--failed", "--not-assigned", "Atlassian"):
             self.assertIn(want, section)
         add_section = text.split("## add", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("--create-jira-ticket", add_section)
+        self.assertIn("--create-jira", add_section)
+        self.assertNotIn("--create-jira-ticket", add_section)
 
     def test_skill_documents_retro(self):
         text = (Path(cli.__file__).resolve().parent.parent / "skills/wonka/SKILL.md").read_text()
@@ -818,11 +819,11 @@ class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
         code, out, err = self.cli("jira-synced", tid, "--action", "start")
         self.assertEqual((code, out, err), (0, "Jira CALC-42: assigned to you and moved to In Progress\n", ""))
 
-    def test_add_with_create_jira_ticket_after_the_idea_then_jira_created_prints_the_key(self):
+    def test_add_with_create_jira_after_the_idea_then_jira_created_prints_the_key(self):
         self.cfg["jira_project"] = {"app": "CALC"}
         self.cfg["jira_issue_type"] = {"app": "Task"}
         store.save_config(self.cfg)
-        code, out, err = self.cli("add", "Add a hello script", "--create-jira-ticket", "--triage", "--repo", str(self.repo))
+        code, out, err = self.cli("add", "Add a hello script", "--create-jira", "--triage", "--repo", str(self.repo))
         self.assertEqual((code, err), (0, ""))
         self.assertIn("its Jira issue is created on the next tick", out)
         tid = "WONKA-00001"
@@ -834,7 +835,7 @@ class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
         self.cfg["jira_project"] = {"app": "CALC"}
         self.cfg["jira_issue_type"] = {"app": "Task"}
         store.save_config(self.cfg)
-        self.cli("add", "Add a hello script", "--create-jira-ticket", "--triage", "--repo", str(self.repo))
+        self.cli("add", "Add a hello script", "--create-jira", "--triage", "--repo", str(self.repo))
         code, out, err = self.cli("jira-created", "WONKA-00001", "--key", "CALC-7", "--not-assigned", "why")
         self.assertEqual((code, out, err), (0, "Jira CALC-7: created in CALC, not assigned to you: `why`; "
                                                "move it from the backlog to the board\n", ""))

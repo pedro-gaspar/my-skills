@@ -901,9 +901,9 @@ class Factory:
         if spec_review is not None and spec_review not in machine.SPEC_REVIEWS:
             raise WonkaError("spec_review must be agent or human")
         if create_jira and jira:
-            raise WonkaError("pass --jira or --create-jira-ticket, not both")
+            raise WonkaError("pass --jira or --create-jira, not both")
         if create_jira and parent:
-            raise WonkaError("a child takes its parent's Jira key: --create-jira-ticket is for top-level tickets")
+            raise WonkaError("a child takes its parent's Jira key: --create-jira is for top-level tickets")
         parent_t = self.ticket(parent) if parent else None  # fail before touching anything
         blocked_by = split_ids(blocked_by)
         self._check_blockers(None, blocked_by)

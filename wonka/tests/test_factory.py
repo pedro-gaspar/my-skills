@@ -5992,7 +5992,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.jira_created(tid, **kw)
 
-    def test_create_jira_ticket_is_offered_until_created_then_the_key_and_start_sync_follow(self):
+    def test_create_jira_is_offered_until_created_then_the_key_and_start_sync_follow(self):
         self.configure_jira_create()
         tid = self.add(create_jira=True)
         offer = {"id": tid, "project": "CALC", "type": "Task", "summary": "Add a hello script",
@@ -6039,7 +6039,7 @@ class FactoryTest(unittest.TestCase):
         self.tick_box(tid, "Start")
         self.assertEqual(self.tick()["jira"], [self.start_offer(tid, "CALC-7")])
 
-    def test_create_jira_ticket_is_refused(self):
+    def test_create_jira_is_refused(self):
         cases = {
             "with --jira": (dict(jira="CALC-1"), "CALC", "Task", "not both"),
             "with --parent": (None, "CALC", "Task", "takes its parent's Jira key"),

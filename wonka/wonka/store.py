@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {
     "test_commands": {},  # project -> argv prefixes `wonka test` may run, under a per-project lock
     "ci_hosts": {},  # project -> hosts `wonka ci-logs` may fetch from
     "ci_log_command": {},  # project -> the CI log tool's command prefix, run by `wonka ci-logs`
-    "jira_project": {},  # project -> the Jira project key new issues go to with `wonka add --create-jira-ticket`
+    "jira_project": {},  # project -> the Jira project key new issues go to with `wonka add --create-jira`
     "jira_issue_type": {},  # project -> the issue type of those new issues
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
     "session_launcher": "terminal",  # how `wonka session` opens Claude: terminal (exec claude here) or orca (an Orca tab)
