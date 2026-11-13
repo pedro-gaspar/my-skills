@@ -278,6 +278,8 @@ def run(a, f):
     elif c == "worktree":
         tid = f.find(a.ref)
         print(f.worktree_info(tid) if a.info else f.worktree_path(tid))
+    elif c == "import-notes":
+        print("\n".join(f.import_notes(a.ids)))
     elif c == "archive":
         lines = f.archive_all()
         print("\n".join(lines) if lines else "Nothing to archive: no merged or Wont Do ticket on the board")
@@ -509,6 +511,9 @@ def parser():
     sub.add_parser("status", help="one line per live ticket")
     sub.add_parser("archive", help="archive every merged or Wont Do ticket now (note, plan, PR body) into "
                                    "archive/shipped or archive/wont-do")
+    s = sub.add_parser("import-notes", help="copy Obsidian notes into the ticket JSONs (they overwrite the board's "
+                                            "edits); every live ticket when no ids")
+    s.add_argument("ids", nargs="*")
     sub.add_parser("doctor", help="check the factory's setup")
     sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> [--dispatch <n>] "
                                "status|diff|log|show|rev-parse|ls-files|blame|add|commit|rebase ...")

@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import cli, factory, machine, mdlint, note, store
+from wonka import cli, factory, machine, mdlint, note, store, ticket
 from wonka.factory import Factory
 from wonka.machine import KILLED
 from wonka.store import WonkaError
@@ -124,6 +124,8 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             path = f.path(tid)
         path.write_text(fn(path.read_text()))
+        with self.f() as f:  # a human edit reaches the factory through the import, as with the board's sync
+            f.import_notes([tid])
 
     def to_planned(self, tid, size="s", reviewers=("architect",)):
         """Walk a fresh ticket through triage and drafting."""
@@ -1868,6 +1870,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             path = f.path(tid)
         path.unlink()
+        ticket.path(tid).unlink()
         (path.parent / "my scribble.md").write_text("hi\n")
         events = self.tick()["events"]
         self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
@@ -2317,8 +2320,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_child_of_parent_with_deleted_note_gets_no_jira(self):
         tid = self.add(jira="CALC-42")
-        with self.f() as f:
-            f.path(tid).unlink()
+        ticket.path(tid).unlink()
         with self.f() as f:
             child = f.add("Part", repo=str(self.repo), parent=tid)
             explicit = f.add("Other part", repo=str(self.repo), parent=tid, jira="CALC-7")
@@ -2333,9 +2335,7 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(job["job"], "bake")
         wt = Path(job["worktree"])
         (wt / "scratch.txt").write_text("wip\n")
-        with self.f() as f:
-            path = f.path(tid)
-        path.unlink()
+        ticket.path(tid).unlink()
 
         events = self.tick()["events"]
         self.assertIn(f"{tid}: note was deleted, ticket dropped", events)
@@ -2603,9 +2603,7 @@ class FactoryTest(unittest.TestCase):
         job = [j for j in self.tick()["jobs"] if j["id"] == tid][0]
         wt = Path(job["worktree"])
         (wt / "scratch.txt").write_text("wip\n")
-        with self.f() as f:
-            path = f.path(tid)
-        path.unlink()
+        ticket.path(tid).unlink()
         self.tick()
         with self.f() as f:
             self.assertTrue(f.ticket(tid).get("archived"))
@@ -2919,8 +2917,7 @@ class FactoryTest(unittest.TestCase):
     def test_one_unreadable_note_does_not_block_other_tickets(self):
         a = self.add("Add a hello script")
         b = self.add("Add a bye script")
-        with self.f() as f:
-            path = f.path(a)
+        path = ticket.path(a)
         path.unlink()
         path.mkdir()
         tick = self.tick()
@@ -2933,7 +2930,7 @@ class FactoryTest(unittest.TestCase):
         self.tick()
         with self.f() as f:
             f.triage(tid, "s", dispatch=f.ticket(tid)["dispatch"])
-            path = f.path(tid)
+        path = ticket.path(tid)
         before = self.f_ticket(tid)
         saved = path.read_text()
         path.unlink()
@@ -2954,7 +2951,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.triage(tid, "s", dispatch=f.ticket(tid)["dispatch"])
         before = self.f_ticket(tid)
-        with mock.patch.object(note, "write", side_effect=OSError("disk full")):
+        with mock.patch.object(ticket, "save", side_effect=OSError("disk full")):
             with self.f() as f, self.assertRaisesRegex(OSError, "disk full"):
                 f.move(tid, ("drafting", "pending"), by="wonka")
             self.assertEqual(f.ticket(tid), before)
@@ -2966,6 +2963,8 @@ class FactoryTest(unittest.TestCase):
             path = f.path(a)
         text = path.read_text().replace("title: Add a hello script", r'title: "Caf\xe9 \e\ ok" # mine')
         path.write_bytes(text.encode() + b"\nstray \xff byte\n")
+        with self.f() as f:
+            f.import_notes([a])
         tick = self.tick()
         self.assertFalse(any("⚠️" in e for e in tick["events"]), tick["events"])
         self.assertIn(a, [j["id"] for j in tick["jobs"]])
@@ -3015,7 +3014,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             self.assertEqual((f.db["next_id"], f.db["tickets"]), (1, {}))
 
-    def test_unreadable_frontmatter_is_an_error_on_its_ticket_only(self):
+    def test_unreadable_frontmatter_fails_its_import_and_keeps_the_ticket(self):
         a = self.add("Add a hello script")
         b = self.add("Add a bye script")
         with self.f() as f:
@@ -3028,10 +3027,11 @@ class FactoryTest(unittest.TestCase):
                 raise ValueError("bad")
             return real(head, lines)
 
-        with mock.patch.object(note, "_scalar", scalar):
-            tick = self.tick()
-        self.assertIn(f"{a}: ⚠️ {path}: the frontmatter can't be read (bad)", tick["events"])
-        self.assertIn(b, [j["id"] for j in tick["jobs"]])
+        with mock.patch.object(note, "_scalar", scalar), self.f() as f:
+            with self.assertRaisesRegex(WonkaError, f"{path}: the frontmatter can't be read \\(bad\\)"):
+                f.import_notes([a])
+        self.assertEqual(self.note(a)[0]["title"], "Add a hello script")
+        self.assertIn(b, [j["id"] for j in self.tick()["jobs"]])
 
     def push_upstream(self, name="new.txt"):
         """Someone else pushes a commit to origin/main: the user's checkout falls behind."""
@@ -3377,9 +3377,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIsNone(self.scout_of(a))
         self.assertTrue(sb.exists())
 
-        with self.f() as f:
-            path = f.path(b)
-        path.unlink()
+        ticket.path(b).unlink()
         self.assertIn(f"{b}: note was deleted, ticket dropped", self.tick()["events"])
         self.assertFalse(sb.exists())
         self.assertIsNone(self.scout_of(b))
@@ -5223,8 +5221,7 @@ class FactoryTest(unittest.TestCase):
     def test_every_note_gone_at_once_needs_drop_missing(self):
         ids = [self.add(f"idea {i}") for i in range(2)]
         for k in ids:
-            with self.f() as f:
-                f.path(k).unlink()
+            ticket.path(k).unlink()
         with self.assertRaisesRegex(WonkaError, "--drop-missing"):
             self.tick()
         self.assertEqual([self.state(k) for k in ids], [("triage", "pending")] * 2)
@@ -5252,8 +5249,8 @@ class FactoryTest(unittest.TestCase):
         self.to_awaiting_merge(tid)
         self.pr_state.write_text("MERGED")
         self.tick()
+        ticket.path(tid).unlink()
         with self.f() as f:
-            f.path(tid).unlink()
             plan = f.plan_path(tid)
         self.assertIn(f"{tid}: note was deleted, archived as merged", self.tick()["events"])
         t = self.f_ticket(tid)
@@ -6066,7 +6063,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_a_note_unreadable_for_one_tick_keeps_its_queued_jira_sync(self):
         tid = self.add(jira="CALC-42")
-        path = self.f_path(tid)
+        path = ticket.path(tid)
         saved = path.read_text()
         path.unlink()
         path.mkdir()

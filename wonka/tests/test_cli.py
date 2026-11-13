@@ -210,16 +210,16 @@ class CliTest(unittest.TestCase):
     def test_a_lost_note_is_a_clean_error(self):
         self.add_ticket("x")
         self.add_ticket("y")
-        note_path = self.tmp / "vault/wonka/golden-tickets/WONKA-00001.md"
-        note_path.unlink()
+        json_path = self.tmp / "home/tickets/WONKA-00001.json"
+        json_path.unlink()
         code, out, err = self.run_cli("status")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn(f"⚠️ the note {note_path} is gone", out)
+        self.assertIn(f"⚠️ WONKA-00001 has no ticket JSON at {json_path}", out)
         self.assertIn("WONKA-00002", out)
         for argv in (("set", "WONKA-00001", "title", "T"), ("set", "WONKA-00001", "jira", "AB-1")):
             with self.subTest(argv=argv), mock.patch.object(cli.sys, "stdin", io.StringIO("spec")):
                 code, _, err = self.run_cli(*argv)
-                self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: the note {note_path} is gone (deleted or moved?)"))
+                self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: WONKA-00001 has no ticket JSON at {json_path}: import its note with wonka import-notes"))
 
     def test_add_makes_an_idea_unless_triage(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))

@@ -11,7 +11,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-from . import banner, machine, mdlint, metrics as metrics_mod, note, store
+from . import banner, machine, mdlint, metrics as metrics_mod, note, store, ticket
 from .machine import KILLED, review_budget
 from .store import CriticalError, WonkaError
 
@@ -700,11 +700,7 @@ class Factory:
         return store.archive_dir(self.cfg) / store.ARCHIVE_FOLDERS[self.state(tid)[0]]
 
     def read(self, tid):
-        path = self.path(tid)
-        try:
-            return note.read(path)
-        except FileNotFoundError:
-            raise WonkaError(f"the note {path} is gone (deleted or moved?)")
+        return ticket.to_note(ticket.load(tid))
 
     def write(self, tid, meta, body):
         """Every write re-renders the banner and the factory log from the JSON state."""
@@ -713,7 +709,22 @@ class Factory:
         waiting, dead = self._blockers(tid)
         body = note.set_banner(body, banner.render(tid, t, meta, self.cfg, waiting=waiting, dead=dead))
         body = note.set_section(body, "log", banner.log(t))
-        note.write(self.path(tid), meta, body)
+        text = note.render(meta, body)  # the JSON holds what the note says, so both read back the same
+        ticket.save(ticket.from_note(tid, *note.parse(text)))
+        store.write_atomic(self.path(tid), text)
+
+    def import_notes(self, ids=()):
+        """Obsidian -> JSON, on demand: the note's content replaces the ticket JSON. Live tickets when no ids."""
+        out = []
+        for tid in ids or self.live():
+            self.ticket(tid)
+            try:
+                meta, body = note.read(self.path(tid))
+            except FileNotFoundError:
+                raise WonkaError(f"{tid}: no note at {self.path(tid)} to import") from None
+            ticket.save(ticket.from_note(tid, meta, body))
+            out.append(f"{tid}: imported from {self.path(tid).name}")
+        return out
 
     def summary(self, tid):
         """What a human or agent should read after a command: where the ticket is and what comes next."""
@@ -724,7 +735,7 @@ class Factory:
     def log_event(self, tid, why, by="wonka"):
         self.ticket(tid)["history"].append({"at": _iso(now()), "by": by, "why": why})
         store.log(f"{tid} {by}: {why}")
-        if self.path(tid).exists():
+        if ticket.exists(tid):
             meta, body = self.read(tid)
             self.write(tid, meta, body)
 
@@ -775,7 +786,7 @@ class Factory:
         if prev and not waiting and merged:
             self.log_event(tid, f"Unblocked: {', '.join(merged)} merged")  # rewrites the note
             events.append(f"{tid}: ⛓️ unblocked, {', '.join(merged)} merged")
-        elif waiting != prev and self.path(tid).exists():
+        elif waiting != prev and ticket.exists(tid):
             meta, body = self.read(tid)
             self.write(tid, meta, body)  # the banner follows the set of unfinished blockers
         for b in fresh:
@@ -937,7 +948,7 @@ class Factory:
             # carries over when the child builds in the parent's repo; elsewhere it means nothing.
             if pr_repo is None and top == parent_t["repo"]:
                 pr_repo = parent_t["pr_repo"]
-            if self.path(parent).exists() and (jira is None or spec_review is None):  # a deleted parent note: nothing to inherit
+            if ticket.exists(parent) and (jira is None or spec_review is None):  # a deleted parent note: nothing to inherit
                 parent_meta = self.read(parent)[0]
                 if jira is None:
                     jira = parent_meta.get("jira") or None
@@ -1116,7 +1127,7 @@ class Factory:
                 continue
             size = None
             try:
-                if self.path(tid).exists():
+                if ticket.exists(tid):
                     size = self.read(tid)[0].get("size")
             except (WonkaError, OSError):
                 pass
@@ -2541,17 +2552,20 @@ class Factory:
             raise CriticalError(f"the tickets folder {folder} is missing (vault not mounted or moved, or `vault` changed "
                              "in ~/.wonka/config.json): tick skipped so no ticket is dropped")
         live = self.live()
-        missing = [k for k in live if not self.path(k).exists()]
+        missing = [k for k in live if not ticket.exists(k)]
         if not drop_missing and len(live) > 1 and len(missing) == len(live):
-            raise CriticalError(f"none of the {len(live)} live tickets has a note in {folder}: tick skipped so no "
-                             "ticket is dropped. If you deleted them all on purpose, run wonka tick --drop-missing")
+            raise CriticalError(f"none of the {len(live)} live tickets has a JSON in {ticket.tickets_dir()}: tick "
+                             "skipped so no ticket is dropped. Import the notes with wonka import-notes, or if you "
+                             "deleted them all on purpose, run wonka tick --drop-missing")
 
     def reconcile(self, tid):
         """Put illegal board edits back and act on ticked checkboxes and merged PRs."""
         t = self.ticket(tid)
-        if not self.path(tid).exists():
+        if not ticket.exists(tid):
             return self._note_gone(tid)
         meta, body = self.read(tid)
+        if not self.path(tid).exists():  # Obsidian is a rendered copy: a deleted note comes back
+            self.write(tid, meta, body)
         if (moved := self._board_edit(tid, meta, body)) is not None:
             return moved
         if (fixed := self._priority_edit(tid, meta, body)) is not None:

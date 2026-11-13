@@ -72,7 +72,7 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
          "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *",
          "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka worktree *", "wonka jira-synced *", "wonka jira-created *",
          "wonka init *", "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *",
-         "wonka doctor *", "wonka session *", "wonka archive *"
+         "wonka doctor *", "wonka session *", "wonka archive *", "wonka import-notes *"
        ]
      }
    }
@@ -134,6 +134,7 @@ push.
 | `/wonka session <id or Jira key>` | take a ticket into a Claude session: it turns 🕹️ manual (see [Manual tickets](#manual-tickets)) and Claude opens in its worktree with a brief (note, plan, stage, branch, PR). `wonka session KEY` in a terminal runs `claude` there (`--terminal`) or opens an Orca tab in the worktree (`--orca`; the default comes from `wonka config session_launcher terminal\|orca`); `--print` only prints the brief, which is what `/wonka session` uses inside Claude. Refused while an agent works on the ticket unless `--force` (its results are then ignored). `--from <branch>` starts the ticket's branch from work you began by hand in another checkout, only while the branch has no commits of its own |
 | `/wonka worktree <id or Jira key>` | the ticket's worktree path (`cd "$(wonka worktree DATA-3806)"`); `--info` adds the branch and base, commits ahead, uncommitted changes, state and PR. Only reads |
 | `/wonka archive` | archive every merged (Shipped 🍭 Ready) or Wont Do ticket now, without the 7-day wait: note, plan and PR body go to `archive/shipped/` or `archive/wont-do/`. Shipped tickets whose PR is still open stay on the board; a killed ticket whose agent is still at work is skipped and archived later. A human command, like `wonka set` |
+| `wonka import-notes [<id>…]` | copy Obsidian notes into the ticket JSONs, every live ticket when no ids (`bin/wonka-import-obsidian.sh` does the same). Run it once to migrate, and after editing a note by hand: the board is the source of truth and a note edit is overwritten by the next write until it is imported |
 | `/wonka status` | one line per ticket, in the order they are worked on, with its size and priority and ` ⛓️ <ids>` for blockers that have not merged yet; a ticket whose note is gone shows `⚠️` and why in place of its title |
 | `wonka jira-synced <id> --action assign|start|review [--failed WHY]` | what the manager runs after a Jira sync from the tick's `jira` list; logs it on the ticket |
 | `wonka jira-created <id> --key KEY-1 [--not-assigned WHY] \| --failed WHY` | what the manager runs after creating the Jira issue from the tick's `jira_create` list and assigning it to you; writes the key to the note (a key set by hand meanwhile is kept and the new one logged as not linked) and logs that the issue is assigned (or, with `--not-assigned`, why it is not) and should be moved from the backlog to the board, or logs the failure and drops the create |
@@ -257,6 +258,10 @@ changed its kanban sort by hand.
   or it goes to Wont Do.
 
 ## Reading a ticket
+
+Each ticket lives as JSON in `~/.wonka/tickets/<id>.json`: the source of truth. The Obsidian note is a copy Wonka
+renders on every write; a deleted note comes back on the next tick, and a hand edit in it counts only after
+`wonka import-notes`. Deleting the JSON drops the ticket.
 
 Every note opens with a banner that says where the ticket is, what happens next and, when it's 🙋 your turn, exactly
 what to tick. It also lists size, project, plan, PR and review round. The factory's **🙋 Your turn** view lists only
