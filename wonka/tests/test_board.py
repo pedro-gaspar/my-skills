@@ -23,6 +23,7 @@ class BoardTest(RepoFixture, unittest.TestCase):
         card = self.card(tid)
         self.assertEqual((card["status"], card["phase"], card["title"]), ("idea", "awaiting", "Add a hello script"))
         self.assertEqual(card["drop_targets"], ["triage", "wontdo"])
+        self.assertEqual((card["spec_review"], card["jira"]), ("agent", None))
         self.assertTrue(self.start_box(tid))
 
     def test_dragging_an_idea_to_triage_starts_it(self):

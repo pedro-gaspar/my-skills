@@ -29,6 +29,8 @@ def _card(f: Factory, tid: str) -> dict[str, Any]:
     waiting, dead = f._blockers(tid)
     return {**base, "title": content["meta"].get("title", ""), "size": content["meta"].get("size") or None,
             "priority": machine.parse_priority(content["meta"].get("priority")),
+            "spec_review": "human" if note.needs_human_review(content["meta"]) else "agent",
+            "jira": content["meta"].get("jira") or None,
             "headline": banner.headline(tid, t, content["meta"], f.cfg, waiting=waiting, dead=dead),
             "drop_targets": drop_targets(f, tid), "sections": content["sections"]}
 
