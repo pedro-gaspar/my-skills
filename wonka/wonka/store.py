@@ -327,10 +327,8 @@ def add_priority_to_base(cfg):
     text = path.read_text()
     if "formula.tickets" in text:
         return None
-    kanban = text.find("type: kanban")
-    view_end = text.find("- type:", kanban) if kanban >= 0 else -1  # the next view: its cards are not the kanban's
-    view = text[kanban:view_end if view_end >= 0 else len(text)]
-    card = re.search(r"^([ \t]*)- phase[ \t]*$", view, re.M) if kanban >= 0 else None
+    kanban, view = _kanban_view(text)
+    card = re.search(r"^([ \t]*)- phase[ \t]*$", view, re.M)
     if card:
         at = kanban + card.end()
         text = text[:at] + f"\n{card.group(1)}- formula.tickets" + text[at:]
@@ -341,6 +339,38 @@ def add_priority_to_base(cfg):
         return "🍫 Factory.base: 🎫 priority added to the cards"
     return ("🍫 Factory.base: 🎫 priority formula added, but the kanban view has no `- phase` card line to put it "
             "after: add formula.tickets to its order by hand")
+
+
+def sort_kanban_by_priority(cfg):
+    """Sort a board's kanban cards by priority, then oldest first (ids are sequential), when it still has the original
+    file-name sort. A sort changed by hand is left alone. Returns the event, or None."""
+    path = board(cfg) / BASE_FILE
+    if not path.exists():
+        return None
+    text = path.read_text()
+    kanban, view = _kanban_view(text)
+    found = _DEFAULT_SORT.search(view)
+    if not found:
+        return None
+    item, key = found.group(1), found.group(2)
+    at = kanban + found.start(1)
+    text = text[:at] + f"{item}- property: priority\n{key}direction: DESC\n" + text[at:]
+    write_atomic(path, text)
+    return "🍫 Factory.base: kanban cards sorted by priority, then oldest first"
+
+
+# the kanban's sort as wonka init wrote it before priorities: one file-name entry and nothing after it
+_DEFAULT_SORT = re.compile(r"^[ \t]*sort:[ \t]*\n([ \t]*)- property: file\.name[ \t]*\n([ \t]*)direction: ASC[ \t]*"
+                           r"(?:\n(?![ \t]*- )|\Z)", re.M)
+
+
+def _kanban_view(text):
+    """(offset, text) of the board's kanban view, up to the next view; (0, "") when the board has none."""
+    start = text.find("type: kanban")
+    if start < 0:
+        return 0, ""
+    end = text.find("- type:", start)
+    return start, text[start:end if end >= 0 else len(text)]
 
 
 def _add_under(text, key, lines):

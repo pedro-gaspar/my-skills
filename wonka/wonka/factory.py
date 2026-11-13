@@ -3194,8 +3194,7 @@ class Factory:
             for old, new in store.migrate_base(self.cfg):
                 events.append(f"🍫 Factory.base: column {new} added" if old is None
                               else f"🍫 Factory.base: column {old} renamed to {new}")
-            if added := store.add_priority_to_base(self.cfg):
-                events.append(added)
+            events += [m for m in (store.add_priority_to_base(self.cfg), store.sort_kanban_by_priority(self.cfg)) if m]
             events += [m for k in self.live()
                        for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works
