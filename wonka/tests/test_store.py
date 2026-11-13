@@ -257,6 +257,32 @@ class StateTest(unittest.TestCase):
         self.assertNotIn("- formula.tickets", base.read_text())
         self.assertIsNone(store.add_priority_to_base(cfg))
 
+    def test_the_template_sorts_the_kanban_by_priority_then_oldest(self):
+        template = (Path(__file__).parent.parent / "templates" / "Factory.base").read_text()
+        kanban = template[template.find("type: kanban"):template.find("- type: table")]
+        self.assertIn("    sort:\n      - property: priority\n        direction: DESC\n"
+                      "      - property: file.name\n        direction: ASC\n", kanban)
+
+    def test_sort_kanban_by_priority_changes_only_the_original_kanban_sort_once(self):
+        old = ("views:\n  - type: kanban\n    sort:\n      - property: file.name\n        direction: ASC\n"
+               "  - type: table\n    sort:\n      - property: file.name\n        direction: ASC\n")
+        cfg, base = self.base_at(old)
+        self.assertEqual(store.sort_kanban_by_priority(cfg),
+                         "🍫 Factory.base: kanban cards sorted by priority, then oldest first")
+        self.assertEqual(base.read_text(), old.replace(
+            "kanban\n    sort:\n", "kanban\n    sort:\n      - property: priority\n        direction: DESC\n"))
+        self.assertIsNone(store.sort_kanban_by_priority(cfg))
+
+    def test_sort_kanban_by_priority_leaves_a_hand_made_sort_alone(self):
+        for sort in ("      - property: file.name\n        direction: DESC\n",
+                     "      - property: file.name\n        direction: ASC\n      - property: size\n        direction: ASC\n",
+                     "      - property: title\n        direction: ASC\n"):
+            with self.subTest(sort):
+                text = f"views:\n  - type: kanban\n    sort:\n{sort}"
+                cfg, base = self.base_at(text)
+                self.assertIsNone(store.sort_kanban_by_priority(cfg))
+                self.assertEqual(base.read_text(), text)
+
     def test_tickets_formula_gives_one_ticket_per_point_and_the_default_when_unset(self):
         self.assertEqual(store.tickets_formula(), '"🎫".repeat(if(priority, number(priority), 1))')
 

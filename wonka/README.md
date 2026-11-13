@@ -239,7 +239,9 @@ waiting for a human should never block the line.
 When there are more tickets than free slots, the ticket with the highest priority goes first, and the oldest among
 equals. Each tick also fills a note with no priority with 1 and puts an unknown one back to 1, saying so in the ticket log.
 On the board each card shows its priority as one 🎫 per point (🎫🎫🎫🎫🎫 is 5), a Bases formula; a board
-made before it gets the formula on the next tick, after the card's phase.
+made before it gets the formula on the next tick, after the card's phase. Cards in each column are sorted by priority,
+then oldest first, the order Wonka works on them; a board made before gets that sort on the next tick unless you
+changed its kanban sort by hand.
 
 - 💡 Idea: no limit and no agent; a ticket counts only once it reaches Triage.
 - 📏 Triage: `wip.triage` (default 2) triage Oompa-Loompas run at once, so a burst of new tickets started at once is sized a few at a time.
