@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|archive|session|worktree|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | status | archive | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|archive|board|session|worktree|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | status | archive | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
 model: sonnet
 ---
 
@@ -19,8 +19,10 @@ Arguments: `$ARGUMENTS`
 1. Ask the user (AskUserQuestion, one call) for: the Obsidian vault path (offer vaults found with
    `find ~ -maxdepth 4 -name .obsidian -type d`), tickets triaged at once (recommend 2), tickets drafted at once (recommend 1; tickets waiting on the human
    don't count), tickets baked at once (recommend 2; reviewing and shipped tickets don't count) and days before finished
-   tickets are archived (recommend 7).
-2. `wonka init --vault <path> --triage <n> --drafting <n> --baking <n> --archive-days <n>`, then `wonka doctor`; show both.
+   tickets are archived (recommend 7), and the path of the user's wonka-board clone (optional: skip it if they
+   have none).
+2. `wonka init --vault <path> --triage <n> --drafting <n> --baking <n> --archive-days <n>`, then
+   `wonka config board_path <clone>` when they gave one, then `wonka doctor`; show the output.
 3. Tell the user to open `<vault>/wonka/🍫 Factory.base` in Obsidian 1.14+, and to apply any permission snippet the
    doctor prints. Settings can be changed any time with `wonka config <key> <value>`.
 
@@ -51,6 +53,11 @@ the idea); never together with `--jira` or `--parent`. If `wonka add` fails beca
 add again.
 
 Pass `--manual` when the user wants to work the ticket by hand from the start ("add it as manual", "add it and open a session"): it is created 🕹️ manual, as if `/wonka session` had taken it, in 💡 Idea (📏 Triage with `--triage`). Run no tick; carry straight on with the session steps below for the new id.
+
+## board
+`wonka board` in the background (Bash `run_in_background`): it runs `make up` in `board_path` and serves the board app.
+Tell the user to open the URL it prints. With no `board_path`, show the error: they clone wonka-board and set it with
+`wonka config board_path <dir>`.
 
 ## status
 `wonka status` and show the lines as they are.
