@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|archive|board|session|worktree|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | status | archive | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
 model: sonnet
 ---
 
@@ -61,6 +61,10 @@ Tell the user to open the URL it prints. With no `board_path`, show the error: t
 
 ## status
 `wonka status` and show the lines as they are.
+
+## sync-obsidian
+`wonka sync-obsidian` and show the lines as they are. The Obsidian notes are only rendered by this command (the
+board's Sync button runs it), never on a tick or a write, so run it when the user wants the vault's kanban current.
 
 ## archive
 `wonka archive` and show the lines as they are. It archives every merged or Wont Do ticket now; nothing else to do.

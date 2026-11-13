@@ -2,7 +2,7 @@
 
 *Come with me, and you'll be in a world of pure imagination.* 🍫
 
-A slim software factory for Claude Code. Every idea is a **golden ticket**, a note on an Obsidian Bases kanban.
+A slim software factory for Claude Code. Every idea is a **golden ticket**, a card on the [wonka-board](https://github.com/pedro-gaspar/wonka-board) (and, rendered on demand, a note on an Obsidian Bases kanban).
 🎩 **Wonka** (the `/wonka` skill) runs the floor, and his **Oompa-Loompas** (triage, analyst, builder, fixer) draft and bake each
 ticket, the Nut Room **squirrels** test it (good nut or bad nut?), then Wonka ships it as a PR. You steer by ticking checkboxes.
 
@@ -72,7 +72,7 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
          "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *",
          "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka worktree *", "wonka jira-synced *", "wonka jira-created *",
          "wonka init *", "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *",
-         "wonka doctor *", "wonka session *", "wonka archive *", "wonka import-notes *",
+         "wonka doctor *", "wonka session *", "wonka archive *", "wonka import-notes *", "wonka sync-obsidian *",
          "wonka board *", "wonka board-data *", "wonka drag *", "wonka answer *"
        ]
      }
@@ -134,9 +134,10 @@ push.
 | `wonka block <id> <blocker>[,…]` / `wonka unblock <id> [<blocker>…]` | record or remove "this ticket waits on those", only while the ticket is an Idea or in Triage, Drafting or Planned. Refuses unknown ids, a ticket blocking itself, Won't-do blockers and cycles. `unblock` with no ids clears all. A ticket with unmerged blockers waits in its column until every blocker has merged (see The floor); the banner shows `⛓️ blocked by [[…]]` |
 | `/wonka session <id or Jira key>` | take a ticket into a Claude session: it turns 🕹️ manual (see [Manual tickets](#manual-tickets)) and Claude opens in its worktree with a brief (note, plan, stage, branch, PR). `wonka session KEY` in a terminal runs `claude` there (`--terminal`) or opens an Orca tab in the worktree (`--orca`; the default comes from `wonka config session_launcher terminal\|orca`); `--print` only prints the brief, which is what `/wonka session` uses inside Claude. Refused while an agent works on the ticket unless `--force` (its results are then ignored). `--from <branch>` starts the ticket's branch from work you began by hand in another checkout, only while the branch has no commits of its own |
 | `/wonka worktree <id or Jira key>` | the ticket's worktree path (`cd "$(wonka worktree DATA-3806)"`); `--info` adds the branch and base, commits ahead, uncommitted changes, state and PR. Only reads |
-| `/wonka archive` | archive every merged (Shipped 🍭 Ready) or Wont Do ticket now, without the 7-day wait: note, plan and PR body go to `archive/shipped/` or `archive/wont-do/`. Shipped tickets whose PR is still open stay on the board; a killed ticket whose agent is still at work is skipped and archived later. A human command, like `wonka set` |
-| `wonka import-notes [<id>…]` | copy Obsidian notes into the ticket JSONs, every live ticket when no ids (`bin/wonka-import-obsidian.sh` does the same). Run it once to migrate, and after editing a note by hand: the board is the source of truth and a note edit is overwritten by the next write until it is imported |
-| `/wonka board` | start the board app (a kanban in the browser, dark and animated) from your [wonka-board](https://github.com/pedro-gaspar/wonka-board) clone: `make up` in `board_path` (`wonka config board_path <dir>`). It reads `wonka board-data`, drags cards with `wonka drag <id> triage\|wontdo` (the moves the tick accepts from Obsidian, refused otherwise) and answers forms with `wonka answer <id>` (a JSON list of `idea`, `check` and `notes` edits on stdin); the tick acts on answers as on Obsidian ticks |
+| `/wonka archive` | archive every merged (Shipped 🍭 Ready) or Wont Do ticket now, without the 7-day wait: note (when one was rendered), plan and PR body go to `archive/shipped/` or `archive/wont-do/`. Shipped tickets whose PR is still open stay on the board; a killed ticket whose agent is still at work is skipped and archived later. A human command, like `wonka set` |
+| `wonka sync-obsidian` | render every ticket's JSON into the vault, so the Obsidian kanban shows current statuses: live tickets in `golden-tickets/`, archived ones in their archive folder (a stale note of an archived ticket is moved there). Notes are written only here, never on a write or a tick, and a note a human edited is overwritten. Unchanged notes are skipped, so running it twice writes the same bytes; it prints one line per note written or moved and a summary, records the time for `board-data` (`obsidian_synced_at`) and is what the board's Sync button runs. A human command |
+| `wonka import-notes [<id>…]` | copy Obsidian notes into the ticket JSONs, every live ticket when no ids (`bin/wonka-import-obsidian.sh` does the same). An escape hatch for editing a note by hand: import it before the next `wonka sync-obsidian`, which overwrites the note |
+| `/wonka board` | start the board app (a kanban in the browser, dark and animated) from your [wonka-board](https://github.com/pedro-gaspar/wonka-board) clone: `make up` in `board_path` (`wonka config board_path <dir>`). It reads `wonka board-data` (every live ticket, plus `obsidian_synced_at`, the count of tickets `wonka archive` would archive now, and per card `worker`, the Oompa-Loompa at work or null), drags cards with `wonka drag <id> triage\|wontdo` (the moves the tick accepts from Obsidian, refused otherwise) and answers forms with `wonka answer <id>` (a JSON list of `idea`, `check` and `notes` edits on stdin); the tick acts on answers as on Obsidian ticks |
 | `/wonka status` | one line per ticket, in the order they are worked on, with its size and priority and ` ⛓️ <ids>` for blockers that have not merged yet; a ticket whose note is gone shows `⚠️` and why in place of its title |
 | `wonka jira-synced <id> --action assign|start|review [--failed WHY]` | what the manager runs after a Jira sync from the tick's `jira` list; logs it on the ticket |
 | `wonka jira-created <id> --key KEY-1 [--not-assigned WHY] \| --failed WHY` | what the manager runs after creating the Jira issue from the tick's `jira_create` list and assigning it to you; writes the key to the note (a key set by hand meanwhile is kept and the new one logged as not linked) and logs that the issue is assigned (or, with `--not-assigned`, why it is not) and should be moved from the backlog to the board, or logs the failure and drops the create |
@@ -261,9 +262,9 @@ changed its kanban sort by hand.
 
 ## Reading a ticket
 
-Each ticket lives as JSON in `~/.wonka/tickets/<id>.json`: the source of truth. The Obsidian note is a copy Wonka
-renders on every write; a deleted note comes back on the next tick, and a hand edit in it counts only after
-`wonka import-notes`. Deleting the JSON drops the ticket.
+Each ticket lives as JSON in `~/.wonka/tickets/<id>.json`: the source of truth. The Obsidian note is a copy
+`wonka sync-obsidian` renders on demand (the agents' and the session's own note is rendered when they start); a hand edit
+in it counts only after `wonka import-notes`. Deleting the JSON drops the ticket.
 
 Every note opens with a banner that says where the ticket is, what happens next and, when it's 🙋 your turn, exactly
 what to tick. It also lists size, project, plan, PR and review round. The factory's **🙋 Your turn** view lists only
@@ -289,11 +290,9 @@ Wonka skips fences when it looks for sections. A fence that never closes is not 
 demoted and its opening line gets a `\` in front, so it shows as text and cannot pair with a fence further down.
 In the plan, a CI log's `##` lines are demoted even inside fences.
 
-Wonka finds a ticket's note by its file name (`WONKA-00001.md`). A note renamed in Obsidian, or moved into a subfolder
-of the tickets folder, is put back on the next tick (found by the `id` in its frontmatter); a deleted note drops its
-ticket to Wont Do. A finished ticket (merged or Wont Do) whose note is deleted is only archived early, as it ended. Since that is final, a
-tick refuses to run when the tickets folder is missing (an unmounted or moved vault, a changed `vault` setting) or
-when every live ticket's note is gone at once; if you really deleted them all, run `wonka tick --drop-missing`.
+Deleting a ticket's JSON drops it to Wont Do. A finished ticket (merged or Wont Do) whose JSON is deleted is only archived early, as it ended. Since that is final, a
+tick refuses to run when every live ticket's JSON is gone at once (a moved or wiped `~/.wonka`); if you really deleted them all, run `wonka tick --drop-missing`.
+The vault is not needed to tick: a note is only read from it by `wonka import-notes`.
 Frontmatter is read as YAML (Obsidian's own escapes and `# comments` included), and bytes that are not UTF-8 read as
 `�`, as Obsidian shows them. A note Wonka still can't read only holds up its own ticket: the tick reports it as a
 `⚠️` event naming the note and carries on with the others. Outside a tick, a command on a ticket whose note is gone
