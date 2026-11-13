@@ -1,7 +1,7 @@
 import unittest
 
 from tests.fixtures import RepoFixture
-from wonka import board, note, store
+from wonka import board, mdlint, note, store
 from wonka.store import WonkaError
 
 
@@ -62,6 +62,14 @@ class BoardTest(RepoFixture, unittest.TestCase):
             board.answer(f, tid, [{"op": "idea", "text": "Add a bye script too"}])
             self.assertEqual(note.get_section(f.read(tid)[1], "idea"), "Add a bye script too")
             self.assertIn("Add a bye script too", f.path(tid).read_text())
+
+    def test_a_section_markdownlint_flagged_reaches_the_board_as_written(self):
+        tid = self.idea()
+        with self.f() as f:
+            board.answer(f, tid, [{"op": "idea", "text": mdlint.isolate("Use a <p> tag", ["line 1: MD033"])}])
+            self.assertIn(mdlint.MARK, f.path(tid).read_text())
+        idea = next(s for s in self.card(tid)["sections"] if s["heading"] == note.HEADINGS["idea"])
+        self.assertEqual(idea["blocks"], [{"type": "text", "md": "Use a <p> tag"}])
 
     def test_a_bad_edit_is_refused_before_anything_is_written(self):
         tid = self.idea()

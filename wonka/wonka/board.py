@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from . import banner, machine, note, ticket
+from . import banner, machine, mdlint, note, ticket
 from .factory import Factory, fmt
 from .store import WonkaError
 
@@ -32,7 +32,13 @@ def _card(f: Factory, tid: str) -> dict[str, Any]:
             "spec_review": "human" if note.needs_human_review(content["meta"]) else "agent",
             "jira": content["meta"].get("jira") or None,
             "headline": banner.headline(tid, t, content["meta"], f.cfg, waiting=waiting, dead=dead),
-            "drop_targets": drop_targets(f, tid), "sections": content["sections"]}
+            "drop_targets": drop_targets(f, tid), "sections": [_unwrapped(s) for s in content["sections"]]}
+
+
+def _unwrapped(section: dict[str, Any]) -> dict[str, Any]:
+    """The board renders markdown safely, so it gets a flagged section as written, not the fence kept for Obsidian."""
+    blocks = [{**b, "md": mdlint.unwrap(b["md"])} if b["type"] == "text" else b for b in section["blocks"]]
+    return {**section, "blocks": blocks}
 
 
 def drop_targets(f: Factory, tid: str) -> list[str]:

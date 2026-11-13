@@ -89,6 +89,11 @@ def isolated(text):
     return bool(m) and all(len(r) < len(m.group(1)) for r in re.findall(r"`+", m.group(2)))
 
 
+def unwrap(text):
+    """The section as it was written, out of the raw-text fence isolate() put it in; other text as is."""
+    return _ISOLATED.match(text.strip()).group(2) if isolated(text.strip()) else text
+
+
 _ITEM = re.compile(r"^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$")
 _BREAK = re.compile(r"^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$")
 _FENCE = re.compile(r" {0,3}")  # outside a list: at most 3 spaces, else indented code or text
