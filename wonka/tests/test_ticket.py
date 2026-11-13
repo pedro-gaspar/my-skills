@@ -14,6 +14,7 @@ Fix it.
 - **Q1. Which endpoint?**
   - [x] /days ⭐ recommended — already exists
   - [ ] /score
+        only if /days is slow
   - [ ] Other (write below)
 also cache it
 
@@ -45,8 +46,10 @@ class TicketTest(unittest.TestCase):
         q1 = next(b for b in self.section("❓ Questions")["blocks"] if b["type"] == "question")
         self.assertEqual(q1["q"], "Q1. Which endpoint?")
         self.assertEqual(q1["options"][0], {"text": "/days", "checked": True, "recommended": True,
-                                            "why": "already exists"})
+                                            "why": "already exists", "after": []})
         self.assertEqual(q1["options"][1]["recommended"], False)
+        self.assertEqual(q1["options"][1]["after"], ["        only if /days is slow"])
+        self.assertEqual(q1["options"][2]["text"], "Other (write below)")
         self.assertEqual(q1["notes"], ["also cache it"])
 
     def test_boxes_are_data_only_in_sections_a_human_answers(self):
