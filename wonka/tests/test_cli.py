@@ -816,8 +816,8 @@ class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
     def test_jira_synced_prints_the_recorded_line(self):
         with self.f() as f:
             tid = f.add("Add a hello script", repo=str(self.repo), pr_repo="acme/app", jira="CALC-42")
-        code, out, err = self.cli("jira-synced", tid, "--action", "start")
-        self.assertEqual((code, out, err), (0, "Jira CALC-42: assigned to you and moved to In Progress\n", ""))
+        code, out, err = self.cli("jira-synced", tid, "--action", "assign")
+        self.assertEqual((code, out, err), (0, "Jira CALC-42: assigned to you\n", ""))
 
     def test_add_with_create_jira_after_the_idea_then_jira_created_prints_the_key(self):
         self.cfg["jira_project"] = {"app": "CALC"}

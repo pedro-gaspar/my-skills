@@ -5910,25 +5910,41 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.jira_synced(tid, action, **kw)
 
-    def start_offer(self, tid, key="CALC-42"):
-        return {"id": tid, "key": key, "action": "start", "status": "In Progress", "assign": True}
+    def assign_offer(self, tid, key="CALC-42"):
+        return {"id": tid, "key": key, "action": "assign", "status": None, "assign": True}
 
-    def test_starting_an_idea_with_a_jira_key_offers_the_start_sync_until_recorded(self):
+    def start_offer(self, tid, key="CALC-42"):
+        return {"id": tid, "key": key, "action": "start", "status": "In Progress", "assign": False}
+
+    def test_starting_an_idea_with_a_jira_key_offers_the_assign_sync_until_recorded(self):
         tid = self.idea(jira="calc-42")
         self.assertEqual(self.tick()["jira"], [])
         self.tick_box(tid, "Start")
-        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
-        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
-        line = "Jira CALC-42: assigned to you and moved to In Progress"
-        self.assertEqual(self.synced(tid, "start"), line)
+        self.assertEqual(self.tick()["jira"], [self.assign_offer(tid)])
+        self.assertEqual(self.tick()["jira"], [self.assign_offer(tid)])
+        line = "Jira CALC-42: assigned to you"
+        self.assertEqual(self.synced(tid, "assign"), line)
         self.assertEqual(self.tick()["jira"], [])
         self.assertIn(line, self.note(tid)[1])
-        self.assertEqual(self.synced(tid, "start"), f"{tid}: no Jira start sync pending, nothing to record")
+        self.assertEqual(self.synced(tid, "assign"), f"{tid}: no Jira assign sync pending, nothing to record")
 
-    def test_jira_start_sync_is_queued_only_for_keyed_tickets_entering_triage(self):
+    def test_entering_drafting_from_triage_offers_the_start_sync_once(self):
+        tid = self.add(jira="CALC-42")
+        self.synced(tid, "assign")
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
+        self.assertEqual(self.synced(tid, "start"), "Jira CALC-42: moved to In Progress")
+        with self.f() as f:
+            f.ticket(tid)["last_valid"] = {"status": "reviewing", "phase": "awaiting"}
+            f.move(tid, ("drafting", "pending"), "human", "Back to drafting after review")
+        self.assertNotIn("jira_sync", self.f_ticket(tid))
+
+    def test_jira_assign_sync_is_queued_only_for_keyed_tickets_entering_triage(self):
         parent = self.add(jira="CALC-42")
         self.assertEqual([o["id"] for o in self.tick()["jira"]], [parent], "added straight to triage")
-        self.synced(parent, "start")
+        self.synced(parent, "assign")
         cases = {
             "idea with no key, started": lambda: self.tick_box(self.idea(), "Start"),
             "child of a keyed ticket": lambda: self.add(parent=parent, start="triage"),
@@ -5953,16 +5969,16 @@ class FactoryTest(unittest.TestCase):
         path.unlink()
         path.mkdir()
         self.assertEqual(self.tick()["jira"], [])
-        self.assertEqual(self.f_ticket(tid)["jira_sync"], ["start"])
+        self.assertEqual(self.f_ticket(tid)["jira_sync"], ["assign"])
         path.rmdir()
         path.write_text(saved)
-        self.assertEqual(self.tick()["jira"], [self.start_offer(tid)])
+        self.assertEqual(self.tick()["jira"], [self.assign_offer(tid)])
 
     def test_a_failed_jira_sync_is_logged_and_the_ticket_carries_on(self):
         tid = self.add(jira="CALC-42")
         before = self.f_ticket(tid)
-        line = self.synced(tid, "start", failed="no access to ![x](https://e.x/p.png)")
-        self.assertEqual(line, "Jira CALC-42: could not move to In Progress: `no access to ![x](https://e.x/p.png)`")
+        line = self.synced(tid, "assign", failed="no access to ![x](https://e.x/p.png)")
+        self.assertEqual(line, "Jira CALC-42: could not assign to you: `no access to ![x](https://e.x/p.png)`")
         after = self.f_ticket(tid)
         self.assertEqual((self.state(tid), after.get("retries"), after.get("stuck")),
                          (("triage", "pending"), before.get("retries"), before.get("stuck")))
@@ -5971,8 +5987,9 @@ class FactoryTest(unittest.TestCase):
 
     def test_opening_the_pr_offers_the_review_sync_once(self):
         tid = self.add(jira="CALC-42")
-        self.synced(tid, "start")
+        self.synced(tid, "assign")
         self.to_awaiting_merge(tid)
+        self.synced(tid, "start")
         review_offer = {"id": tid, "key": "CALC-42", "action": "review", "status": "In Review", "assign": False}
         self.assertEqual(self.tick()["jira"], [review_offer])
         self.assertEqual(self.synced(tid, "review"), "Jira CALC-42: moved to In Review")
@@ -6002,7 +6019,7 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return f.jira_created(tid, **kw)
 
-    def test_create_jira_is_offered_until_created_then_the_key_and_start_sync_follow(self):
+    def test_create_jira_is_offered_until_created_then_the_key_and_assign_sync_follow(self):
         self.configure_jira_create()
         tid = self.add(create_jira=True)
         offer = {"id": tid, "project": "CALC", "type": "Task", "summary": "Add a hello script",
@@ -6014,7 +6031,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn(line, self.note(tid)[1])
         self.assertEqual(self.note(tid)[0]["jira"], "CALC-7")
         res = self.tick()
-        self.assertEqual((res["jira_create"], res["jira"]), ([], [self.start_offer(tid, "CALC-7")]))
+        self.assertEqual((res["jira_create"], res["jira"]), ([], [self.assign_offer(tid, "CALC-7")]))
         self.assertEqual(self.created(tid, key="CALC-8"), f"{tid}: no Jira create pending, nothing to record")
 
     def test_a_created_issue_that_could_not_be_assigned_keeps_the_key_and_says_why(self):
@@ -6025,7 +6042,7 @@ class FactoryTest(unittest.TestCase):
                                "move it from the backlog to the board")
         self.assertIn(line, self.note(tid)[1])
         self.assertEqual(self.note(tid)[0]["jira"], "CALC-7")
-        self.assertEqual(self.tick()["jira"], [self.start_offer(tid, "CALC-7")])
+        self.assertEqual(self.tick()["jira"], [self.assign_offer(tid, "CALC-7")])
 
     def test_a_not_assigned_reason_is_cut_and_flattened_to_one_line(self):
         self.configure_jira_create()
@@ -6047,7 +6064,18 @@ class FactoryTest(unittest.TestCase):
         self.created(tid, key="CALC-7")
         self.assertEqual(self.tick()["jira"], [])
         self.tick_box(tid, "Start")
-        self.assertEqual(self.tick()["jira"], [self.start_offer(tid, "CALC-7")])
+        self.assertEqual(self.tick()["jira"], [self.assign_offer(tid, "CALC-7")])
+
+    def test_a_created_key_past_triage_is_assigned_and_moved_to_in_progress(self):
+        self.configure_jira_create()
+        tid = self.add(create_jira=True)
+        self.tick()
+        with self.f() as f:
+            f.triage(tid, "s")
+        self.tick()
+        self.created(tid, key="CALC-7")
+        offers = self.tick()["jira"]
+        self.assertEqual(offers, [self.assign_offer(tid, "CALC-7"), self.start_offer(tid, "CALC-7")])
 
     def test_create_jira_is_refused(self):
         cases = {
