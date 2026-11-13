@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
     "jira_issue_type": {},  # project -> the issue type of those new issues
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
     "session_launcher": "terminal",  # how `wonka session` opens Claude: terminal (exec claude here) or orca (an Orca tab)
+    "board_path": None,  # the wonka-board clone `wonka board` starts with `make up`
 }
 SESSION_LAUNCHERS = ("terminal", "orca")
 SETTINGS = {  # wonka config <key> <value>
@@ -152,13 +153,20 @@ def set_setting(cfg, key, raw):
             cur.pop(project, None)
         cfg[map_key] = cur
         return
+    if key == "board_path":
+        path = Path(raw.strip()).expanduser()
+        if not (path / "Makefile").is_file():
+            raise WonkaError(f"board_path {path} has no Makefile: point it at your wonka-board clone")
+        cfg[key] = str(path.resolve())
+        return
     if key == "session_launcher":
         if raw.strip() not in SESSION_LAUNCHERS:
             raise WonkaError(f"session_launcher must be {' or '.join(SESSION_LAUNCHERS)}")
         cfg[key] = raw.strip()
         return
     if key not in SETTINGS:
-        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, session_launcher, worktree_files.<project>, "
+        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, session_launcher, board_path, "
+                         "worktree_files.<project>, "
                          "test_commands.<project>, ci_hosts.<project>, ci_log_command.<project>, "
                          "jira_project.<project>, jira_issue_type.<project>")
     try:
@@ -239,6 +247,8 @@ def _check_config(cfg, path):
     for key in SETTINGS:
         if "." not in key and not _number(cfg[key]):
             raise bad(key, "a number")
+    if cfg["board_path"] is not None and not isinstance(cfg["board_path"], str):
+        raise bad("board_path", "a folder path or null")
     if cfg["session_launcher"] not in SESSION_LAUNCHERS:
         raise bad("session_launcher", " or ".join(SESSION_LAUNCHERS))
     for key in ("worktree_files", "test_commands", "ci_hosts", "ci_log_command", "jira_project", "jira_issue_type"):

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import machine, prcomments, store
+from . import board, machine, prcomments, store
 from .factory import JIRA_SYNCS, Factory, alert, fmt, split_ids
 from .store import WonkaError
 
@@ -83,6 +83,7 @@ def show_config(cfg):
           f"🎟️ Jira projects    : {jira}\n"
           f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
           f"🕹️ session launcher : {cfg['session_launcher']}\n"
+          f"🍫 board app        : {cfg.get('board_path') or '-'}\n"
           f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
           f"📜 factory log      : {store.home() / 'factory.log'}")
 
@@ -95,6 +96,15 @@ def cmd_config(a):
         store.set_setting(cfg, a.key, a.value)
         store.save_config(cfg)
     show_config(cfg)
+
+
+def cmd_board():
+    """Start the board app (backend and frontend) from its clone; this process becomes `make up`."""
+    path = store.load_config().get("board_path")
+    if not path:
+        raise WonkaError("no board_path: clone wonka-board and run wonka config board_path <dir>")
+    os.chdir(path)
+    os.execvp("make", ["make", "up"])
 
 
 def _stdin_json():
@@ -278,6 +288,12 @@ def run(a, f):
     elif c == "worktree":
         tid = f.find(a.ref)
         print(f.worktree_info(tid) if a.info else f.worktree_path(tid))
+    elif c == "board-data":
+        print(json.dumps(board.data(f), ensure_ascii=False))
+    elif c == "drag":
+        print(board.drag(f, a.id, _key(a.status, machine.STATUSES)))
+    elif c == "answer":
+        print(board.answer(f, a.id, _stdin_json()))
     elif c == "import-notes":
         print("\n".join(f.import_notes(a.ids)))
     elif c == "archive":
@@ -341,7 +357,7 @@ def _key(value, table):
 FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
 # read a snapshot of the state, so they never wait for a long tick
-READ_ONLY = ("status", "show", "repos", "metrics", "pr-comments", "worktree")
+READ_ONLY = ("status", "show", "board-data", "repos", "metrics", "pr-comments", "worktree")
 
 
 def _day(v):
@@ -511,6 +527,13 @@ def parser():
     sub.add_parser("status", help="one line per live ticket")
     sub.add_parser("archive", help="archive every merged or Wont Do ticket now (note, plan, PR body) into "
                                    "archive/shipped or archive/wont-do")
+    sub.add_parser("board", help="start the board app from board_path (make up)")
+    sub.add_parser("board-data", help="the board app: every live ticket as JSON")
+    s = sub.add_parser("drag", help="the board app: drag a card (an Idea to triage, any card to wontdo)")
+    s.add_argument("id")
+    s.add_argument("status")
+    s = sub.add_parser("answer", help="the board app: apply form edits (a JSON list on stdin) to a ticket")
+    s.add_argument("id")
     s = sub.add_parser("import-notes", help="copy Obsidian notes into the ticket JSONs (they overwrite the board's "
                                             "edits); every live ticket when no ids")
     s.add_argument("ids", nargs="*")
@@ -549,6 +572,8 @@ def main(argv=None):
         if a.cmd == "config":
             cmd_config(a)
             return 0
+        if a.cmd == "board":
+            cmd_board()
         if a.cmd == "doctor":
             from .doctor import doctor
             return doctor()
