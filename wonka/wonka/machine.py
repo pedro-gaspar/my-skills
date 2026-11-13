@@ -27,7 +27,15 @@ OLD_STATES = {("idea", "pending"): IDEA}  # (before WONKA-00167) retired state -
 SIZES = ("xs", "s", "m", "l", "xl")
 BUILDABLE = ("xs", "s", "m")
 SPEC_REVIEWS = ("agent", "human")
+PRIORITIES = (1, 2, 3, 4, 5)  # 5 is the highest
+DEFAULT_PRIORITY = 1
 AUTO_READY = ("xs", "s")  # Triage tickets this small need no human approval
+
+
+def parse_priority(value):
+    """The priority as a number, or None when value is not one of PRIORITIES."""
+    text = str(value if value is not None else "").strip()
+    return int(text) if text in {str(p) for p in PRIORITIES} else None
 
 
 def current(state):

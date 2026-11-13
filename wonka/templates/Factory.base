@@ -2,6 +2,8 @@ filters:
   and:
     - file.inFolder("{{folder}}/golden-tickets")
     - file.ext == "md"
+formulas:
+  tickets: '"🎫".repeat(if(priority, number(priority), 1))'
 properties:
   note.id:
     displayName: Ticket
@@ -9,6 +11,8 @@ properties:
     displayName: Title
   note.phase:
     displayName: Phase
+  formula.tickets:
+    displayName: Priority
 views:
   - type: kanban
     name: 🍫 Factory floor
@@ -28,6 +32,7 @@ views:
       - id
       - title
       - phase
+      - formula.tickets
     sort:
       - property: file.name
         direction: ASC
@@ -52,6 +57,7 @@ views:
       - status
       - phase
       - size
+      - formula.tickets
       - jira
       - spec_review
       - blocked_by

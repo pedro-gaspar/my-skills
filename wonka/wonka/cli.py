@@ -190,7 +190,8 @@ def run(a, f):
     if c == "add":
         tid = f.add(a.idea, a.title, a.repo, a.pr_repo, a.parent, a.size, a.jira,
                   spec_review="human" if a.review_spec else None, blocked_by=split_ids(a.blocked_by),
-                  start="triage" if a.triage else "idea", create_jira=a.create_jira)
+                  start="triage" if a.triage else "idea", create_jira=a.create_jira,
+                  priority=a.priority)
         jira_note = " 🎟️ its Jira issue is created on the next tick" if a.create_jira else ""
         if a.manual:
             f.session(tid)
@@ -278,12 +279,13 @@ def run(a, f):
         tid = f.find(a.ref)
         print(f.worktree_info(tid) if a.info else f.worktree_path(tid))
     elif c == "status":
-        for k in f.live():
+        for k in f.by_priority():
             try:
                 meta = f.read(k)[0]
             except (WonkaError, OSError) as e:  # a lost or broken note never hides the other tickets
                 meta = {"title": f"⚠️ {e}"}
-            print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('title', '')}"
+            print(f"{k}  {fmt(f.state(k)):34} {meta.get('size') or '-':3} {meta.get('priority') or '-':1} "
+                  f"{meta.get('title', '')}"
                   + ("  🕹️" if f.ticket(k).get("manual") else "")
                   + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
 
@@ -375,6 +377,8 @@ def parser():
     s.add_argument("--pr-repo", help="GitHub owner/name the PR targets (default: origin)")
     s.add_argument("--parent")
     s.add_argument("--size", choices=machine.SIZES)
+    s.add_argument("--priority", help=f"{min(machine.PRIORITIES)} to {max(machine.PRIORITIES)}, "
+                                      f"{max(machine.PRIORITIES)} is the highest (default: {machine.DEFAULT_PRIORITY})")
     s.add_argument("--jira")
     s.add_argument("--create-jira", action="store_true",
                    help="have the /wonka manager create a Jira issue for it on the next tick, in the project's "
@@ -389,7 +393,7 @@ def parser():
     s = sub.add_parser("unblock", help="remove blockers from a ticket; no ids clears them all")
     s.add_argument("id")
     s.add_argument("blockers", nargs="*")
-    s = sub.add_parser("set", help="set title, size, jira, pr_repo or spec_review (agent|human)")
+    s = sub.add_parser("set", help="set title, size, priority, jira, pr_repo or spec_review (agent|human)")
     s.add_argument("id")
     s.add_argument("field")
     s.add_argument("value")

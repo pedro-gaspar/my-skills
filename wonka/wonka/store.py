@@ -313,6 +313,44 @@ def migrate_base(cfg):
     return done
 
 
+def tickets_formula():
+    """The board's 🎫 priority: one ticket per point; number() takes the value as Obsidian typed it, number or text."""
+    return f'"🎫".repeat(if(priority, number(priority), {machine.DEFAULT_PRIORITY}))'
+
+
+def add_priority_to_base(cfg):
+    """Add the 🎫 priority formula to a board made before it and show it on the kanban cards after the phase. Returns
+    the event, or None when there is no board or it already has the formula."""
+    path = board(cfg) / BASE_FILE
+    if not path.exists():
+        return None
+    text = path.read_text()
+    if "formula.tickets" in text:
+        return None
+    kanban = text.find("type: kanban")
+    view_end = text.find("- type:", kanban) if kanban >= 0 else -1  # the next view: its cards are not the kanban's
+    view = text[kanban:view_end if view_end >= 0 else len(text)]
+    card = re.search(r"^([ \t]*)- phase[ \t]*$", view, re.M) if kanban >= 0 else None
+    if card:
+        at = kanban + card.end()
+        text = text[:at] + f"\n{card.group(1)}- formula.tickets" + text[at:]
+    text = _add_under(text, "formulas", f"  tickets: '{tickets_formula()}'")
+    text = _add_under(text, "properties", "  formula.tickets:\n    displayName: Priority")
+    write_atomic(path, text)
+    if card:
+        return "🍫 Factory.base: 🎫 priority added to the cards"
+    return ("🍫 Factory.base: 🎫 priority formula added, but the kanban view has no `- phase` card line to put it "
+            "after: add formula.tickets to its order by hand")
+
+
+def _add_under(text, key, lines):
+    """Put lines under a top-level YAML key, adding the key at the end when the base has none."""
+    found = re.search(rf"^{key}:[ \t]*$", text, re.M)
+    if found:
+        return text[:found.end()] + "\n" + lines + text[found.end():]
+    return text.rstrip("\n") + f"\n{key}:\n{lines}\n"
+
+
 def archive_dir(cfg):
     return board(cfg) / "archive"
 

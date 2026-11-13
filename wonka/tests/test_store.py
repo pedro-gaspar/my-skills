@@ -226,6 +226,40 @@ class StateTest(unittest.TestCase):
         self.assertEqual(base.read_text(), "groupOrder:\n  - 🧪 Drafting\n")
 
 
+    def base_at(self, text):
+        cfg = {"vault": str(self.tmp / "vault"), "folder": "wonka"}
+        base = self.tmp / "vault/wonka" / store.BASE_FILE
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text(text)
+        return cfg, base
+
+    def test_the_template_shows_the_priority_formula(self):
+        template = (Path(__file__).parent.parent / "templates" / "Factory.base").read_text()
+        self.assertIn(f"  tickets: '{store.tickets_formula()}'\n", template)
+        self.assertEqual(template.count("- formula.tickets"), 2)
+
+    def test_add_priority_to_base_puts_it_on_the_cards_once(self):
+        old = ("properties:\n  note.id:\n    displayName: Ticket\nviews:\n  - type: kanban\n    order:\n"
+               "      - id\n      - phase\n  - type: table\n    order:\n      - phase\n")
+        cfg, base = self.base_at(old)
+        self.assertEqual(store.add_priority_to_base(cfg), "🍫 Factory.base: 🎫 priority added to the cards")
+        self.assertEqual(base.read_text(), (
+            "properties:\n  formula.tickets:\n    displayName: Priority\n  note.id:\n    displayName: Ticket\n"
+            "views:\n  - type: kanban\n    order:\n      - id\n      - phase\n      - formula.tickets\n"
+            "  - type: table\n    order:\n      - phase\n"
+            f"formulas:\n  tickets: '{store.tickets_formula()}'\n"))
+        self.assertIsNone(store.add_priority_to_base(cfg))
+
+    def test_add_priority_to_base_reports_a_kanban_with_no_phase_card_line_once(self):
+        cfg, base = self.base_at("views:\n  - type: kanban\n    order:\n      - id\n  - type: table\n    order:\n"
+                                 "      - phase\n")
+        self.assertIn("add formula.tickets to its order by hand", store.add_priority_to_base(cfg))
+        self.assertNotIn("- formula.tickets", base.read_text())
+        self.assertIsNone(store.add_priority_to_base(cfg))
+
+    def test_tickets_formula_gives_one_ticket_per_point_and_the_default_when_unset(self):
+        self.assertEqual(store.tickets_formula(), '"🎫".repeat(if(priority, number(priority), 1))')
+
 class HomeTest(unittest.TestCase):
     """WONKA_HOME is for the tests and a second factory, never a folder an agent controls."""
 
