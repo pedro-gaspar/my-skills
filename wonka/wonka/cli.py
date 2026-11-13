@@ -278,6 +278,9 @@ def run(a, f):
     elif c == "worktree":
         tid = f.find(a.ref)
         print(f.worktree_info(tid) if a.info else f.worktree_path(tid))
+    elif c == "archive":
+        lines = f.archive_all()
+        print("\n".join(lines) if lines else "Nothing to archive: no merged or Wont Do ticket on the board")
     elif c == "status":
         for k in f.by_priority():
             try:
@@ -504,6 +507,8 @@ def parser():
     s = sub.add_parser("show", help="a ticket's JSON state")
     s.add_argument("id")
     sub.add_parser("status", help="one line per live ticket")
+    sub.add_parser("archive", help="archive every merged or Wont Do ticket now (note, plan, PR body) into "
+                                   "archive/shipped or archive/wont-do")
     sub.add_parser("doctor", help="check the factory's setup")
     sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> [--dispatch <n>] "
                                "status|diff|log|show|rev-parse|ls-files|blame|add|commit|rebase ...")

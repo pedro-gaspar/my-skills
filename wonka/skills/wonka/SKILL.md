@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|session|worktree|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | status | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|archive|session|worktree|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | status | archive | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
 model: sonnet
 ---
 
@@ -54,6 +54,9 @@ Pass `--manual` when the user wants to work the ticket by hand from the start ("
 
 ## status
 `wonka status` and show the lines as they are.
+
+## archive
+`wonka archive` and show the lines as they are. It archives every merged or Wont Do ticket now; nothing else to do.
 
 ## session
 Take a ticket out of the factory so the user works it by hand with Claude (🕹️ manual). The argument is a WONKA id or

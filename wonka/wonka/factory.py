@@ -692,8 +692,12 @@ class Factory:
         return review_budget(t, self._max_rounds())
 
     def path(self, tid):
-        folder = store.archive_dir if self.ticket(tid).get("archived") else store.tickets_dir
-        return folder(self.cfg) / f"{tid}.md"
+        folder = self.archive_folder(tid) if self.ticket(tid).get("archived") else store.tickets_dir(self.cfg)
+        return folder / f"{tid}.md"
+
+    def archive_folder(self, tid):
+        """Where a finished ticket's files are archived: archive/shipped or archive/wont-do, by how it ended."""
+        return store.archive_dir(self.cfg) / store.ARCHIVE_FOLDERS[self.state(tid)[0]]
 
     def read(self, tid):
         path = self.path(tid)
@@ -1053,12 +1057,13 @@ class Factory:
         self.move(tid, ("drafting", "awaiting"), "analyst", "The analyst has questions: tick an answer for each")
 
     def plan_path(self, tid):
-        folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
-        return folder(self.cfg) / f"{tid}-plan.md"
+        return self._plans_folder(tid) / f"{tid}-plan.md"
 
     def pr_body_path(self, tid):
-        folder = store.archive_dir if self.ticket(tid).get("archived") else store.plans_dir
-        return folder(self.cfg) / f"{tid}-pr.md"
+        return self._plans_folder(tid) / f"{tid}-pr.md"
+
+    def _plans_folder(self, tid):
+        return self.archive_folder(tid) if self.ticket(tid).get("archived") else store.plans_dir(self.cfg)
 
     def write_pr_body(self, tid, text, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
@@ -2794,17 +2799,58 @@ class Factory:
             return None
         if _age(stamp) < dt.timedelta(days=self.cfg["archive_after_days"]):
             return None
+        self._archive_note(tid)
+        return f"{tid}: archived"
+
+    def _archive_note(self, tid):
         src = self.path(tid)
         self._archive_files(tid)  # first: if the note's move fails, the ticket is still live and retried next tick
-        shutil.move(src, store.archive_dir(self.cfg) / src.name)
-        t["archived"] = True
-        return f"{tid}: archived"
+        shutil.move(src, self.archive_folder(tid) / src.name)
+        self.ticket(tid)["archived"] = True
+
+    def archive_all(self):
+        """`wonka archive`: archive every merged or Wont Do ticket now, without the archive_after_days wait. A ticket
+        whose agent is still at work (killed mid-job) is skipped: the next run or the tick archives it."""
+        for folder in store.ARCHIVE_FOLDERS.values():
+            (store.archive_dir(self.cfg) / folder).mkdir(parents=True, exist_ok=True)
+        lines = [f"{k}: moved into {self._archive_rel(k)}" for k in self.move_flat_archives()]
+        for k in self.live():
+            t = self.ticket(k)
+            if self.state(k) not in (machine.MERGED, KILLED):
+                continue
+            if t.get("held_by") or t.get("job_started_at"):
+                lines.append(f"{k}: skipped, an agent is still at work on it")
+                continue
+            lines.append(self._safe(k, lambda k: self._archive_note(k) or f"{k}: archived to {self._archive_rel(k)}"))
+        return lines
+
+    def _archive_rel(self, tid):
+        return self.archive_folder(tid).relative_to(store.board(self.cfg)).as_posix()
+
+    def move_flat_archives(self):
+        """Move tickets archived before the archive had a folder per ending (flat in archive/) into their folder.
+        Returns the ids moved."""
+        flat, moved = store.archive_dir(self.cfg), []
+        for k, t in sorted(self.db["tickets"].items()):
+            if not t.get("archived"):
+                continue
+            files = [flat / f"{k}{end}.md" for end in ("", "-plan", "-pr") if (flat / f"{k}{end}.md").is_file()]
+            if not files:
+                continue
+            folder = self.archive_folder(k)
+            folder.mkdir(parents=True, exist_ok=True)
+            for f in files:
+                shutil.move(f, folder / f.name)
+            if t.get("plan") and Path(t["plan"]).parent == flat:
+                t["plan"] = str(folder / Path(t["plan"]).name)
+            moved.append(k)
+        return moved
 
     def _archive_files(self, tid):
         """Move a finished ticket's plan and PR body into the archive folder (the caller moves the note)."""
         t = self.ticket(tid)
         plan, pr_body_file = self.plan_path(tid), self.pr_body_path(tid)
-        folder = store.archive_dir(self.cfg)
+        folder = self.archive_folder(tid)
         folder.mkdir(parents=True, exist_ok=True)
         if pr_body_file.exists():
             shutil.move(pr_body_file, folder / pr_body_file.name)
@@ -3195,6 +3241,8 @@ class Factory:
                 events.append(f"🍫 Factory.base: column {new} added" if old is None
                               else f"🍫 Factory.base: column {old} renamed to {new}")
             events += [m for m in (store.add_priority_to_base(self.cfg), store.sort_kanban_by_priority(self.cfg)) if m]
+            if moved := self.move_flat_archives():
+                events.append(f"archive: {len(moved)} archived tickets moved into archive/shipped and archive/wont-do")
             events += [m for k in self.live()
                        for m in [self._safe(k, self.reconcile), self._safe(k, self.archive)] if m]
             # retry what done tickets kept (archived and lost ones too): never forced, quiet until it works

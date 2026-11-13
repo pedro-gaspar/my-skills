@@ -72,7 +72,7 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
          "wonka add *", "wonka show *", "wonka status *", "wonka repos *", "wonka metrics *",
          "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka worktree *", "wonka jira-synced *", "wonka jira-created *",
          "wonka init *", "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *",
-         "wonka doctor *", "wonka session *"
+         "wonka doctor *", "wonka session *", "wonka archive *"
        ]
      }
    }
@@ -133,6 +133,7 @@ push.
 | `wonka block <id> <blocker>[,…]` / `wonka unblock <id> [<blocker>…]` | record or remove "this ticket waits on those", only while the ticket is an Idea or in Triage, Drafting or Planned. Refuses unknown ids, a ticket blocking itself, Won't-do blockers and cycles. `unblock` with no ids clears all. A ticket with unmerged blockers waits in its column until every blocker has merged (see The floor); the banner shows `⛓️ blocked by [[…]]` |
 | `/wonka session <id or Jira key>` | take a ticket into a Claude session: it turns 🕹️ manual (see [Manual tickets](#manual-tickets)) and Claude opens in its worktree with a brief (note, plan, stage, branch, PR). `wonka session KEY` in a terminal runs `claude` there (`--terminal`) or opens an Orca tab in the worktree (`--orca`; the default comes from `wonka config session_launcher terminal\|orca`); `--print` only prints the brief, which is what `/wonka session` uses inside Claude. Refused while an agent works on the ticket unless `--force` (its results are then ignored). `--from <branch>` starts the ticket's branch from work you began by hand in another checkout, only while the branch has no commits of its own |
 | `/wonka worktree <id or Jira key>` | the ticket's worktree path (`cd "$(wonka worktree DATA-3806)"`); `--info` adds the branch and base, commits ahead, uncommitted changes, state and PR. Only reads |
+| `/wonka archive` | archive every merged (Shipped 🍭 Ready) or Wont Do ticket now, without the 7-day wait: note, plan and PR body go to `archive/shipped/` or `archive/wont-do/`. Shipped tickets whose PR is still open stay on the board; a killed ticket whose agent is still at work is skipped and archived later. A human command, like `wonka set` |
 | `/wonka status` | one line per ticket, in the order they are worked on, with its size and priority and ` ⛓️ <ids>` for blockers that have not merged yet; a ticket whose note is gone shows `⚠️` and why in place of its title |
 | `wonka jira-synced <id> --action assign|start|review [--failed WHY]` | what the manager runs after a Jira sync from the tick's `jira` list; logs it on the ticket |
 | `wonka jira-created <id> --key KEY-1 [--not-assigned WHY] \| --failed WHY` | what the manager runs after creating the Jira issue from the tick's `jira_create` list and assigning it to you; writes the key to the note (a key set by hand meanwhile is kept and the new one logged as not linked) and logs that the issue is assigned (or, with `--not-assigned`, why it is not) and should be moved from the backlog to the board, or logs the failure and drops the create |
@@ -224,8 +225,9 @@ test command that starts with one of them through `wonka test <id> --dispatch <n
 timeout, run it again on exit 75 (up to 5 tries), and run anything else as before. So two tickets of one project never
 run its tests at the same time.
 
-Phases: 🕰️ Pending · 🙋 Awaiting Human · 🎩 In Progress · 🍭 Ready (Ideas filed as 🕰️ Pending before are migrated to 🙋 Awaiting Human). Finished tickets (Shipped or Wont Do) and their plans move to
-`wonka/archive/` after 7 days. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) or the old
+Phases: 🕰️ Pending · 🙋 Awaiting Human · 🎩 In Progress · 🍭 Ready (Ideas filed as 🕰️ Pending before are migrated to 🙋 Awaiting Human). Finished tickets (Shipped 🍭 Ready, that is merged, or Wont Do) and their plans and PR bodies move to
+`wonka/archive/shipped/` or `wonka/archive/wont-do/` after 7 days, or at once with `/wonka archive`. Tickets archived
+before these folders existed are moved into them on the next tick. Notes, the state file and the board written with the old names (🌟-Done, 🎫-Ready) or the old
 hyphenated labels (🙋-Awaiting-Human) and Ready's old 🌟 are migrated automatically on the next tick.
 
 ## WIP limits

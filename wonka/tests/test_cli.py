@@ -482,7 +482,7 @@ class CliTest(unittest.TestCase):
             a.update(archived=True, last_valid={"status": "shipped", "phase": "ready"}, created_at="2026-01-01T00:00:00+00:00")
             b["created_at"] = "2026-03-01T00:00:00+00:00"
             src = Path(cfg["vault"]) / "wonka" / "golden-tickets" / "WONKA-00001.md"
-            dest = store.archive_dir(cfg) / "WONKA-00001.md"
+            dest = store.archive_dir(cfg) / "shipped" / "WONKA-00001.md"
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dest))
         code, out, _ = self.run_cli("metrics")
@@ -830,6 +830,11 @@ class AgentCommandsEndToEndTest(RepoFixture, unittest.TestCase):
         code, out, err = self.cli("jira-created", tid, "--key", "CALC-7")
         self.assertEqual((code, out, err), (0, "Jira CALC-7: created in CALC and assigned to you; "
                                                "move it from the backlog to the board\n", ""))
+
+    def test_archive_with_nothing_finished_says_so(self):
+        self.cli("add", "Live", "--repo", str(self.repo))
+        self.assertEqual(self.cli("archive"),
+                         (0, "Nothing to archive: no merged or Wont Do ticket on the board\n", ""))
 
     def test_add_priority_then_status_lists_the_most_urgent_first(self):
         self.cli("add", "Later", "--repo", str(self.repo))
