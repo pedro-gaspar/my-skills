@@ -115,9 +115,18 @@ def _scalar(head, lines):
 
 
 def write(path, meta, body):
+    store.write_atomic(path, render(meta, body))
+
+
+def render(meta, body):
     lines = [f"{k}: {_quote(meta.get(k))}".rstrip() for k in FIELDS if k not in OPTIONAL or meta.get(k)]
     lines += [v if isinstance(v, Raw) else f"{k}: {_quote(v)}".rstrip() for k, v in meta.items() if k not in FIELDS]
-    store.write_atomic(path, "---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n")
+    return "---\n" + "\n".join(lines) + "\n---\n" + body.rstrip("\n") + "\n"
+
+
+def parse(text):
+    """(meta, body) of note text, as read() gives it."""
+    return _parse(text)
 
 
 def _uncomment(v):
