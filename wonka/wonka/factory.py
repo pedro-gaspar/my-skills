@@ -417,9 +417,9 @@ def _push_rejected(err):
 _REASON_MAX = 200  # retry() cuts longer reasons, which would lose the closing "then tick Retry"
 
 
-def _one_line_reason(why):
-    why = " ".join(str(why).split())
-    return why if len(why) <= _REASON_MAX else why[:_REASON_MAX - 1] + "…"
+def _clip(text, limit=_REASON_MAX):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _push_rejected_reason(branch):
@@ -1720,17 +1720,18 @@ class Factory:
     def _ship_crashed(self, tid, exc):
         """ship() failed outside its own error handling: put the ticket back in the queue (retry() counts it)."""
         err = " ".join(str(exc).split()) or type(exc).__name__
+        shown = note.code_span(_clip(err, 150))
         store.log(f"{tid} wonka: shipping failed: {type(exc).__name__}: {err}")
         if self.state(tid) != ("shipped", "progress"):
             return f"{tid}: ⚠️ {err}"
         try:
-            outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
+            outcome = self.retry(tid, f"could not open the PR: {shown}").split(": ", 1)[1]
         except Exception as e2:  # the note cannot be written either: fix the state, the note follows next tick
             t = self.ticket(tid)
             if self.state(tid) == ("shipped", "progress"):
                 t["last_valid"] = {"status": "shipped", "phase": "pending"}
                 t["history"].append({"at": _iso(now()), "from": "shipped/progress", "to": "shipped/pending",
-                                     "by": "wonka", "why": f"Retry: could not open the PR: {err}"})
+                                     "by": "wonka", "why": f"Retry: could not open the PR: {shown}"})
             t.pop("job_started_at", None)
             store.log(f"{tid} wonka: could not record the failed ship either: {e2}")
             outcome = "back in the queue"
@@ -1785,14 +1786,14 @@ class Factory:
                 why = (f"an open PR on {t['branch']} was not opened by Wonka, so Wonka will not push to it: close it "
                        "or move it off the branch, then tick Retry")
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
-                self.log_event(tid, err)
+                self.log_event(tid, note.code_span(err))
                 return f"{tid}: PR failed: {why}; {outcome}"
             if isinstance(e, _PushRejected):  # the human pushed to the PR: retrying cannot help, say what to do
                 why = _push_rejected_reason(t["branch"])
                 outcome = self.retry(tid, why, final=True).split(": ", 1)[1]
-                self.log_event(tid, f"Push rejected, not a fast-forward: {err}")
+                self.log_event(tid, f"Push rejected, not a fast-forward: {note.code_span(err)}")
                 return f"{tid}: PR failed: {why}; {outcome}"
-            outcome = self.retry(tid, f"could not open the PR: {err}").split(": ", 1)[1]
+            outcome = self.retry(tid, f"could not open the PR: {note.code_span(_clip(err, 150))}").split(": ", 1)[1]
             return f"{tid}: PR failed: {err}; {outcome}"
         t["pr_url"] = out.strip().splitlines()[-1]
         if first_pr:
@@ -2103,16 +2104,15 @@ class Factory:
     def _fixer_failed_to_start(self, tid, exc):
         """The fixer could not be dispatched: count it like a retry, stuck after MAX_RETRIES (at once if diverged)."""
         t = self.ticket(tid)
-        err = " ".join(str(exc).split())
-        err = err if len(err) <= 200 else err[:199] + "…"
+        err = _clip(exc, 200)
         final = isinstance(exc, _Diverged)
         why = (f"{t['branch']} has diverged from the PR branch on GitHub. In the worktree {t['worktree']} run "
                f"git pull --rebase origin {t['branch']} and git push origin {t['branch']}, then tick Retry"
-               if final else f"the fixer could not start: {err}")
+               if final else f"the fixer could not start: {note.code_span(err)}")
         retries, stuck = self._count_failure(tid, why, final=final)
         tries = f"try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}"
-        t["conflict_error"] = f"{tries}: {err}"
-        self.log_event(tid, f"Fixer could not start ({tries}): {err}")
+        t["conflict_error"] = f"{tries}: {note.code_span(err)}"
+        self.log_event(tid, f"Fixer could not start ({tries}): {note.code_span(err)}")
         if stuck:
             return f"{tid}: ⚠️ fixer could not start, stuck: {err}"
         return f"{tid}: ⚠️ fixer could not start ({tries}), retried next tick: {err}"
@@ -2885,10 +2885,10 @@ class Factory:
     def _setup_failed(self, tid, what, exc):
         """A job could not be set up (`what` could not be done): count it like a retry, stuck after MAX_RETRIES, and
         hand nothing out. Returns the event to report."""
-        err = " ".join(str(exc).split())
-        err = err if len(err) <= 150 else err[:149] + "…"
-        retries, stuck = self._count_failure(tid, f"could not {what}: {err}")
-        self.log_event(tid, f"Could not {what} (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): {err}")
+        err = _clip(exc, 150)
+        retries, stuck = self._count_failure(tid, f"could not {what}: {note.code_span(err)}")
+        self.log_event(tid, f"Could not {what} (try {min(retries, MAX_RETRIES)}/{MAX_RETRIES}): "
+                            f"{note.code_span(err)}")
         if stuck:
             return f"{tid}: ⚠️ could not {what}, stuck: {err}"
         return f"{tid}: ⚠️ could not {what} (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
@@ -2903,7 +2903,7 @@ class Factory:
         retries = t.get("retries", 0) + 1
         if final:
             retries = max(retries, MAX_RETRIES)
-        why = _one_line_reason(why)
+        why = _clip(why)
         if s == ("shipped", "progress") and t.get("conflicts"):
             self._undo_fixer(tid)  # before move() drops fix_head
         if s[1] == "progress":
@@ -2945,7 +2945,7 @@ class Factory:
                                 f"it; its rebase is kept as {ref}")
         except (WonkaError, OSError) as e:
             self.log_event(tid, f"Could not put {t['branch']} back after the fixer stopped "
-                                f"({' '.join(str(e).split())})")
+                                f"({note.code_span(' '.join(str(e).split()))})")
 
     def _count_failure(self, tid, why, final=False):
         """Bump the retry count; at MAX_RETRIES (at once when `final`) mark the ticket stuck with a Retry checkbox.
@@ -3030,7 +3030,7 @@ class Factory:
         status, assigned = JIRA_SYNCS[action]
         key = (note.one_line(self._jira_of(tid)) or "-").upper()
         if failed is not None:
-            why = _one_line_reason(failed)
+            why = _clip(failed)
             line = f"Jira {key}: could not move to {status}: {note.code_span(why)}"
         else:
             line = f"Jira {key}: " + ("assigned to you and " if assigned else "") + f"moved to {status}"
@@ -3070,8 +3070,9 @@ class Factory:
             return f"{tid}: no Jira create pending, nothing to record"
         project = pending["project"]
         if failed is not None:
+            why = _clip(failed)
             t.pop("jira_create", None)
-            line = f"Jira issue not created in {project}: {_one_line_reason(failed)}"
+            line = f"Jira issue not created in {project}: {note.code_span(why)}"
             self.log_event(tid, line)
             return line
         key = note.one_line(key).upper()
@@ -3092,7 +3093,7 @@ class Factory:
             line = f"Jira {key}: created in {project} and assigned to you; move it from the backlog to the board"
         else:
             line = (f"Jira {key}: created in {project}, not assigned to you: "
-                    f"{note.code_span(_one_line_reason(not_assigned))}; move it from the backlog to the board")
+                    f"{note.code_span(_clip(not_assigned))}; move it from the backlog to the board")
         self.log_event(tid, line)
         return line
 
