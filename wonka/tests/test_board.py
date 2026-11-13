@@ -32,6 +32,25 @@ class BoardTest(RepoFixture, unittest.TestCase):
             board.drag(f, tid, "triage")
         self.assertEqual(self.state(tid), ("triage", "pending"))
 
+    def test_dragging_an_idea_to_triage_does_what_ticking_start_does(self):
+        tid = self.idea()
+        with self.f() as f:
+            self.assertEqual(board.drag(f, tid, "triage"), f"{tid}: started, off to triage")
+            moves = [h for h in f.ticket(tid)["history"] if h.get("to")]
+            self.assertIsNone(note.get_section(f.read(tid)[1], "start"))
+        self.assertEqual(self.state(tid), ("triage", "pending"))
+        self.assertEqual((moves[-1]["by"], moves[-1]["why"]), ("human", "Dragged to Triage on the board"))
+        self.assertNotIn(note.HEADINGS["start"], [s["heading"] for s in self.card(tid)["sections"]])
+        self.assertEqual([(j["id"], j["job"]) for j in self.tick()["jobs"]], [(tid, "triage")])
+
+    def test_a_manual_idea_cannot_be_dragged_to_triage(self):
+        tid = self.idea()
+        with self.f() as f:
+            f.ticket(tid)["manual"] = True
+            self.assertNotIn("triage", board.drop_targets(f, tid))
+            with self.assertRaises(WonkaError):
+                board.drag(f, tid, "triage")
+
     def test_an_illegal_drag_is_refused_and_changes_nothing(self):
         tid = self.idea()
         with self.f() as f, self.assertRaisesRegex(WonkaError, "only to triage, wontdo"):
