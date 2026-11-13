@@ -71,6 +71,14 @@ class BoardTest(RepoFixture, unittest.TestCase):
         idea = next(s for s in self.card(tid)["sections"] if s["heading"] == note.HEADINGS["idea"])
         self.assertEqual(idea["blocks"], [{"type": "text", "md": "Use a <p> tag"}])
 
+    def test_board_data_carries_the_plan_once_written(self):
+        tid = self.idea()
+        self.assertIsNone(self.card(tid)["plan"])
+        with self.f() as f:
+            f.plan_path(tid).parent.mkdir(parents=True, exist_ok=True)
+            f.plan_path(tid).write_text("# Plan\n\n## Goal\nShip it")
+        self.assertEqual(self.card(tid)["plan"], "# Plan\n\n## Goal\nShip it")
+
     def test_a_bad_edit_is_refused_before_anything_is_written(self):
         tid = self.idea()
         with self.f() as f:

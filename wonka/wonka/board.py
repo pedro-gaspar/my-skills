@@ -32,7 +32,13 @@ def _card(f: Factory, tid: str) -> dict[str, Any]:
             "spec_review": "human" if note.needs_human_review(content["meta"]) else "agent",
             "jira": content["meta"].get("jira") or None,
             "headline": banner.headline(tid, t, content["meta"], f.cfg, waiting=waiting, dead=dead),
-            "drop_targets": drop_targets(f, tid), "sections": [_unwrapped(s) for s in content["sections"]]}
+            "drop_targets": drop_targets(f, tid), "sections": [_unwrapped(s) for s in content["sections"]],
+            "plan": _plan(f, tid)}
+
+
+def _plan(f: Factory, tid: str) -> str | None:
+    path = f.plan_path(tid)
+    return path.read_text() if path.exists() else None
 
 
 def _unwrapped(section: dict[str, Any]) -> dict[str, Any]:
