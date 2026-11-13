@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wonka import cli, factory, metrics, store
+from wonka import cli, factory, metrics, store, ticket
 
 from .fixtures import RepoFixture
 
@@ -476,15 +476,10 @@ class CliTest(unittest.TestCase):
         self.run_cli("add", "--repo", repo, "one")
         self.run_cli("add", "--repo", repo, "two")
         self.run_cli("set", "WONKA-00001", "size", "s")
-        cfg = store.load_config()
         with store.state() as db:
             a, b = db["tickets"]["WONKA-00001"], db["tickets"]["WONKA-00002"]
             a.update(archived=True, last_valid={"status": "shipped", "phase": "ready"}, created_at="2026-01-01T00:00:00+00:00")
             b["created_at"] = "2026-03-01T00:00:00+00:00"
-            src = Path(cfg["vault"]) / "wonka" / "golden-tickets" / "WONKA-00001.md"
-            dest = store.archive_dir(cfg) / "shipped" / "WONKA-00001.md"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dest))
         code, out, _ = self.run_cli("metrics")
         rows = [json.loads(x) for x in out.strip().splitlines()]
         self.assertEqual([r["id"] for r in rows], ["WONKA-00001", "WONKA-00002"])
@@ -686,13 +681,13 @@ class CliTest(unittest.TestCase):
             self.assertEqual((code, err.strip()), (1, f"🗑️ wonka: {key} must be a finite number"))
         self.assertEqual(store.load_config()["test_lock_wait_minutes"], 3)
 
-    def test_missing_vault_pings_the_desktop(self):
+    def test_a_missing_vault_does_not_stop_the_tick(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
         shutil.rmtree(self.tmp / "vault")
         with mock.patch.object(cli, "alert") as alert:
-            code, _, err = self.run_cli("tick")
-        self.assertEqual(code, 1)
-        self.assertIn("is missing", alert.call_args[0][0])
+            code, _, _ = self.run_cli("tick")
+        self.assertEqual(code, 0)
+        alert.assert_not_called()
 
     def test_ordinary_errors_do_not_ping(self):
         self.run_cli("init", "--vault", str(self.tmp / "vault"))
@@ -725,9 +720,7 @@ class CliTest(unittest.TestCase):
             subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
         with mock.patch.dict(os.environ, {"WONKA_NO_NOTIFY": "1"}):
             self.assertEqual(self.run_cli("add", "x", "--repo", str(repo), "--review-spec")[0], 0)
-        notes = list((self.tmp / "vault").rglob("WONKA-00001.md"))
-        self.assertEqual(len(notes), 1)
-        self.assertIn("spec_review: human\n", notes[0].read_text())
+        self.assertEqual(ticket.load("WONKA-00001")["meta"]["spec_review"], "human")
 
 
 class PassthroughTest(unittest.TestCase):

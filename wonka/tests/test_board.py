@@ -56,18 +56,17 @@ class BoardTest(RepoFixture, unittest.TestCase):
         self.assertFalse(note.all_answered(section))
         self.assertIn("\\- [x] Yes", section)
 
-    def test_editing_the_idea_rewrites_the_note(self):
+    def test_editing_the_idea_updates_the_ticket(self):
         tid = self.idea()
         with self.f() as f:
             board.answer(f, tid, [{"op": "idea", "text": "Add a bye script too"}])
             self.assertEqual(note.get_section(f.read(tid)[1], "idea"), "Add a bye script too")
-            self.assertIn("Add a bye script too", f.path(tid).read_text())
 
     def test_a_section_markdownlint_flagged_reaches_the_board_as_written(self):
         tid = self.idea()
         with self.f() as f:
             board.answer(f, tid, [{"op": "idea", "text": mdlint.isolate("Use a <p> tag", ["line 1: MD033"])}])
-            self.assertIn(mdlint.MARK, f.path(tid).read_text())
+            self.assertIn(mdlint.MARK, note.render(*f.read(tid)))
         idea = next(s for s in self.card(tid)["sections"] if s["heading"] == note.HEADINGS["idea"])
         self.assertEqual(idea["blocks"], [{"type": "text", "md": "Use a <p> tag"}])
 
@@ -100,3 +99,36 @@ class BoardTest(RepoFixture, unittest.TestCase):
     def _with_question(meta_body):
         meta, body = meta_body
         return meta, note.set_section(body, "questions", note.render_questions([{"q": "Ship?", "options": ["Yes"]}]))
+
+
+class BoardLiveStateTest(RepoFixture, unittest.TestCase):
+    def data(self):
+        with self.f() as f:
+            return board.data(f)
+
+    def test_worker_names_the_agent_at_work_and_is_null_otherwise(self):
+        tid = self.add()
+        self.assertIsNone(self.data()["tickets"][0]["worker"])
+        job = next(j for j in self.tick()["jobs"] if j["id"] == tid)
+        self.assertEqual(job["job"], "triage")
+        card = self.data()["tickets"][0]
+        self.assertEqual((card["working"], card["worker"]), (True, "triage"))
+
+    def test_archivable_counts_finished_tickets_with_no_agent_at_work(self):
+        a, b, c = self.add(), self.add(), self.add()
+        with self.f() as f:
+            f.move(a, ("wontdo", "ready"), "human")
+            f.move(b, ("wontdo", "ready"), "human")
+            f.ticket(b)["job_started_at"] = "2026-01-01T00:00:00+00:00"
+        self.assertEqual(self.data()["archivable"], 1)
+        with self.f() as f:
+            f.archive_all()
+        self.assertEqual(self.data()["archivable"], 0)
+        self.assertEqual(c, self.data()["tickets"][-1]["id"])
+
+    def test_obsidian_synced_at_is_null_until_a_sync(self):
+        self.add()
+        self.assertIsNone(self.data()["obsidian_synced_at"])
+        with self.f() as f:
+            f.sync_obsidian()
+        self.assertRegex(self.data()["obsidian_synced_at"], r"^\d{4}-\d\d-\d\dT")
