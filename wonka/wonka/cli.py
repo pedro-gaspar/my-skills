@@ -208,10 +208,9 @@ def run(a, f):
             print(f"🎫 {tid} has a golden ticket, 🕹️ manual from the start: no agent works it until you hand it "
                   f"back. Open it with: wonka session {tid}")
         elif a.triage:
-            print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage: {f.path(tid)}{jira_note}")
+            print(f"🎫 {tid} has a golden ticket! It's in 📏 Triage.{jira_note}")
         else:
-            print(f"🎫 {tid} has a golden ticket! It's a 💡 Idea: tick Start or drag it to 📏 Triage when it's ready: "
-                  f"{f.path(tid)}{jira_note}")
+            print(f"🎫 {tid} has a golden ticket! It's a 💡 Idea: tick Start or drag it to 📏 Triage when it's ready.{jira_note}")
     elif c == "jira-created":
         print(f.jira_created(a.id, a.key, a.failed, a.not_assigned))
     elif c == "block":
@@ -296,6 +295,8 @@ def run(a, f):
         print(board.answer(f, a.id, _stdin_json()))
     elif c == "import-notes":
         print("\n".join(f.import_notes(a.ids)))
+    elif c == "sync-obsidian":
+        print("\n".join(f.sync_obsidian()))
     elif c == "archive":
         lines = f.archive_all()
         print("\n".join(lines) if lines else "Nothing to archive: no merged or Wont Do ticket on the board")
@@ -534,6 +535,8 @@ def parser():
     s.add_argument("status")
     s = sub.add_parser("answer", help="the board app: apply form edits (a JSON list on stdin) to a ticket")
     s.add_argument("id")
+    sub.add_parser("sync-obsidian", help="render every ticket into the Obsidian vault (the board's Sync button): "
+                                         "notes are written only here, so the kanban there shows current statuses")
     s = sub.add_parser("import-notes", help="copy Obsidian notes into the ticket JSONs (they overwrite the board's "
                                             "edits); every live ticket when no ids")
     s.add_argument("ids", nargs="*")

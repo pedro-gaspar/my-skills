@@ -709,9 +709,31 @@ class Factory:
         waiting, dead = self._blockers(tid)
         body = note.set_banner(body, banner.render(tid, t, meta, self.cfg, waiting=waiting, dead=dead))
         body = note.set_section(body, "log", banner.log(t))
-        text = note.render(meta, body)  # the JSON holds what the note says, so both read back the same
-        ticket.save(ticket.from_note(tid, *note.parse(text)))
-        store.write_atomic(self.path(tid), text)
+        ticket.save(ticket.from_note(tid, *note.parse(note.render(meta, body))))
+
+    def sync_obsidian(self):
+        """JSON -> Obsidian, on demand: render every ticket's note into the vault, and move an archived ticket's
+        note out of the tickets folder. Returns the lines to print."""
+        ids = sorted(k for k in self.db["tickets"] if ticket.exists(k))
+        lines = [m for k in ids if (m := self._sync_note(k))]
+        self.db["obsidian_synced_at"] = _iso(now())
+        ticket.bump_version()
+        return [*lines, f"synced {len(ids)} notes to Obsidian ({len(lines)} changed)"]
+
+    def _sync_note(self, tid):
+        dest, text = self.path(tid), note.render(*self.read(tid))
+        stale = store.tickets_dir(self.cfg) / dest.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        moved = stale != dest and stale.exists()
+        if moved:
+            shutil.move(stale, dest)
+        if dest.exists() and dest.read_bytes() == text.encode():
+            return f"{tid}: moved to {self._vault_rel(dest)}" if moved else None
+        store.write_atomic(dest, text)
+        return f"{tid}: {'moved and written to' if moved else 'written to'} {self._vault_rel(dest)}"
+
+    def _vault_rel(self, path):
+        return path.relative_to(store.board(self.cfg)).as_posix()
 
     def import_notes(self, ids=()):
         """Obsidian -> JSON, on demand: the note's content replaces the ticket JSON. Live tickets when no ids."""
@@ -961,7 +983,6 @@ class Factory:
                 "spec_review": spec_review or "agent"}
         state = machine.IDEA if start == "idea" else (start, "pending")
         meta["status"], meta["phase"] = machine.label(state)
-        store.tickets_dir(self.cfg).mkdir(parents=True, exist_ok=True)
         self.db["tickets"][tid] = {
             "project": project, "repo": top, "pr_repo": pr_repo or origin, "base_branch": base,
             "branch": None, "worktree": None, "pr_url": None, "plan": None, "reviewers": [],
@@ -2371,6 +2392,7 @@ class Factory:
         t, s = self.ticket(tid), self.state(tid)
         meta = self.read(tid)[0]
         plan = self.plan_path(tid)
+        self._sync_note(tid)  # the session reads the note: it is rendered for it, not on every write
         title = note.one_line(meta.get("title")) or tid
         lines = [f"We are working Wonka golden ticket {tid}, “{title}”, by hand. Wonka took it out of its factory "
                  "(🕹️ manual): no Oompa-Loompa works on it until I hand it back.", "", f"- Stage: {fmt(s)}"]
@@ -2519,38 +2541,9 @@ class Factory:
 
     # -- the tick ---------------------------------------------------------
 
-    def _find_renamed(self, foreign):
-        """Notes renamed in Obsidian (their frontmatter id is a live ticket whose note is gone) get their name back,
-        so a rename is never taken for a deletion. Notes moved into a subfolder of the tickets folder are moved back
-        the same way. Returns the events."""
-        events = []
-        folder = store.tickets_dir(self.cfg)
-        names = list(foreign)
-        if folder.is_dir() and any(not self.path(k).exists() for k in self.live()):  # only look deeper when one is gone
-            names += sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*.md") if p.parent != folder
-                            and not any(part.startswith(".") for part in p.relative_to(folder).parts))
-        for name in names:
-            try:
-                tid = str(note.read(folder / name)[0].get("id") or "")
-            except (OSError, WonkaError):
-                continue
-            t = self.db["tickets"].get(tid)
-            if not t or t.get("archived") or self.path(tid).exists():
-                continue
-            (folder / name).rename(self.path(tid))
-            what = "renamed" if "/" not in name else "moved"
-            self.log_event(tid, f"The note was {what} to {name}: {what} it back to {self.path(tid).name} "
-                                "(Wonka finds tickets by file name)")
-            events.append(f"{tid}: note was {what} to {name}, {what} back")
-        return events
-
     def _check_notes(self, drop_missing):
-        """Refuse to tick when the tickets folder is missing, or when every live ticket's note is gone at once: that
-        is an unmounted, moved or reconfigured vault, not a human deleting notes, and dropping is final."""
-        folder = store.tickets_dir(self.cfg)
-        if not folder.is_dir():
-            raise CriticalError(f"the tickets folder {folder} is missing (vault not mounted or moved, or `vault` changed "
-                             "in ~/.wonka/config.json): tick skipped so no ticket is dropped")
+        """Refuse to tick when every live ticket's JSON is gone at once: that is a moved or wiped ~/.wonka, not a
+        human deleting tickets, and dropping is final."""
         live = self.live()
         missing = [k for k in live if not ticket.exists(k)]
         if not drop_missing and len(live) > 1 and len(missing) == len(live):
@@ -2564,8 +2557,6 @@ class Factory:
         if not ticket.exists(tid):
             return self._note_gone(tid)
         meta, body = self.read(tid)
-        if not self.path(tid).exists():  # Obsidian is a rendered copy: a deleted note comes back
-            self.write(tid, meta, body)
         if (moved := self._board_edit(tid, meta, body)) is not None:
             return moved
         if (fixed := self._priority_edit(tid, meta, body)) is not None:
@@ -2819,7 +2810,8 @@ class Factory:
     def _archive_note(self, tid):
         src = self.path(tid)
         self._archive_files(tid)  # first: if the note's move fails, the ticket is still live and retried next tick
-        shutil.move(src, self.archive_folder(tid) / src.name)
+        if src.exists():
+            shutil.move(src, self.archive_folder(tid) / src.name)
         self.ticket(tid)["archived"] = True
 
     def archive_all(self):
@@ -2829,14 +2821,24 @@ class Factory:
             (store.archive_dir(self.cfg) / folder).mkdir(parents=True, exist_ok=True)
         lines = [f"{k}: moved into {self._archive_rel(k)}" for k in self.move_flat_archives()]
         for k in self.live():
-            t = self.ticket(k)
-            if self.state(k) not in (machine.MERGED, KILLED):
+            if not self._ended(k):
                 continue
-            if t.get("held_by") or t.get("job_started_at"):
+            if self._at_work(k):
                 lines.append(f"{k}: skipped, an agent is still at work on it")
                 continue
             lines.append(self._safe(k, lambda k: self._archive_note(k) or f"{k}: archived to {self._archive_rel(k)}"))
         return lines
+
+    def _ended(self, tid):
+        return self.state(tid) in (machine.MERGED, KILLED)
+
+    def _at_work(self, tid):
+        t = self.ticket(tid)
+        return bool(t.get("held_by") or t.get("job_started_at"))
+
+    def archivable(self):
+        """The live tickets `wonka archive` archives now."""
+        return [k for k in self.live() if self._ended(k) and not self._at_work(k)]
 
     def _archive_rel(self, tid):
         return self.archive_folder(tid).relative_to(store.board(self.cfg)).as_posix()
@@ -2941,6 +2943,7 @@ class Factory:
                   "review": [f"squirrel-{r}" for r in t["reviewers"] or ["architect"]],
                   "conflicts": ["oompa-loompa-fixer"]}[job]
         agents = [f"wonka:{a}" for a in agents]
+        self._sync_note(tid)  # the agents read the note: it is rendered for them, not on every write
         drafts = store.drafts_dir()
         try:
             drafts.mkdir(parents=True, exist_ok=True)
@@ -3249,7 +3252,7 @@ class Factory:
     def tick(self, drop_missing=False):
         self._base_cache = dict(self._fetched.get("bases", {}))  # one base fetch per (repo, base) per tick
         try:
-            events = self._find_renamed(self._foreign())
+            events = []
             self._check_notes(drop_missing)
             for old, new in store.migrate_base(self.cfg):
                 events.append(f"🍫 Factory.base: column {new} added" if old is None

@@ -120,12 +120,14 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             return dict(f.ticket(tid))
 
+    def sync(self):
+        with self.f() as f:
+            return f.sync_obsidian()
+
     def edit_note(self, tid, fn):
         with self.f() as f:
-            path = f.path(tid)
-        path.write_text(fn(path.read_text()))
-        with self.f() as f:  # a human edit reaches the factory through the import, as with the board's sync
-            f.import_notes([tid])
+            text = note.render(*f.read(tid))
+        ticket.save(ticket.from_note(tid, *note.parse(fn(text))))  # a human edit reaches the factory by import
 
     def to_planned(self, tid, size="s", reviewers=("architect",)):
         """Walk a fresh ticket through triage and drafting."""
@@ -1869,7 +1871,7 @@ class FactoryTest(unittest.TestCase):
         tid = self.add()
         with self.f() as f:
             path = f.path(tid)
-        path.unlink()
+        path.parent.mkdir(parents=True)
         ticket.path(tid).unlink()
         (path.parent / "my scribble.md").write_text("hi\n")
         events = self.tick()["events"]
@@ -1938,7 +1940,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("Won't do", str(cm.exception))
         with self.f() as f:
             self.assertEqual(f.db["next_id"], 2)
-        self.assertEqual([p.name for p in store.tickets_dir(self.cfg).glob("*.md")], ["WONKA-00001.md"])
+        self.assertEqual([p.name for p in ticket.tickets_dir().glob("*.json")], ["WONKA-00001.json"])
 
     def test_add_stores_blocked_by_in_state_note_and_banner(self):
         a, b = self.add(), self.add()
@@ -1947,8 +1949,7 @@ class FactoryTest(unittest.TestCase):
         meta, body = self.note(c)
         self.assertEqual(meta["blocked_by"], "WONKA-00001, WONKA-00002")
         self.assertIn("⛓️ blocked by [[WONKA-00001]], [[WONKA-00002]]", body)
-        with self.f() as f:
-            self.assertNotIn("blocked_by", f.path(a).read_text())
+        self.assertNotIn("blocked_by", note.render(*self.note(a)))
 
     def test_note_blocked_by_is_overwritten_from_state(self):
         a = self.add()
@@ -2959,6 +2960,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_yaml_escapes_and_bad_bytes_in_a_note_do_not_stop_the_tick(self):
         a = self.add("Add a hello script")
+        self.sync()
         with self.f() as f:
             path = f.path(a)
         text = path.read_text().replace("title: Add a hello script", r'title: "Caf\xe9 \e\ ok" # mine')
@@ -2988,9 +2990,7 @@ class FactoryTest(unittest.TestCase):
 
     def test_a_hand_written_multi_line_title_keeps_one_banner(self):
         tid = self.add()
-        with self.f() as f:
-            path = f.path(tid)
-        path.write_text(path.read_text().replace("title: Add a hello script", "title: |\n  Add a\n  hello script"))
+        self.edit_note(tid, lambda s: s.replace("title: Add a hello script", "title: |\n  Add a\n  hello script"))
         for size in ("s", "m"):
             with self.f() as f:
                 f.set_field(tid, "size", size)
@@ -3017,6 +3017,7 @@ class FactoryTest(unittest.TestCase):
     def test_unreadable_frontmatter_fails_its_import_and_keeps_the_ticket(self):
         a = self.add("Add a hello script")
         b = self.add("Add a bye script")
+        self.sync()
         with self.f() as f:
             path = f.path(a)
         path.write_text(path.read_text().replace("title: Add a hello script", "title: BOOM"))
@@ -5209,15 +5210,6 @@ class FactoryTest(unittest.TestCase):
 
     # -- the vault going missing, renamed notes ----------------------------
 
-    def test_missing_tickets_folder_skips_the_tick(self):
-        ids = [self.add(f"idea {i}") for i in range(3)]
-        os.rename(self.tmp / "vault", self.tmp / "vault-unmounted")  # an unmounted drive, a moved vault
-        with self.assertRaisesRegex(WonkaError, "tickets folder .* is missing"):
-            self.tick()
-        self.assertEqual([self.state(k) for k in ids], [("triage", "pending")] * 3)
-        os.rename(self.tmp / "vault-unmounted", self.tmp / "vault")
-        self.assertEqual(len(self.tick()["jobs"]), 2, "back to normal once the vault is back")
-
     def test_every_note_gone_at_once_needs_drop_missing(self):
         ids = [self.add(f"idea {i}") for i in range(2)]
         for k in ids:
@@ -5229,19 +5221,6 @@ class FactoryTest(unittest.TestCase):
             events = f.tick(drop_missing=True)["events"]
         self.assertEqual([self.state(k) for k in ids], [("wontdo", "ready")] * 2)
         self.assertIn(f"{ids[0]}: note was deleted, ticket dropped", events)
-
-    def test_renamed_note_gets_its_name_back(self):
-        tid = self.add()
-        with self.f() as f:
-            path = f.path(tid)
-        renamed = path.with_name("Add a hello script.md")
-        path.rename(renamed)
-        events = self.tick()["events"]
-        self.assertIn(f"{tid}: note was renamed to Add a hello script.md, renamed back", events)
-        self.assertTrue(path.exists())
-        self.assertFalse(renamed.exists())
-        self.assertEqual(self.state(tid), ("triage", "pending"))
-        self.assertFalse([e for e in events if "not a Wonka ticket" in e])
 
     def test_deleted_note_of_a_merged_ticket_archives_it_as_merged(self):
         tid = self.add()
@@ -5263,20 +5242,9 @@ class FactoryTest(unittest.TestCase):
             self.assertEqual(f.waiting_on(blocked), [])
         self.assertEqual(self.tick()["events"], [], "nothing more to do")
 
-    def test_note_moved_into_a_subfolder_is_moved_back(self):
-        tid = self.add()
-        with self.f() as f:
-            path = f.path(tid)
-        sub = path.parent / "later" / "deeper"
-        sub.mkdir(parents=True)
-        path.rename(sub / path.name)
-        events = self.tick()["events"]
-        self.assertIn(f"{tid}: note was moved to later/deeper/{path.name}, moved back", events)
-        self.assertTrue(path.exists())
-        self.assertEqual(self.state(tid), ("triage", "pending"))
-
     def test_note_writes_leave_no_temp_file(self):
         tid = self.add()
+        self.sync()
         with self.f() as f:
             folder = f.path(tid).parent
         self.assertEqual(sorted(p.name for p in folder.iterdir()), [f"{tid}.md"])
@@ -5612,14 +5580,15 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             f.move(tid, KILLED, "human")
             f.ticket(tid)["entered_done_at"] = "2000-01-01T00:00:00+00:00"
+            f.plan_path(tid).parent.mkdir(parents=True, exist_ok=True)
+            f.plan_path(tid).write_text("# plan\n")
         with mock.patch.object(factory.shutil, "move", side_effect=OSError("read-only")):
             events = self.tick()["events"]
         self.assertIn(f"{tid}: ⚠️ read-only", events)
         self.assertFalse(self.f_ticket(tid).get("archived"))
         self.assertIn(f"{tid}: archived", self.tick()["events"])
         with self.f() as f:
-            self.assertTrue(f.path(tid).exists())
-
+            self.assertTrue((f.archive_folder(tid) / f"{tid}-plan.md").exists())
 
     # -- spec_review ------------------------------------------------------
 
@@ -5883,7 +5852,7 @@ class FactoryTest(unittest.TestCase):
         with mock.patch.object(factory, "now", lambda: later):
             res = self.tick()
         self.assertFalse([e for e in res["events"] if "archiv" in e], res["events"])
-        self.assertTrue(self.f_path(tid).exists())
+        self.assertFalse(self.f_ticket(tid).get("archived"))
 
     def test_split_children_with_triage_start_in_triage(self):
         parent = self.add()
@@ -5941,7 +5910,7 @@ class FactoryTest(unittest.TestCase):
             f.move(tid, KILLED, "human")
             flat = store.archive_dir(self.cfg)
             flat.mkdir(parents=True, exist_ok=True)
-            shutil.move(f.path(tid), flat / f"{tid}.md")
+            (flat / f"{tid}.md").write_text("note\n")
             (flat / f"{tid}-plan.md").write_text("# plan\n")
             f.ticket(tid).update(archived=True, plan=str(flat / f"{tid}-plan.md"))
         self.assertIn("archive: 1 archived tickets moved into archive/shipped and archive/wont-do", self.tick()["events"])

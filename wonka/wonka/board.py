@@ -3,10 +3,13 @@
 from typing import Any
 
 from . import banner, machine, mdlint, note, ticket
-from .factory import Factory, fmt
+from .factory import JOB_AGENTS, Factory, fmt
 from .store import WonkaError
 
 Op = dict[str, Any]
+# the Oompa-Loompa at work in each state; the review has several squirrels
+WORKERS = {state: agent.removeprefix("oompa-loompa-") for agent, state in JOB_AGENTS.items()}
+WORKERS[("reviewing", "progress")] = "squirrels"
 
 
 def data(f: Factory) -> dict[str, Any]:
@@ -14,6 +17,8 @@ def data(f: Factory) -> dict[str, Any]:
         "columns": [{"key": k, "label": v} for k, v in machine.STATUSES.items()],
         "phases": dict(machine.PHASES),
         "tickets": [_card(f, tid) for tid in f.by_priority()],
+        "obsidian_synced_at": f.db.get("obsidian_synced_at"),
+        "archivable": len(f.archivable()),
     }
 
 
@@ -21,6 +26,7 @@ def _card(f: Factory, tid: str) -> dict[str, Any]:
     t, (status, phase) = f.ticket(tid), f.state(tid)
     base = {"id": tid, "status": status, "phase": phase, "project": t.get("project"), "pr_url": t.get("pr_url"),
             "manual": bool(t.get("manual")), "stuck": bool(t.get("stuck")), "working": bool(t.get("job_started_at")),
+            "worker": WORKERS.get((status, phase)) if t.get("job_started_at") else None,
             "blocked_by": f.waiting_on(tid), "history": t.get("history", [])[-30:]}
     try:
         content = ticket.load(tid)
