@@ -317,6 +317,8 @@ def run_floor(a, cfg):
         launcher.work(a.run)
     elif a.cmd == "reap":
         print("\n".join(launcher.reap_now(cfg)) or "Nothing to reap: every worker is still running")
+    elif a.cmd == "pause":
+        print(launcher.pause())
     else:
         ensure_link()
         print(json.dumps(launcher.tick(cfg, drop_missing=a.drop_missing), indent=2, ensure_ascii=False))
@@ -367,7 +369,7 @@ def _key(value, table):
 
 FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
-FLOOR = ("tick", "reap", "worker")
+FLOOR = ("tick", "reap", "worker", "pause")
 # read a snapshot of the state, so they never wait for a long tick
 READ_ONLY = ("status", "show", "board-data", "repos", "metrics", "pr-comments", "worktree")
 
@@ -523,6 +525,8 @@ def parser():
     s = sub.add_parser("tick", help="reconcile the factory and start its jobs, or hand them out with launcher session (JSON)")
     s.add_argument("--drop-missing", action="store_true",
                    help="drop every live ticket whose note is gone, even when all of them are (normally refused)")
+    sub.add_parser("pause", help="manager: finished workers only report back and start nothing; the next wonka tick "
+                                 "resumes")
     sub.add_parser("reap", help="record the workers whose claude has ended (every tick does this first)")
     s = sub.add_parser("worker", help="what wonka tick starts for each agent: run its claude, then report back and tick")
     s.add_argument("run", help="the worker's run record in ~/.wonka/runs")

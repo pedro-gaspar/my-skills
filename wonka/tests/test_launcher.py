@@ -139,6 +139,21 @@ class LauncherTest(RepoFixture, unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(self.ticket(tid)["retries"], 1)
 
+    def test_a_paused_factory_only_reports_finished_workers_until_the_next_tick(self):
+        tid, run = self.claimed()
+        launcher.pause()
+        launcher.work(run)
+        self.assertEqual(len(list(self.calls.glob("*.call"))), 1)
+        self.assertEqual(self.records(), [])
+        self.assertEqual(self.ticket(tid)["retries"], 1)
+        with mock.patch.object(launcher, "spawn"):
+            out = launcher.tick(self.cfg)
+        self.assertIn("▶️ factory resumed", out["events"])
+        self.assertIn(f"{tid}: 🚀 triage launched (dispatch 2)", out["events"])
+        self.assertFalse(launcher.paused())
+        for record in self.records():  # its worker was never spawned
+            record.unlink()
+
     def test_a_stale_job_is_retried_only_when_no_worker_runs_it(self):
         tid, run = self.claimed()
         with store.state() as db:

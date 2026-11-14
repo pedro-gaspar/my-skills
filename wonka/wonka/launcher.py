@@ -37,6 +37,30 @@ def floor():
     return store.home() / "floor"
 
 
+def _paused_flag():
+    return store.home() / "paused"
+
+
+def paused():
+    return _paused_flag().exists()
+
+
+def pause():
+    """Stop finished workers from turning the factory: they only report back, so no new job starts."""
+    _paused_flag().touch()
+    running = len(list(runs_dir().glob("*.run.json"))) if runs_dir().exists() else 0
+    return f"⏸️ factory paused: {running} worker(s) still finishing, they start nothing new; wonka tick resumes it"
+
+
+def _resume():
+    """True when the factory was paused."""
+    try:
+        _paused_flag().unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def short(agent):
     return agent.removeprefix("wonka:").removeprefix("oompa-loompa-")
 
@@ -164,6 +188,8 @@ def tick(cfg, drop_missing=False, own=None):
     """One turn of the factory, as `wonka tick` and every finished worker run it. With `launcher: claude` the jobs
     are started here as workers and `jobs` comes back empty; with `session` they are returned for the manager."""
     events = reap_now(cfg, own)
+    if own is None and _resume():  # only a tick someone ran resumes a paused factory, never a worker's
+        events.append("▶️ factory resumed")
     # GitHub is read and the bases fetched before the lock is taken, so the agents' commands never wait on the network
     fetched = Factory(cfg, store.snapshot()).prefetch()
     runs = []
@@ -199,7 +225,7 @@ def work(run):
     except OSError as e:
         store.log(f"{rec['id']}: ⚠️ could not run claude for {rec['agent']}: {e}")
     cfg = store.load_config()  # read now: the launcher may have changed while claude ran
-    if cfg["launcher"] == "claude":
+    if cfg["launcher"] == "claude" and not paused():
         tick(cfg, own=run)
-    else:  # a tick here would claim jobs that only the session can dispatch
+    else:  # paused, or a tick here would claim jobs that only the session can dispatch
         reap_now(cfg, own=run)

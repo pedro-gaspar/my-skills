@@ -157,9 +157,9 @@ Stop the factory loop in this session; the tickets and their state stay as they 
    `CronList` whose prompt is `/wonka tick` and remove it with `CronDelete`. Do both checks when unsure; no loop
    found is fine.
 2. Run no tick and dispatch no agent. Background agents already running keep working: when one finishes, still
-   run `wonka finished` for it as in tick step 3, and schedule nothing after. With `launcher: claude` there is
-   nothing to run: the workers keep going and report themselves, and each one still turns the factory once when it
-   ends, so queued jobs can start until the last worker is done.
+   run `wonka finished` for it as in tick step 3, and schedule nothing after. With `launcher: claude` run
+   `wonka pause` and pass on its line: the workers finish and report themselves but start nothing new, until the
+   next `wonka tick` resumes the factory.
 3. Reply in one line, Wonka-style: the factory is stopped, how many agents are still finishing (if any), and
    that `/loop /wonka tick` starts it again.
 
