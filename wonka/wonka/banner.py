@@ -126,7 +126,7 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
     if s == ("shipped", "awaiting") and t.get("ci_flaky"):
         f = t["ci_flaky"]
         return "question", "🙋 Your turn: re-run the flaky CI checks", (
-            f"The builder judged the red checks flaky ({f.get('why')}). Re-run {f.get('checks')} on {_pr_link(t)}:"
+            f"The builder judged the red checks flaky ({f.get('why')}). Re-run {f.get('checks')} on {_pr_link(t)}: "
             "if they fail again Wonka starts another CI fix round; once green, review and merge it.")
     if s == ("drafting", "awaiting") and t.get("spec_review_pending"):
         return "question", "🙋 Your turn: review the spec", (

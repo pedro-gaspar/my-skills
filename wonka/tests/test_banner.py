@@ -158,7 +158,7 @@ class BannerTest(unittest.TestCase):
         url = "https://github.com/acme/app/pull/7"
         t = {"last_valid": {"status": "shipped", "phase": "awaiting"}, "project": "app", "history": [],
              "pr_url": url, "ci_flaky": {"why": "runner lost", "checks": "wf / build"}}
-        self.assertIn(f"Re-run wf / build on [PR #7]({url}):", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        self.assertIn(f"Re-run wf / build on [PR #7]({url}): if they fail again", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
     def test_shipped_links_the_merged_pr(self):
         cfg = dict(store.DEFAULT_CONFIG)
