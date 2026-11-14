@@ -1015,8 +1015,42 @@ class Factory:
             self.write(tid, meta, body)
         elif field == "pr_repo":
             self.ticket(tid)["pr_repo"] = value
+        elif field == "repo":
+            self._move_repo(tid, value)
         else:
-            raise WonkaError("settable fields: title, size, priority, jira, pr_repo, spec_review")
+            raise WonkaError("settable fields: title, size, priority, jira, pr_repo, spec_review, repo")
+
+    def _resolve_repo(self, value):
+        """A repo path or a known project name to (top, base_branch, origin)."""
+        value = (value or "").strip()
+        if not value:
+            raise WonkaError("repo needs a project name or a repo path")
+        path = Path(value).expanduser()
+        if path.is_dir():
+            return repo_info(str(path))
+        known = self.repos()
+        matches = [r for r in known if r[0] == value]
+        if not matches:
+            names = ", ".join(sorted({r[0] for r in known}))
+            raise WonkaError(f"no known project {value}: pass a repo path, or one of: {names}")
+        if len(matches) > 1:
+            paths = ", ".join(r[1] for r in matches)
+            raise WonkaError(f"{value} names several repos ({paths}): pass the path")
+        return repo_info(matches[0][1])
+
+    def _move_repo(self, tid, value):
+        t = self.ticket(tid)
+        if t.get("worktree") or t.get("branch") or t.get("pr_url"):
+            raise WonkaError(f"{tid} already has work in {t['project']} (worktree, branch or PR): it can't change repo")
+        if t.get("job_started_at") or t.get("held_by"):
+            raise WonkaError(f"{tid} has a job running: wait for it to finish, then move it")
+        if t.get("jira_create"):
+            raise WonkaError(f"{tid} has a Jira issue queued for {t['project']}: wait for the next tick, then move it")
+        top, base, origin = self._resolve_repo(value)
+        self.drop_scout(tid)
+        t["repo"], t["project"], t["base_branch"], t["pr_repo"] = top, Path(top).name, base, origin
+        meta, body = self.read(tid)
+        self.write(tid, meta, body)
 
     def triage(self, tid, size, title=None, questions=None, duplicate_of=None, dispatch=None):
         if self._stale_dispatch(tid, dispatch):

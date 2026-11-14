@@ -2988,6 +2988,81 @@ class FactoryTest(unittest.TestCase):
             f.triage(tid, "s", title="Triaged\ntitle")
         self.assertEqual(self.note(tid)[0]["title"], "Triaged title")
 
+    def other_repo(self):
+        other = self.tmp / "other"
+        sh("git", "init", "-q", "--bare", str(self.tmp / "other.git"), cwd=self.tmp)
+        other.mkdir()
+        sh("git", "init", "-q", "-b", "main", cwd=other)
+        (other / "README.md").write_text("other\n")
+        sh("git", "add", ".", cwd=other)
+        sh("git", "commit", "-qm", "init", cwd=other)
+        sh("git", "remote", "add", "origin", str(self.tmp / "other.git"), cwd=other)
+        sh("git", "push", "-qu", "origin", "main", cwd=other)
+        return other
+
+    def ticket_dict(self, tid):
+        with self.f() as f:
+            return dict(f.ticket(tid))
+
+    def assert_moved(self, tid, other):
+        top, base, origin = factory.repo_info(str(other))
+        t = self.ticket_dict(tid)
+        self.assertEqual((t["repo"], t["project"], t["base_branch"], t["pr_repo"]), (top, "other", base, origin))
+        self.assertEqual(base, "main")
+
+    def test_set_repo_by_path_moves_an_unstarted_ticket(self):
+        other = self.other_repo()
+        tid = self.add()
+        with self.f() as f:
+            f.set_field(tid, "repo", str(other))
+        self.assert_moved(tid, other)
+
+    def test_set_repo_by_project_name(self):
+        other = self.other_repo()
+        with self.f() as f:
+            f.add("Other idea", repo=str(other))
+        tid = self.add()
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "other"):
+                f.set_field(tid, "repo", "nope")
+            self.assertEqual(f.ticket(tid)["project"], "app")
+            f.set_field(tid, "repo", "other")
+        self.assert_moved(tid, other)
+
+    def test_set_repo_is_refused_once_work_started(self):
+        other = self.other_repo()
+        tid = self.add()
+        self.tick()
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "job running"):
+                f.set_field(tid, "repo", str(other))
+            f.ticket(tid).pop("job_started_at", None)
+            f.ticket(tid).pop("held_by", None)
+            f.ticket(tid)["branch"] = "wonka/x"
+            with self.assertRaisesRegex(WonkaError, "already has work"):
+                f.set_field(tid, "repo", str(other))
+            self.assertEqual(f.ticket(tid)["project"], "app")
+
+    def test_set_repo_drops_a_leftover_scout(self):
+        other = self.other_repo()
+        tid = self.add()
+        with self.f() as f:
+            path, _ = f.fresh_scout(tid)
+            f.set_field(tid, "repo", str(other))
+            self.assertNotIn("scout", f.ticket(tid))
+        self.assertFalse(Path(path).exists())
+        self.assertNotIn(path, sh("git", "worktree", "list", cwd=self.repo))
+        self.assert_moved(tid, other)
+
+    def test_set_repo_with_a_bad_path_leaves_the_ticket_alone(self):
+        tid = self.add()
+        empty = self.tmp / "not-a-repo"
+        empty.mkdir()
+        with self.f() as f:
+            with self.assertRaises(WonkaError):
+                f.set_field(tid, "repo", str(empty))
+        self.assertEqual(self.ticket_dict(tid)["project"], "app")
+
     def test_a_hand_written_multi_line_title_keeps_one_banner(self):
         tid = self.add()
         self.edit_note(tid, lambda s: s.replace("title: Add a hello script", "title: |\n  Add a\n  hello script"))
