@@ -209,7 +209,7 @@ class FactoryTest(unittest.TestCase):
 
         meta, body = self.note(tid)
         self.assertEqual((meta["status"], meta["phase"]), ("🚢 Shipped", "🍭 Ready"))
-        self.assertIn("> [!success] Shipped 🎉\n> Merged: https://github.com/acme/app/pull/7.", body)
+        self.assertIn("> [!success] 🎉 Shipped: nothing left to do\n> Merged: https://github.com/acme/app/pull/7.", body)
         self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
         self.assertEqual(body.count("> [!"), 2, "one banner, one log, nothing piled up")
@@ -2131,7 +2131,7 @@ class FactoryTest(unittest.TestCase):
         self.assertIn("> [!info] ⛓️ Blocked by WONKA-00001, WONKA-00002", self.note(c)[1])
         self.merge(a)
         self.tick()
-        self.assertIn("> [!info] ⛓️ Blocked by WONKA-00002\n", self.note(c)[1])
+        self.assertIn("> [!info] ⛓️ Blocked by WONKA-00002: waits until it merges\n", self.note(c)[1])
         self.assertEqual(self.state(c), ("triage", "ready"))
         self.assertFalse([h for h in self.f_ticket(c)["history"] if h.get("why", "").startswith("Unblocked")])
 

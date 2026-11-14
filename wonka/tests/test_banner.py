@@ -14,6 +14,22 @@ class BannerTest(unittest.TestCase):
                 self.assertTrue(text.startswith("# 🎫 WONKA-00001\n\n> [!"), (status, sub))
                 self.assertIn(banner.QUIPS[(status, sub)], text)
 
+    def test_every_headline_reads_like_the_idea_line(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        cases = [(st, sub, {}, ()) for st, subs in machine.VALID.items() for sub in subs]
+        cases += [("triage", "ready", {}, ["WONKA-00009"]),
+                  ("shipped", "progress", {"conflicts": True}, ()),
+                  ("shipped", "awaiting", {"conflicts": True}, ()),
+                  ("shipped", "awaiting", {"conflicts": True, "conflict_error": "boom"}, ())]
+        for status, sub, extra, waiting in cases:
+            with self.subTest(status=status, phase=sub, extra=extra, waiting=waiting):
+                t = {"last_valid": {"status": status, "phase": sub}, "project": "app", "history": [],
+                     "review_round": 1, "reviewers": ["architect"], "pr_url": "https://x/pull/1",
+                     "entered_done_at": "2026-10-18T10:00:00+00:00", **extra}
+                h = banner.headline("WONKA-00001", t, {"size": "s"}, cfg, waiting=waiting)
+                self.assertFalse(h[0].isascii(), h)
+                self.assertIn(": ", h)
+
     def test_every_manual_state_tells_its_story(self):
         cfg = dict(store.DEFAULT_CONFIG)
         for s in (*machine.MANUAL_PARKED, ("reviewing", "pending"), ("reviewing", "progress"), ("reviewing", "awaiting"),
@@ -43,21 +59,21 @@ class BannerTest(unittest.TestCase):
         self.assertIn("Won't do", text)
         t["last_valid"] = {"status": "baking", "phase": "progress"}
         t["worktree"] = "/w"
-        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg, waiting=w), "A builder Oompa-Loompa is baking")
+        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg, waiting=w), "🍫 A builder Oompa-Loompa is baking: wait for the squirrels")
         t["last_valid"] = {"status": "triage", "phase": "ready"}
-        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg), "Ready for the Inventing Room")
+        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg), "🧪 Ready for the Inventing Room: the analyst picks it up next")
 
     def test_blocked_headline_for_held_baking_pending(self):
         cfg = dict(store.DEFAULT_CONFIG)
         t = {"last_valid": {"status": "baking", "phase": "pending"}, "project": "app", "history": []}
         w = ["WONKA-00001"]
-        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg, waiting=w), "⛓️ Blocked by WONKA-00001")
+        self.assertEqual(banner.headline("WONKA-00002", t, {}, cfg, waiting=w), "⛓️ Blocked by WONKA-00001: waits until it merges")
         text = banner.render("WONKA-00002", t, {"size": "s"}, cfg, waiting=w)
         self.assertIn("> [!info] ⛓️ Blocked by WONKA-00001", text)
         text = banner.render("WONKA-00002", t, {"size": "s"}, cfg, waiting=w, dead=w)
         self.assertIn("[!warning]", text)
         self.assertIn("Won't do", text)
-        self.assertNotEqual(banner.headline("WONKA-00002", t, {}, cfg), "⛓️ Blocked by WONKA-00001")
+        self.assertNotEqual(banner.headline("WONKA-00002", t, {}, cfg), "⛓️ Blocked by WONKA-00001: waits until it merges")
 
     def test_log_is_newest_first_and_folded(self):
         t = {"history": [
