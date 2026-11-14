@@ -141,6 +141,32 @@ class BannerTest(unittest.TestCase):
         self.assertIn("Review and merge the PR.", text)
         self.assertNotIn("None", text)
 
+    def test_manual_pr_callout_links_the_pr(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        url = "https://github.com/acme/app/pull/7"
+        t = {"last_valid": {"status": "shipped", "phase": "awaiting"}, "project": "app", "history": [],
+             "manual": True, "pr_url": url}
+        self.assertIn(f"Push your changes to [PR #7]({url}) from the session",
+                      banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        t["pr_url"] = None
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("Push your changes to the PR from the session", text)
+        self.assertNotIn("None", text)
+
+    def test_flaky_ci_callout_links_the_pr(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        url = "https://github.com/acme/app/pull/7"
+        t = {"last_valid": {"status": "shipped", "phase": "awaiting"}, "project": "app", "history": [],
+             "pr_url": url, "ci_flaky": {"why": "runner lost", "checks": "wf / build"}}
+        self.assertIn(f"Re-run wf / build on [PR #7]({url}):", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
+    def test_shipped_links_the_merged_pr(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        url = "https://github.com/acme/app/pull/7"
+        t = {"last_valid": {"status": "shipped", "phase": "ready"}, "project": "app", "history": [],
+             "pr_url": url, "entered_done_at": "2026-10-18T10:00:00+00:00"}
+        self.assertIn(f"Merged: [PR #7]({url}).", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
     def test_shipped_without_a_pr_says_no_code_changes(self):
         cfg = dict(store.DEFAULT_CONFIG)
         t = {"last_valid": {"status": "shipped", "phase": "ready"}, "project": "app", "history": [],
