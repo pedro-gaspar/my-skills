@@ -178,11 +178,12 @@ AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", 
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
                   "retry", "worktree", "jira-synced", "jira-created", "pause", "hard-stop")
 HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor", "session", "archive",
-                  "import-notes", "sync-obsidian", "board", "board-data", "drag", "answer", "reap", "worker", "timer")
-# Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
+                  "import-notes", "sync-obsidian", "board", "board-data", "drag", "answer", "reap", "worker", "timer", "help")
+# Every wonka command but test and help runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
 # repo's git dir, and talk to GitHub. wonka test needs none of that (its lock is in the worktrees folder), so it stays
-# inside, and the test command it starts, a script the builder can edit, is confined with it.
-SANDBOX_EXCLUDED = tuple(f"wonka {c} *" for c in (*AGENT_COMMANDS, *HUMAN_COMMANDS) if c != "test")
+# inside, and the test command it starts, a script the builder can edit, is confined with it. help reads nothing.
+SANDBOXED = ("test", "help")
+SANDBOX_EXCLUDED = tuple(f"wonka {c} *" for c in (*AGENT_COMMANDS, *HUMAN_COMMANDS) if c not in SANDBOXED)
 WIDE_EXCLUSIONS = ("wonka", "wonka *", "wonka:*", "wonka test", "wonka test *", "wonka test:*")
 BROAD = ("Bash(wonka)", "Bash(wonka *)", "Bash(wonka:*)")
 

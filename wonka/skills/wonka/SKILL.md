@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), stop the session's tick loop (or hard-stop it, killing the running agents), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|stop-factory|hard-stop-factory|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | stop-factory | hard-stop-factory | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), stop the session's tick loop (or hard-stop it, killing the running agents), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|stop-factory|hard-stop-factory|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor|help.
+argument-hint: "add \"idea\" | tick | stop-factory | hard-stop-factory | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor | help [command]"
 model: sonnet
 ---
 
@@ -33,6 +33,9 @@ Arguments: `$ARGUMENTS`
 `wonka doctor` and show the lines as they are. If it prints a permission snippet, offer to add it to
 `~/.claude/settings.json`, and to remove any rule or `allowWrite` entry it warns about. Never add `Bash(wonka *)` or
 an allow rule for `wonka config`, `set`, `move`, `block`, `unblock` or `init`: those are the human's, so they ask.
+
+## help
+`wonka help [command]` and show the output as it is.
 
 ## add
 Quoting: pass every free text (the idea, `--title`) in single quotes, writing each `'` inside it as `'\''`, so no
