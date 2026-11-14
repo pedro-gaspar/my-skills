@@ -334,6 +334,7 @@ class CliTest(unittest.TestCase):
         for argv in (["ask", "WONKA-00001", "--question", "Q? | a | *b"], ["plan", "WONKA-00001"],
                      ["section", "WONKA-00001", "spec"], ["resolved", "WONKA-00001"],
                      ["drafted", "WONKA-00001", "--size", "s"], ["baked", "WONKA-00001"], ["pr-body", "WONKA-00001"],
+                     ["comment", "WONKA-00001"],
                      ["triage", "WONKA-00001", "--size", "s"],
                      ["report", "WONKA-00001", "--squirrel", "architect", "--verdict", "good"],
                      ["finished", "WONKA-00001", "--agent", "wonka:squirrel-backend"]):
@@ -364,13 +365,13 @@ class CliTest(unittest.TestCase):
         root = Path(cli.__file__).resolve().parent.parent / "agents"
         for p in root.glob("*.md"):
             for ln in p.read_text().splitlines():
-                if re.search(r"wonka (plan|section|pr-body) <id>", ln):
+                if re.search(r"wonka (plan|section|pr-body|comment) <id>", ln):
                     self.assertIn("--file", ln, p.name)
                     self.assertNotIn("<<", ln, p.name)
 
     def test_agent_docs_pass_the_dispatch(self):
         root = Path(cli.__file__).resolve().parent.parent
-        for name, verbs in (("oompa-loompa-builder", ("pr-body", "baked")), ("oompa-loompa-analyst", ("ask", "plan", "section", "drafted")),
+        for name, verbs in (("oompa-loompa-builder", ("pr-body", "comment", "baked")), ("oompa-loompa-analyst", ("ask", "plan", "section", "drafted")),
                             ("oompa-loompa-fixer", ("resolved",)), ("oompa-loompa-triage", ("triage",))):
             lines = (root / "agents" / f"{name}.md").read_text().splitlines()
             for verb in verbs:

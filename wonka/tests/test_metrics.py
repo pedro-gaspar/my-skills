@@ -70,6 +70,8 @@ class MetricsTest(unittest.TestCase):
             (kill("wonka", "weird"), "weird"),
             (kill("wonka"), "killed"),
             (ticket([mv(1, "reviewing/ready", "shipped/ready")], last_valid={"status": "shipped", "phase": "ready"}), "merged"),
+            (ticket([mv(1, "baking/progress", "shipped/ready", "builder", "No code changes: shipped")],
+                    last_valid={"status": "shipped", "phase": "ready"}), "no code"),
         ]
         for t, want in cases:
             self.assertEqual(metrics.outcome(t), want)

@@ -166,7 +166,9 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
         ("shipped", "awaiting"): ("question", "🙋 Your turn: merge the PR", (
             f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree. "
             "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
-        ("shipped", "ready"): ("success", "Shipped 🎉", f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}"),
+        ("shipped", "ready"): ("success", "Shipped 🎉", (
+            f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}" if t.get("pr_url")
+            else f"No code changes, nothing to merge: see 💬 Comments.{_archive_day(t, cfg)}")),
         ("wontdo", "ready"): ("failure", "Down the chute 🗑️", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
     }[s]
 

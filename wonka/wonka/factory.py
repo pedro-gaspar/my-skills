@@ -17,7 +17,7 @@ from .store import CriticalError, WonkaError
 
 REVIEWERS = ("architect", "backend", "frontend", "security", "spark", "airflow")
 # free-text sections, checked with markdownlint; Wonka-rendered sections (approval, questions, stuck, log, ...) never are
-LINTED = ("idea", "spec")
+LINTED = ("idea", "spec", "comments")
 MAX_RETRIES = 3
 MAX_CONFLICT_FIXES = 3  # fixes in a row that GitHub still calls CONFLICTING
 MAX_CI_FIXES = 3  # CI fix rounds in a row whose new head is still red
@@ -1114,6 +1114,15 @@ class Factory:
         self.expect(tid, ("drafting", "progress"))
         return self.set_section(tid, "spec", content)
 
+    def write_comments(self, tid, content, dispatch=None):
+        """The builder's `wonka comment`: the outcome of a bake, a ticket with no code changes ships on it."""
+        if self._stale_dispatch(tid, dispatch):
+            return self._stale_msg(tid, "builder comments", dispatch)
+        self.expect(tid, ("baking", "progress"))
+        if not content.strip():
+            raise WonkaError("the comments are empty: write the outcome of the work")
+        return self.set_section(tid, "comments", content)
+
     def ask(self, tid, questions, dispatch=None):
         if self._stale_dispatch(tid, dispatch):
             return self._stale_msg(tid, "analyst questions", dispatch)
@@ -1563,6 +1572,8 @@ class Factory:
                 raise WonkaError("nothing to dispute: --dispute is only for issues the squirrels raised in the last "
                                  "review round (not change requests, CI failures or a first bake)")
         all_disputed = bool(disputes) and len(disputes) >= _round_issues(t["rounds"][-1])
+        if not disputes and not t.get("pr_url") and self._own_commits(tid) == 0:
+            return self._baked_no_code(tid)
         self._require_commits(tid)
         no_new = t.get("reviewed_head") and git("rev-parse", "HEAD", cwd=t["worktree"]) == t["reviewed_head"]
         if no_new and not all_disputed:
@@ -1587,8 +1598,25 @@ class Factory:
         t = self.ticket(tid)
         if git("status", "--porcelain", cwd=t["worktree"]):
             raise WonkaError("the worktree has uncommitted changes: commit them first")
-        if git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]) == "0":
+        if self._own_commits(tid) == 0:
             raise WonkaError(f"no commits on {t['branch']} yet")
+
+    def _own_commits(self, tid):
+        t = self.ticket(tid)
+        return int(git("rev-list", "--count", f"{self.base_ref(tid)}..HEAD", cwd=t["worktree"]))
+
+    def _baked_no_code(self, tid):
+        """An investigation or task with no commits ships on its 💬 Comments: no review, push or PR."""
+        t = self.ticket(tid)
+        if git("status", "--porcelain", cwd=t["worktree"]):
+            raise WonkaError("the worktree has uncommitted changes: commit them first")
+        _, body = self.read(tid)
+        if not (note.get_section(body, "comments") or "").strip():
+            raise WonkaError(f"no commits on {t['branch']} yet: commit the work, or, for an investigation or task "
+                             f"with no code changes, write its outcome first with wonka comment {tid} "
+                             f"--dispatch {t.get('dispatch')} --file <path>")
+        self.move(tid, machine.MERGED, "builder", "No code changes: shipped with the outcome in 💬 Comments")
+        return f"{tid}: shipped with no code changes, no PR: see 💬 Comments"
 
     def _baked_flaky(self, tid, flaky):
         """The builder judged a CI fix round's red checks flaky: no new code, back to the open PR."""
@@ -1781,10 +1809,14 @@ class Factory:
         return f"{tid}: shipped" + (", the fix round's new commits are kept on its branch" if t.get("keep_branch") else "")
 
     def _unpushed(self, tid):
-        """True when the local branch has commits the PR branch on origin lacks, or when that cannot be told."""
+        """True when the local branch has commits the PR branch on origin lacks, or when that cannot be told. A branch
+        wholly inside the base ref holds nothing of its own."""
         t = self.ticket(tid)
         branch = t.get("branch")
         if not branch or not Path(t["repo"]).is_dir() or not _ref_exists(t["repo"], f"refs/heads/{branch}"):
+            return False
+        if _exec(["git", "merge-base", "--is-ancestor", f"refs/heads/{branch}", self.base_ref(tid)],
+                 cwd=t["repo"])[0] == 0:
             return False
         code, out, _ = _exec(["git", "rev-list", "--count", f"refs/remotes/origin/{branch}..refs/heads/{branch}"],
                              cwd=t["repo"])
