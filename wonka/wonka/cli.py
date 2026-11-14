@@ -100,6 +100,15 @@ def cmd_config(a):
     show_config(cfg)
 
 
+def cmd_docs():
+    """Wonka's user docs as markdown, for the board's help panel."""
+    path = ROOT / "README.md"
+    try:
+        print(path.read_text(encoding="utf-8"), end="")
+    except (OSError, UnicodeDecodeError) as e:
+        raise WonkaError(f"cannot read the docs {path}: {e}")
+
+
 def cmd_board():
     """Start the board app (backend and frontend) from its clone; this process becomes `make up`."""
     path = store.load_config().get("board_path")
@@ -575,6 +584,7 @@ def parser():
                                    "archive/shipped or archive/wont-do")
     sub.add_parser("board", help="start the board app from board_path (make up)")
     sub.add_parser("board-data", help="the board app: every live ticket as JSON")
+    sub.add_parser("docs", help="the board app: Wonka's user docs (this README) as markdown")
     s = sub.add_parser("drag", help="the board app: drag a card (an Idea to triage, any card to wontdo)")
     s.add_argument("id")
     s.add_argument("status")
@@ -622,6 +632,9 @@ def main(argv=None):
             return 0
         if a.cmd == "board":
             cmd_board()
+        if a.cmd == "docs":
+            cmd_docs()
+            return 0
         if a.cmd == "timer":
             cmd_timer(a)
             return 0
