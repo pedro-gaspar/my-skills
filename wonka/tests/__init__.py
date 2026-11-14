@@ -6,7 +6,7 @@ core.editor or init.defaultBranch never reaches a test. `wonka git` drops every 
 home (so an agent cannot pick its config), so for it the passwd home is faked to a private home holding that config.
 WONKA_NO_NOTIFY is set for the whole run, so a test never pings the desktop; the notification tests unset it.
 The claude program is a name that does not exist, so no test can start a real (paid) worker; the launcher tests point
-it at a fake."""
+it at a fake. systemctl and launchctl are too, so no test installs a real timer."""
 
 import atexit
 import os
@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import unittest
 
-from wonka import gitwrap, launcher
+from wonka import gitwrap, launcher, timer
 
 GIT_HOME = tempfile.mkdtemp(prefix="wonka-tests-git-")  # outside RUN_TMP, which must end up empty
 atexit.register(shutil.rmtree, GIT_HOME, ignore_errors=True)
@@ -30,6 +30,7 @@ for _k in [k for k in os.environ if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG
 REAL_PASSWD_HOME = gitwrap._passwd_home  # for the tests of _passwd_home itself
 gitwrap._passwd_home = lambda: GIT_HOME
 launcher.CLAUDE = "wonka-tests-no-claude"
+timer.SYSTEMCTL = timer.LAUNCHCTL = "wonka-tests-no-servicectl"
 
 RUN_TMP = os.path.realpath(tempfile.mkdtemp(prefix="wonka-tests-"))
 atexit.register(shutil.rmtree, RUN_TMP, ignore_errors=True)

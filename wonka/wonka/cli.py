@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import board, launcher, machine, prcomments, store
+from . import board, launcher, machine, prcomments, store, timer
 from .factory import JIRA_SYNCS, Factory, alert, fmt, split_ids
 from .store import WonkaError
 
@@ -84,6 +84,7 @@ def show_config(cfg):
           f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
           f"🕹️ session launcher : {cfg['session_launcher']}\n"
           f"🚀 launcher         : {cfg['launcher']}\n"
+          f"⏰ timer            : every {cfg['timer_minutes']} minutes (wonka timer install)\n"
           f"🍫 board app        : {cfg.get('board_path') or '-'}\n"
           f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
           f"📜 factory log      : {store.home() / 'factory.log'}")
@@ -311,6 +312,16 @@ def run(a, f):
                   + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
 
 
+def cmd_timer(a):
+    if a.action == "install":
+        ensure_link()
+        print(timer.install(LINK, store.load_config()["timer_minutes"]))
+    elif a.action == "uninstall":
+        print(timer.uninstall())
+    else:
+        print(timer.status())
+
+
 def run_floor(a, cfg):
     """The commands that take the state lock more than once, so they never run inside main()'s one lock."""
     if a.cmd == "worker":
@@ -319,9 +330,12 @@ def run_floor(a, cfg):
         print("\n".join(launcher.reap_now(cfg)) or "Nothing to reap: every worker is still running")
     elif a.cmd == "pause":
         print(launcher.pause())
+    elif a.timer and launcher.paused():  # stop-factory paused it: only a tick someone runs resumes it
+        print("\n".join(launcher.reap_now(cfg) + ["⏸️ factory paused: wonka tick resumes it"]))
     else:
         ensure_link()
-        print(json.dumps(launcher.tick(cfg, drop_missing=a.drop_missing), indent=2, ensure_ascii=False))
+        out = launcher.tick(cfg, drop_missing=a.drop_missing, resume=not a.timer)
+        print(json.dumps(out, indent=2, ensure_ascii=False))
 
 
 def launch(a, cfg, s):
@@ -525,6 +539,10 @@ def parser():
     s = sub.add_parser("tick", help="reconcile the factory and start its jobs, or hand them out with launcher session (JSON)")
     s.add_argument("--drop-missing", action="store_true",
                    help="drop every live ticket whose note is gone, even when all of them are (normally refused)")
+    s.add_argument("--timer", action="store_true", help="run by wonka timer: a paused factory stays paused")
+    s = sub.add_parser("timer", help="run wonka tick every timer_minutes with no Claude session (systemd on Linux, "
+                                     "launchd on macOS)")
+    s.add_argument("action", nargs="?", default="status", choices=("install", "uninstall", "status"))
     sub.add_parser("pause", help="manager: finished workers only report back and start nothing; the next wonka tick "
                                  "resumes")
     sub.add_parser("reap", help="record the workers whose claude has ended (every tick does this first)")
@@ -600,6 +618,9 @@ def main(argv=None):
             return 0
         if a.cmd == "board":
             cmd_board()
+        if a.cmd == "timer":
+            cmd_timer(a)
+            return 0
         if a.cmd == "doctor":
             from .doctor import doctor
             return doctor()

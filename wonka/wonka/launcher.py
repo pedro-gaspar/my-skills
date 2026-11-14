@@ -194,11 +194,11 @@ def spawn(runs):
                     _write(run, {**_read(run), "pid": pid})
 
 
-def tick(cfg, drop_missing=False, own=None):
+def tick(cfg, drop_missing=False, own=None, resume=True):
     """One turn of the factory, as `wonka tick` and every finished worker run it. With `launcher: claude` the jobs
     are started here as workers and `jobs` comes back empty; with `session` they are returned for the manager."""
     events = reap_now(cfg, own)
-    if own is None and _resume():  # only a tick someone ran resumes a paused factory, never a worker's
+    if own is None and resume and _resume():  # only a tick someone ran resumes a paused factory
         events.append("▶️ factory resumed")
     # GitHub is read and the bases fetched before the lock is taken, so the agents' commands never wait on the network
     fetched = Factory(cfg, store.snapshot()).prefetch()
