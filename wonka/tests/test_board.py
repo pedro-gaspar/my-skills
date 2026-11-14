@@ -26,6 +26,12 @@ class BoardTest(RepoFixture, unittest.TestCase):
         self.assertEqual((card["spec_review"], card["jira"]), ("agent", None))
         self.assertTrue(self.start_box(tid))
 
+    def test_comments_show_as_a_section(self):
+        tid = self.idea()
+        with self.f() as f:
+            f.set_section(tid, "comments", "Found X in a.py:3")
+        self.assertIn(note.HEADINGS["comments"], [s["heading"] for s in self.card(tid)["sections"]])
+
     def test_dragging_an_idea_to_triage_starts_it(self):
         tid = self.idea()
         with self.f() as f:

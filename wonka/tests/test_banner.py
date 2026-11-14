@@ -110,6 +110,12 @@ class BannerTest(unittest.TestCase):
              "review_round": 1, "reviewers": ["architect"], "pr_url": "https://github.com/acme/app/pull/7"}
         self.assertIn("🔁 Request changes", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
+    def test_shipped_without_a_pr_says_no_code_changes(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        t = {"last_valid": {"status": "shipped", "phase": "ready"}, "project": "app", "history": [],
+             "pr_url": None}
+        self.assertIn("No code changes, nothing to merge", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+
     def test_conflict_fix_has_its_own_story(self):
         cfg = dict(store.DEFAULT_CONFIG)
         t = {"last_valid": {"status": "shipped", "phase": "progress"}, "project": "app", "history": [],

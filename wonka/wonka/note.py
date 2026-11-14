@@ -22,6 +22,7 @@ HEADINGS = {
     "stuck": "🎩 Stuck",
     "changes": "🔁 Request changes",
     "manual": "🕹️ Manual",
+    "comments": "💬 Comments",
     "log": "🎩 Factory log",
 }
 

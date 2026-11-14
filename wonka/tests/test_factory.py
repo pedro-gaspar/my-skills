@@ -2647,6 +2647,77 @@ class FactoryTest(unittest.TestCase):
         with self.f() as f:
             self.assertEqual(f.metrics()[0]["outcome"], "merged")
 
+    def test_bake_with_no_commits_and_comments_ships_without_a_pr(self):
+        tid = self.add()
+        job, wt = self.bake_job(tid)
+        branch = job["branch"]
+        with self.f() as f:
+            f.write_comments(tid, "Found X in a.py:3", job["dispatch"])
+            f.baked(tid, job["dispatch"])
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.assertIsNone(self.f_ticket(tid)["pr_url"])
+        self.assertFalse(Path(f"{self.pr_state}.creates").exists())
+        body = self.note(tid)[1]
+        self.assertIn("Found X in a.py:3", note.get_section(body, "comments"))
+        self.assertIn("No code changes, nothing to merge", body)
+        self.assertEqual(sh("git", "ls-remote", "origin", branch, cwd=self.repo).strip(), "")
+        self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"])
+        self.tick()
+        self.assertFalse(wt.exists())
+        self.assertEqual(sh("git", "branch", "--list", branch, cwd=self.repo).strip(), "")
+        with self.f() as f:
+            self.assertEqual(f.metrics()[0]["outcome"], "no code")
+
+    def test_bake_with_no_commits_and_no_comments_is_refused(self):
+        tid = self.add()
+        job, _ = self.bake_job(tid)
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "wonka comment"):
+                f.baked(tid, job["dispatch"])
+        self.assertEqual(self.state(tid), ("baking", "progress"))
+        self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"])
+        self.assertEqual(self.state(tid), ("baking", "pending"))
+
+    def test_bake_with_no_commits_and_uncommitted_changes_is_refused(self):
+        tid = self.add()
+        job, wt = self.bake_job(tid)
+        with self.f() as f:
+            f.write_comments(tid, "Found X", job["dispatch"])
+        (wt / "stray.txt").write_text("x\n")
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "uncommitted changes"):
+                f.baked(tid, job["dispatch"])
+
+    def test_comments_with_commits_take_the_normal_path(self):
+        tid = self.add()
+        job, wt = self.bake_job(tid)
+        with self.f() as f:
+            f.write_comments(tid, "Also noted", job["dispatch"])
+        (wt / "hello.sh").write_text("echo hi\n")
+        sh("git", "add", ".", cwd=wt)
+        sh("git", "commit", "-qm", "bake", cwd=wt)
+        with self.f() as f:
+            f.baked(tid, job["dispatch"])
+        self.assertEqual(self.state(tid), ("reviewing", "pending"))
+        self.assertIn("Also noted", note.get_section(self.note(tid)[1], "comments"))
+
+    def test_write_comments_rules(self):
+        tid = self.add()
+        with self.f() as f:
+            with self.assertRaises(WonkaError):
+                f.write_comments(tid, "too early", 1)
+        job, _ = self.bake_job(tid)
+        d = job["dispatch"]
+        with self.f() as f:
+            with self.assertRaisesRegex(WonkaError, "empty"):
+                f.write_comments(tid, "  \n", d)
+            self.assertIn("earlier dispatch", f.write_comments(tid, "late", d + 5) or "")
+            f.write_comments(tid, "first", d)
+            f.write_comments(tid, "second", d)
+        text = note.get_section(self.note(tid)[1], "comments")
+        self.assertIn("second", text)
+        self.assertNotIn("first", text)
+
     def test_killed_while_baking_keeps_clean_worktree_until_builder_ends(self):
         tid = self.add()
         job, wt = self.bake_job(tid)

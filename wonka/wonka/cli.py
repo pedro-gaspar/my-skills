@@ -245,6 +245,9 @@ def run(a, f):
     elif c == "pr-body":
         msg = f.write_pr_body(a.id, _text(a), a.dispatch)
         print(msg or f"📝 {f.pr_body_path(a.id)}")
+    elif c == "comment":
+        msg = f.write_comments(a.id, _text(a), a.dispatch)
+        print(msg or f"💬 {a.id}: comments written")
     elif c == "baked":
         print(f.baked(a.id, a.dispatch, flaky=a.flaky, disputes=a.dispute or ()) or f.summary(a.id))
     elif c == "resolved":
@@ -457,6 +460,11 @@ def parser():
     s.add_argument("id")
     s = sub.add_parser("pr-body", help="builder: the PR description (markdown) from --file or stdin, written from the "
                                        "repo's PR template")
+    s.add_argument("id")
+    s.add_argument("--file", help=FILE)
+    s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)
+    s = sub.add_parser("comment", help="builder: the outcome of a bake with no code changes (markdown) from --file "
+                                       "or stdin, written as ## 💬 Comments")
     s.add_argument("id")
     s.add_argument("--file", help=FILE)
     s.add_argument("--dispatch", type=int, required=True, help=DISPATCH)

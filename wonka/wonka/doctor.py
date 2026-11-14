@@ -174,7 +174,7 @@ def _worktree_include_checks(tickets):
 # doctor, session) change settings, stand in for the human's ticks or take a ticket out of the factory, so they must ask the human: an agent that read a
 # hostile CI log or diff must not be able to switch the sandbox off (`wonka config test_commands.<p> bash`) or pass
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
-AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "baked",
+AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "comment", "baked",
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
                   "retry", "worktree", "jira-synced", "jira-created")
 HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor", "session", "archive",

@@ -54,6 +54,9 @@ def hours(t, now):
 
 def outcome(t):
     if _lv(t) == "shipped/ready":
+        into = [m for m in _moves(t) if m["to"] == "shipped/ready"]
+        if into and (into[-1].get("why") or "").startswith("No code changes"):
+            return "no code"
         return "merged"
     kills = [m for m in _moves(t) if m["to"] == "wontdo/ready"]
     if not kills:
