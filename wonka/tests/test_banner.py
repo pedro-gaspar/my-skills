@@ -126,6 +126,21 @@ class BannerTest(unittest.TestCase):
              "review_round": 1, "reviewers": ["architect"], "pr_url": "https://github.com/acme/app/pull/7"}
         self.assertIn("🔁 Request changes", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
 
+    def test_awaiting_merge_links_the_pr(self):
+        cfg = dict(store.DEFAULT_CONFIG)
+        url = "https://github.com/acme/app/pull/7"
+        t = {"last_valid": {"status": "shipped", "phase": "awaiting"}, "project": "app", "history": [],
+             "pr_url": url}
+        link = f"Review and merge [PR #7]({url})."
+        self.assertIn(link, banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        self.assertEqual(banner.headline("WONKA-00001", t, {"size": "s"}, cfg), "🙋 Your turn: merge the PR")
+        t["pr_url"] = url + "/"
+        self.assertIn("[PR #7](", banner.render("WONKA-00001", t, {"size": "s"}, cfg))
+        t["pr_url"] = None
+        text = banner.render("WONKA-00001", t, {"size": "s"}, cfg)
+        self.assertIn("Review and merge the PR.", text)
+        self.assertNotIn("None", text)
+
     def test_shipped_without_a_pr_says_no_code_changes(self):
         cfg = dict(store.DEFAULT_CONFIG)
         t = {"last_valid": {"status": "shipped", "phase": "ready"}, "project": "app", "history": [],
