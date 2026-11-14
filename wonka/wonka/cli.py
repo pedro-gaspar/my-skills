@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import board, launcher, machine, prcomments, store, timer
+from . import board, helpdoc, launcher, machine, prcomments, store, timer
 from .factory import JIRA_SYNCS, Factory, alert, fmt, split_ids
 from .store import WonkaError
 
@@ -586,6 +586,9 @@ def parser():
                                             "edits); every live ticket when no ids")
     s.add_argument("ids", nargs="*")
     sub.add_parser("doctor", help="check the factory's setup")
+    s = sub.add_parser("help", help="every command's usage and options, generated from this parser; "
+                                    "wonka help <command> for one")
+    s.add_argument("command", nargs="?")
     sub.add_parser("git", help="agents: run git in a ticket's worktree: wonka git <id> [--dispatch <n>] "
                                "status|diff|log|show|rev-parse|ls-files|blame|add|commit|rebase ...")
     sub.add_parser("test", help="agents: run a project's test command under a per-project lock: "
@@ -595,8 +598,19 @@ def parser():
     return p
 
 
+def cmd_help(argv):
+    try:
+        print(helpdoc.reference(parser(), parser().parse_args(argv).command))
+        return 0
+    except WonkaError as e:
+        print(f"🗑️ wonka: {e}", file=sys.stderr)
+        return 1
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["help"]:
+        return cmd_help(argv)
     try:
         store.home()  # a refused WONKA_HOME stops here, before anything (the log too) is read or written
     except WonkaError as e:

@@ -196,7 +196,7 @@ class SandboxModeTest(unittest.TestCase):
         from wonka import cli
         subs = next(a for a in cli.parser()._actions if a.dest == "cmd").choices
         self.assertEqual(sorted({*doctor.AGENT_COMMANDS, *doctor.HUMAN_COMMANDS}), sorted(subs))
-        self.assertEqual(sorted(self.RIGHT), sorted(f"wonka {c} *" for c in subs if c != "test"))
+        self.assertEqual(sorted(self.RIGHT), sorted(f"wonka {c} *" for c in subs if c not in ("test", "help")))
 
     def test_recommended_settings_are_ok(self):
         self.assertEqual(self.levels(True, self.RIGHT), ["ok"])
