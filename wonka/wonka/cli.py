@@ -415,7 +415,7 @@ def parser():
     s = sub.add_parser("unblock", help="remove blockers from a ticket; no ids clears them all")
     s.add_argument("id")
     s.add_argument("blockers", nargs="*")
-    s = sub.add_parser("set", help="set title, size, priority, jira, pr_repo or spec_review (agent|human)")
+    s = sub.add_parser("set", help="set title, size, priority, jira, pr_repo, spec_review (agent|human) or repo (project name or path, before work starts)")
     s.add_argument("id")
     s.add_argument("field")
     s.add_argument("value")
