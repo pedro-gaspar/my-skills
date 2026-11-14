@@ -26,6 +26,7 @@ HOOKS_OFF = '{"disableAllHooks":true}'
 # A record gets its pid just after the tick's lock is released: until then it counts as running, for this long
 LAUNCH_GRACE = dt.timedelta(seconds=60)
 RESULT_MAX = 150
+PROC = Path("/proc")
 
 
 def runs_dir():
@@ -93,10 +94,19 @@ def alive(run, rec):
         return _age(rec["started_at"]) < LAUNCH_GRACE
     try:
         os.kill(rec["pid"], 0)
-        cmdline = Path(f"/proc/{rec['pid']}/cmdline").read_bytes()
     except OSError:
         return False
-    return os.fsencode(str(run)) in cmdline
+    return os.fsencode(str(run)) in _cmdline(rec["pid"])
+
+
+def _cmdline(pid):
+    """The process's command line, b"" once it is gone. macOS has no /proc, so ask ps there."""
+    if (PROC / "self").exists():
+        try:
+            return (PROC / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return b""
+    return subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True).stdout
 
 
 def _outcome(log):
