@@ -81,7 +81,7 @@ class FactoryTest(unittest.TestCase):
         sh("git", "commit", "-qm", "init", cwd=self.repo)
         sh("git", "remote", "add", "origin", str(self.tmp / "origin.git"), cwd=self.repo)
         sh("git", "push", "-qu", "origin", "main", cwd=self.repo)
-        self.cfg = {**store.DEFAULT_CONFIG, "vault": str(self.tmp / "vault")}
+        self.cfg = {**store.DEFAULT_CONFIG, "vault": str(self.tmp / "vault"), "launcher": "session"}
         store.save_config(self.cfg)
 
     @contextlib.contextmanager

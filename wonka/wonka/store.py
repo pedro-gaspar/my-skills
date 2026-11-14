@@ -34,9 +34,10 @@ DEFAULT_CONFIG = {
     "jira_issue_type": {},  # project -> the issue type of those new issues
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
     "session_launcher": "terminal",  # how `wonka session` opens Claude: terminal (exec claude here) or orca (an Orca tab)
+    "launcher": "claude",  # who runs the agents: claude (wonka tick starts headless workers) or session (the /wonka manager)
     "board_path": None,  # the wonka-board clone `wonka board` starts with `make up`
 }
-SESSION_LAUNCHERS = ("terminal", "orca")
+CHOICES = {"session_launcher": ("terminal", "orca"), "launcher": ("claude", "session")}
 SETTINGS = {  # wonka config <key> <value>
     "wip.triage": int, "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
     "max_review_rounds": int, "max_followup_depth": int,
@@ -159,13 +160,13 @@ def set_setting(cfg, key, raw):
             raise WonkaError(f"board_path {path} has no Makefile: point it at your wonka-board clone")
         cfg[key] = str(path.resolve())
         return
-    if key == "session_launcher":
-        if raw.strip() not in SESSION_LAUNCHERS:
-            raise WonkaError(f"session_launcher must be {' or '.join(SESSION_LAUNCHERS)}")
+    if key in CHOICES:
+        if raw.strip() not in CHOICES[key]:
+            raise WonkaError(f"{key} must be {' or '.join(CHOICES[key])}")
         cfg[key] = raw.strip()
         return
     if key not in SETTINGS:
-        raise WonkaError(f"unknown setting {key}; one of {', '.join(SETTINGS)}, session_launcher, board_path, "
+        raise WonkaError(f"unknown setting {key}; one of {', '.join((*SETTINGS, *CHOICES))}, board_path, "
                          "worktree_files.<project>, "
                          "test_commands.<project>, ci_hosts.<project>, ci_log_command.<project>, "
                          "jira_project.<project>, jira_issue_type.<project>")
@@ -249,8 +250,9 @@ def _check_config(cfg, path):
             raise bad(key, "a number")
     if cfg["board_path"] is not None and not isinstance(cfg["board_path"], str):
         raise bad("board_path", "a folder path or null")
-    if cfg["session_launcher"] not in SESSION_LAUNCHERS:
-        raise bad("session_launcher", " or ".join(SESSION_LAUNCHERS))
+    for key, choices in CHOICES.items():
+        if cfg[key] not in choices:
+            raise bad(key, " or ".join(choices))
     for key in ("worktree_files", "test_commands", "ci_hosts", "ci_log_command", "jira_project", "jira_issue_type"):
         if cfg[key] is None:
             cfg[key] = {}

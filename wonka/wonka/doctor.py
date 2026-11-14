@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import cilogs, note, store, testrun
+from . import cilogs, launcher, note, store, testrun
 from .factory import WORKTREEINCLUDE, _run, notifier, worktree_includes
 
 SETTINGS = (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json")
@@ -176,9 +176,9 @@ def _worktree_include_checks(tickets):
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
 AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "comment", "baked",
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
-                  "retry", "worktree", "jira-synced", "jira-created")
+                  "retry", "worktree", "jira-synced", "jira-created", "pause")
 HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor", "session", "archive",
-                  "import-notes", "sync-obsidian", "board", "board-data", "drag", "answer")
+                  "import-notes", "sync-obsidian", "board", "board-data", "drag", "answer", "reap", "worker")
 # Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main
 # repo's git dir, and talk to GitHub. wonka test needs none of that (its lock is in the worktrees folder), so it stays
 # inside, and the test command it starts, a script the builder can edit, is confined with it.
@@ -358,6 +358,8 @@ def checks():
     except store.WonkaError as e:
         yield "fail", str(e)
         return
+    if cfg.get("launcher") == "claude":
+        yield ("ok" if shutil.which(launcher.CLAUDE) else "fail"), "claude on PATH (wonka tick runs the agents with it)"
     board = store.board(cfg)
     base, old = board / store.BASE_FILE, board / store.OLD_BASE_FILE
     if base.exists():

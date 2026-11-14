@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import board, machine, prcomments, store
+from . import board, launcher, machine, prcomments, store
 from .factory import JIRA_SYNCS, Factory, alert, fmt, split_ids
 from .store import WonkaError
 
@@ -83,6 +83,7 @@ def show_config(cfg):
           f"🎟️ Jira projects    : {jira}\n"
           f"⏳ test lock wait   : {cfg['test_lock_wait_minutes']} minutes\n"
           f"🕹️ session launcher : {cfg['session_launcher']}\n"
+          f"🚀 launcher         : {cfg['launcher']}\n"
           f"🍫 board app        : {cfg.get('board_path') or '-'}\n"
           f"🗂️ factory folder   : {store.board(cfg) if cfg.get('vault') else '-'}\n"
           f"📜 factory log      : {store.home() / 'factory.log'}")
@@ -265,11 +266,6 @@ def run(a, f):
     elif c == "move":
         f.move(a.id, (_key(a.status, machine.STATUSES), _key(a.phase, machine.PHASES)), "human", a.why)
         print(f.summary(a.id))
-    elif c == "tick":
-        ensure_link()
-        out = f.tick(drop_missing=a.drop_missing)
-        store.log(*out["events"])
-        print(json.dumps(out, indent=2, ensure_ascii=False))
     elif c == "show":
         print(json.dumps({**f.ticket(a.id), "note": str(f.path(a.id))}, indent=2, ensure_ascii=False))
     elif c == "repos":
@@ -313,6 +309,19 @@ def run(a, f):
                   f"{meta.get('title', '')}"
                   + ("  🕹️" if f.ticket(k).get("manual") else "")
                   + (f"  ⛓️ {','.join(w)}" if (w := f.waiting_on(k)) else ""))
+
+
+def run_floor(a, cfg):
+    """The commands that take the state lock more than once, so they never run inside main()'s one lock."""
+    if a.cmd == "worker":
+        launcher.work(a.run)
+    elif a.cmd == "reap":
+        print("\n".join(launcher.reap_now(cfg)) or "Nothing to reap: every worker is still running")
+    elif a.cmd == "pause":
+        print(launcher.pause())
+    else:
+        ensure_link()
+        print(json.dumps(launcher.tick(cfg, drop_missing=a.drop_missing), indent=2, ensure_ascii=False))
 
 
 def launch(a, cfg, s):
@@ -360,6 +369,7 @@ def _key(value, table):
 
 FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
+FLOOR = ("tick", "reap", "worker", "pause")
 # read a snapshot of the state, so they never wait for a long tick
 READ_ONLY = ("status", "show", "board-data", "repos", "metrics", "pr-comments", "worktree")
 
@@ -512,9 +522,14 @@ def parser():
     s.add_argument("status")
     s.add_argument("phase")
     s.add_argument("--why")
-    s = sub.add_parser("tick", help="reconcile the factory and hand out jobs (JSON)")
+    s = sub.add_parser("tick", help="reconcile the factory and start its jobs, or hand them out with launcher session (JSON)")
     s.add_argument("--drop-missing", action="store_true",
                    help="drop every live ticket whose note is gone, even when all of them are (normally refused)")
+    sub.add_parser("pause", help="manager: finished workers only report back and start nothing; the next wonka tick "
+                                 "resumes")
+    sub.add_parser("reap", help="record the workers whose claude has ended (every tick does this first)")
+    s = sub.add_parser("worker", help="what wonka tick starts for each agent: run its claude, then report back and tick")
+    s.add_argument("run", help="the worker's run record in ~/.wonka/runs")
     s = sub.add_parser("session", help="take a ticket into a Claude session (🕹️ manual: no agent works it until you "
                                        "hand it back) and open Claude in its worktree with what the factory did")
     s.add_argument("ref", help="the ticket: WONKA-00012, or the Jira key in its note")
@@ -592,10 +607,11 @@ def main(argv=None):
         if a.cmd in READ_ONLY:
             run(a, Factory(cfg, store.snapshot()))
             return 0
-        # a tick reads GitHub and fetches before it takes the lock, so the agents' commands never wait on the network
-        fetched = Factory(cfg, store.snapshot()).prefetch() if a.cmd == "tick" else None
+        if a.cmd in FLOOR:
+            run_floor(a, cfg)
+            return 0
         with store.state() as db:
-            out = run(a, Factory(cfg, db, fetched))
+            out = run(a, Factory(cfg, db))
         if a.cmd == "session":
             launch(a, cfg, out)  # after the lock: the session can run for hours
         return 0
