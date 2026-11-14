@@ -85,7 +85,7 @@ def _manual_story(tid, t, s, cfg):
         ("shipped", "pending"): ("info", "🕹️ Manual: opening the pull request", "🚢 On the next tick."),
         ("shipped", "progress"): ("info", "🕹️ Manual: opening the pull request", "🚢 Pushing the branch and opening the PR."),
         ("shipped", "awaiting"): ("question", "🕹️ Manual: the PR is yours", (
-            f"Push your changes to {t.get('pr_url')} from the session ({shell}) and merge it when it is ready: Wonka "
+            f"Push your changes to {_pr_link(t)} from the session ({shell}) and merge it when it is ready: Wonka "
             f"records the merge. Conflicts, CI and change requests are yours while it is manual. {pick}")),
     }.get(s, ("info", "🕹️ Manual", f"A human works this ticket ({shell})."))
 
@@ -126,7 +126,7 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
     if s == ("shipped", "awaiting") and t.get("ci_flaky"):
         f = t["ci_flaky"]
         return "question", "🙋 Your turn: re-run the flaky CI checks", (
-            f"The builder judged the red checks flaky ({f.get('why')}). Re-run {f.get('checks')} on {t.get('pr_url')}: "
+            f"The builder judged the red checks flaky ({f.get('why')}). Re-run {f.get('checks')} on {_pr_link(t)}: "
             "if they fail again Wonka starts another CI fix round; once green, review and merge it.")
     if s == ("drafting", "awaiting") and t.get("spec_review_pending"):
         return "question", "🙋 Your turn: review the spec", (
@@ -176,7 +176,7 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
             f"Review and merge {_pr_link(t)}. Wonka sees the merge on the next tick and cleans up the worktree. "
             "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
         ("shipped", "ready"): ("success", "🎉 Shipped: nothing left to do", (
-            f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}" if t.get("pr_url")
+            f"Merged: {_pr_link(t)}.{_archive_day(t, cfg)}" if t.get("pr_url")
             else f"No code changes, nothing to merge: see 💬 Comments.{_archive_day(t, cfg)}")),
         ("wontdo", "ready"): ("failure", "🗑️ Down the chute: it will not be done", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
     }[s]

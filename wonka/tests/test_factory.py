@@ -209,7 +209,7 @@ class FactoryTest(unittest.TestCase):
 
         meta, body = self.note(tid)
         self.assertEqual((meta["status"], meta["phase"]), ("🚢 Shipped", "🍭 Ready"))
-        self.assertIn("> [!success] 🎉 Shipped: nothing left to do\n> Merged: https://github.com/acme/app/pull/7.", body)
+        self.assertIn("> [!success] 🎉 Shipped: nothing left to do\n> Merged: [PR #7](https://github.com/acme/app/pull/7).", body)
         self.assertEqual(body.count("# 🎫 "), 1, "the title heading is replaced, not stacked")
         self.assertIn("plan [[WONKA-00001-plan]] · [PR](https://github.com/acme/app/pull/7)", body)
         self.assertEqual(body.count("> [!"), 2, "one banner, one log, nothing piled up")
