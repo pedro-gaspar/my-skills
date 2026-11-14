@@ -158,8 +158,8 @@ Stop the factory loop in this session; the tickets and their state stay as they 
    found is fine.
 2. Run no tick and dispatch no agent. Background agents already running keep working: when one finishes, still
    run `wonka finished` for it as in tick step 3, and schedule nothing after. With `launcher: claude` run
-   `wonka pause` and pass on its line: the workers finish and report themselves but start nothing new, until the
-   next `wonka tick` resumes the factory.
+   `wonka pause` and pass on its line: the workers finish and report themselves but start nothing new, and the
+   `wonka timer` keeps it paused, until the next `wonka tick` someone runs resumes the factory.
 3. Reply in one line, Wonka-style: the factory is stopped, how many agents are still finishing (if any), and
    that `/loop /wonka tick` starts it again.
 

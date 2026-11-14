@@ -127,6 +127,18 @@ class LauncherTest(RepoFixture, unittest.TestCase):
         self.assertEqual(len(launcher.reap_now(self.cfg)), 1)
         self.assertEqual((self.records(), self.ticket(tid)["retries"]), ([], 1))
 
+    def test_without_proc_a_worker_is_found_with_ps(self):
+        tid, run = self.claimed()
+        worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", str(run)])
+        self.addCleanup(worker.wait)
+        self.set_pid(run, worker.pid)
+        with mock.patch.object(launcher, "PROC", self.tmp / "no-proc"):
+            self.assertEqual(launcher.reap_now(self.cfg), [])
+            worker.kill()
+            worker.wait()
+            self.assertEqual(len(launcher.reap_now(self.cfg)), 1)
+        self.assertEqual(self.records(), [])
+
     def test_two_reaps_at_once_report_a_worker_once(self):
         tid, run = self.claimed()
         self.set_pid(run, os.getpid())

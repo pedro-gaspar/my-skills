@@ -35,13 +35,14 @@ DEFAULT_CONFIG = {
     "test_lock_wait_minutes": 3,  # how long `wonka test` waits for the lock; wait plus run must fit the agents' 10-minute Bash timeout
     "session_launcher": "terminal",  # how `wonka session` opens Claude: terminal (exec claude here) or orca (an Orca tab)
     "launcher": "claude",  # who runs the agents: claude (wonka tick starts headless workers) or session (the /wonka manager)
+    "timer_minutes": 15,  # how often `wonka timer install` runs wonka tick with no Claude session
     "board_path": None,  # the wonka-board clone `wonka board` starts with `make up`
 }
 CHOICES = {"session_launcher": ("terminal", "orca"), "launcher": ("claude", "session")}
 SETTINGS = {  # wonka config <key> <value>
     "wip.triage": int, "wip.drafting": int, "wip.baking": int, "archive_after_days": int, "stale_hours": float,
     "max_review_rounds": int, "max_followup_depth": int,
-    "test_lock_wait_minutes": float,
+    "test_lock_wait_minutes": float, "timer_minutes": int,
 }
 CI_LOG_OPEN_WARNING = ("lets an agent run any program outside the sandbox through wonka ci-logs; "
                        "pin it to the log tool (e.g. beyond ci logs)")

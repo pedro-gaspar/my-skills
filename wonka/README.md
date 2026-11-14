@@ -73,7 +73,7 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
          "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka worktree *", "wonka jira-synced *", "wonka jira-created *", "wonka pause *",
          "wonka init *", "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *",
          "wonka doctor *", "wonka session *", "wonka archive *", "wonka import-notes *", "wonka sync-obsidian *",
-         "wonka board *", "wonka board-data *", "wonka drag *", "wonka answer *", "wonka reap *", "wonka worker *"
+         "wonka board *", "wonka board-data *", "wonka drag *", "wonka answer *", "wonka reap *", "wonka worker *", "wonka timer *"
        ]
      }
    }
@@ -150,7 +150,8 @@ push.
 | `wonka git <id> [--dispatch <n>] <sub> ...` | what agents use instead of git: runs in the ticket's worktree with a fixed allowlist |
 | `wonka test <id> [--dispatch <n>] -- <command> ...` | what agents use to run a project's configured test command: one run per project at a time, exit 75 when the lock stays busy |
 | `wonka ci-logs <id> --dispatch <n> <url>` | what builders use to fetch a failed CI log, only in a CI fix round and from the current dispatch: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
-| `wonka pause` | finished workers only report back and start no new job; the next `wonka tick` resumes the factory. `/wonka stop-factory` runs it |
+| `wonka pause` | finished workers only report back and start no new job; the next `wonka tick` you run resumes the factory (the timer's ticks do not). `/wonka stop-factory` runs it |
+| `wonka timer [install\|uninstall\|status]` | run `wonka tick --timer` every `timer_minutes` (default 15) with no Claude session: a systemd user timer on Linux, a launchd agent on macOS. See [Workers](#workers) |
 | `wonka reap` | record the workers whose claude has ended, one line each. Every tick does this first, so you rarely need it |
 | `wonka doctor` | check git, gh, `claude` on PATH (with `launcher: claude`), npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, the sandbox (on, with every wonka command but `test` excluded), `additionalDirectories` that would expose `~/.wonka`, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
 
@@ -172,6 +173,21 @@ still what acts on your ticks and does the Jira syncs.
 - The launches (🚀) and the finished workers are lines in the tick's `events` and in `~/.wonka/factory.log`.
 - `wonka config launcher session` goes back to the old way: the tick returns `jobs` and the `/wonka` manager
   dispatches them with the Agent tool and runs `wonka finished`.
+
+### The timer
+
+Workers move a ticket on as soon as they finish, but nothing announces your ticked checkboxes or a merged PR.
+`wonka timer install` runs `wonka tick --timer` every `timer_minutes` (default 15; reinstall after changing it), so
+the factory keeps running with no Claude session open:
+
+- Linux: a systemd user timer, `~/.config/systemd/user/wonka-tick.{service,timer}`. It runs only while you are
+  logged in, unless `loginctl enable-linger $USER`.
+- macOS: a launchd agent, `~/Library/LaunchAgents/dev.wonka.tick.plist`.
+- It keeps the `PATH` (and `WONKA_HOME`) of the shell you install it from, so `claude`, `gh` and `git` are found:
+  reinstall when they move. Its output goes to `~/.wonka/timer.log`.
+- A timer tick has no Claude, so Jira syncs and creates wait for a `/wonka tick` in a session.
+- After `/wonka stop-factory` (`wonka pause`) the timer only records finished workers; the next tick you run resumes.
+- `wonka timer uninstall` removes it; `wonka timer` shows whether it is installed.
 
 ## The floor
 

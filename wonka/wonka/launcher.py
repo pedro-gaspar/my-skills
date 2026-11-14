@@ -26,6 +26,7 @@ HOOKS_OFF = '{"disableAllHooks":true}'
 # A record gets its pid just after the tick's lock is released: until then it counts as running, for this long
 LAUNCH_GRACE = dt.timedelta(seconds=60)
 RESULT_MAX = 150
+PROC = Path("/proc")
 
 
 def runs_dir():
@@ -93,10 +94,19 @@ def alive(run, rec):
         return _age(rec["started_at"]) < LAUNCH_GRACE
     try:
         os.kill(rec["pid"], 0)
-        cmdline = Path(f"/proc/{rec['pid']}/cmdline").read_bytes()
     except OSError:
         return False
-    return os.fsencode(str(run)) in cmdline
+    return os.fsencode(str(run)) in _cmdline(rec["pid"])
+
+
+def _cmdline(pid):
+    """The process's command line, b"" once it is gone. macOS has no /proc, so ask ps there."""
+    if (PROC / "self").exists():
+        try:
+            return (PROC / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return b""
+    return subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True).stdout
 
 
 def _outcome(log):
@@ -184,11 +194,11 @@ def spawn(runs):
                     _write(run, {**_read(run), "pid": pid})
 
 
-def tick(cfg, drop_missing=False, own=None):
+def tick(cfg, drop_missing=False, own=None, resume=True):
     """One turn of the factory, as `wonka tick` and every finished worker run it. With `launcher: claude` the jobs
     are started here as workers and `jobs` comes back empty; with `session` they are returned for the manager."""
     events = reap_now(cfg, own)
-    if own is None and _resume():  # only a tick someone ran resumes a paused factory, never a worker's
+    if own is None and resume and _resume():  # only a tick someone ran resumes a paused factory
         events.append("▶️ factory resumed")
     # GitHub is read and the bases fetched before the lock is taken, so the agents' commands never wait on the network
     fetched = Factory(cfg, store.snapshot()).prefetch()
