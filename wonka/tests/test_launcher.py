@@ -166,6 +166,35 @@ class LauncherTest(RepoFixture, unittest.TestCase):
         for record in self.records():  # its worker was never spawned
             record.unlink()
 
+    def test_hard_stop_kills_every_worker_with_its_children_and_requeues_without_a_try(self):
+        tid, run = self.claimed()
+        child_pid = self.tmp / "child.pid"
+        code = ("import subprocess, sys, time; c = subprocess.Popen(['sleep', '60']); "
+                "open(sys.argv[1], 'w').write(str(c.pid)); time.sleep(60)")
+        worker = subprocess.Popen([sys.executable, "-c", code, str(child_pid), "worker", str(run)],
+                                  start_new_session=True)
+        self.addCleanup(worker.wait)
+        self.wait(lambda: child_pid.exists() and child_pid.read_text(), "the fake worker never started its child")
+        self.set_pid(run, worker.pid)
+        events = launcher.hard_stop(self.cfg)
+        self.assertEqual(worker.wait(), -9)
+        self.wait(lambda: not self.running(int(child_pid.read_text())), "the worker's child survived")
+        self.assertIn(f"{tid}: 💀 triage killed (dispatch 1)", events)
+        self.assertIn(f"{tid}: back in the queue", events)
+        self.assertEqual((self.records(), self.ticket(tid).get("retries", 0)), ([], 0))
+        self.assertNotIn("job_started_at", self.ticket(tid))
+        self.assertTrue(launcher.paused())
+
+    def test_hard_stop_with_no_worker_only_pauses(self):
+        self.assertEqual(len(launcher.hard_stop(self.cfg)), 1)
+        self.assertTrue(launcher.paused())
+
+    def running(self, pid):
+        try:
+            return Path(f"/proc/{pid}/stat").read_text().split(")")[1].split()[0] != "Z"
+        except OSError:
+            return False
+
     def test_a_stale_job_is_retried_only_when_no_worker_runs_it(self):
         tid, run = self.claimed()
         with store.state() as db:

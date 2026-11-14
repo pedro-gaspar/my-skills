@@ -176,7 +176,7 @@ def _worktree_include_checks(tickets):
 # its own gates (`wonka move`, `wonka set <id> spec_review agent`).
 AGENT_COMMANDS = ("git", "test", "ci-logs", "triage", "ask", "section", "plan", "drafted", "pr-body", "comment", "baked",
                   "resolved", "report", "add", "show", "status", "repos", "metrics", "pr-comments", "tick", "finished",
-                  "retry", "worktree", "jira-synced", "jira-created", "pause")
+                  "retry", "worktree", "jira-synced", "jira-created", "pause", "hard-stop")
 HUMAN_COMMANDS = ("init", "config", "set", "move", "block", "unblock", "doctor", "session", "archive",
                   "import-notes", "sync-obsidian", "board", "board-data", "drag", "answer", "reap", "worker", "timer")
 # Every wonka command but test runs outside Claude Code's sandbox: they write Wonka's state in ~/.wonka and the main

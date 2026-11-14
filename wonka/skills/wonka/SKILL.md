@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), stop the session's tick loop, show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|stop-factory|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | stop-factory | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), stop the session's tick loop (or hard-stop it, killing the running agents), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|stop-factory|hard-stop-factory|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | stop-factory | hard-stop-factory | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
 model: sonnet
 ---
 
@@ -162,6 +162,16 @@ Stop the factory loop in this session; the tickets and their state stay as they 
    `wonka timer` keeps it paused, until the next `wonka tick` someone runs resumes the factory.
 3. Reply in one line, Wonka-style: the factory is stopped, how many agents are still finishing (if any), and
    that `/loop /wonka tick` starts it again.
+
+## hard-stop-factory
+Stop the factory now: the loop and every running agent. The tickets keep their state.
+1. Stop this session's loop exactly as in stop-factory step 1.
+2. With `launcher: claude` (see `wonka config`), run `wonka hard-stop` and pass on its lines: it pauses the factory,
+   kills every headless worker with what it runs, and puts their jobs back in the queue without using up a try.
+   With `launcher: session`, stop each background Agent you dispatched for Wonka (TaskStop), then run `wonka retry
+   <id>` once per ticket whose agent you stopped.
+3. Run no tick and schedule nothing. Reply in one line, Wonka-style: the factory is stopped, how many agents were
+   killed, and that `/loop /wonka tick` starts it again.
 
 ## Under /loop
 Run the factory continuously with `/loop /wonka tick`. Pace yourself: when agents are running you are woken when they

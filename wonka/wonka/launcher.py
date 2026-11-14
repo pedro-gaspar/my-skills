@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -133,6 +134,40 @@ def reap(f, own=None):
             msg = f"{rec['id']}: ⚠️ {rec['agent']} ended, not recorded: {e}"
         events.append(f"{msg} · {_outcome(rec['log'])}")
         run.unlink()
+    return events
+
+
+def _worker_groups():
+    """The process groups of every worker of this factory, found by command line (ps works on Linux and macOS), so a
+    worker whose pid is not recorded yet is found too. A worker leads its own group, which holds its claude."""
+    out = subprocess.run(["ps", "-axo", "pgid=,command="], capture_output=True, text=True, check=True).stdout
+    mark = str(runs_dir())
+    return {int(line.split(None, 1)[0]) for line in out.splitlines() if mark in line and " worker " in line}
+
+
+def hard_stop(cfg):
+    """Pause the factory, kill every worker with all it runs, and put their jobs back in the queue without using up a
+    try. Workers that had already ended are reported as a reap would."""
+    _paused_flag().touch()
+    events = ["⏸️ factory paused: wonka tick resumes it"]
+    with store.state() as db:
+        f = Factory(cfg, db)
+        groups = _worker_groups()
+        for pgid in groups:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        killed = []
+        for run, rec in _records():
+            if rec["pid"] is None or rec["pid"] in groups:
+                killed.append(rec)
+                run.unlink()
+        events += [f"{rec['id']}: 💀 {short(rec['agent'])} killed (dispatch {rec['dispatch']})" for rec in killed]
+        events += [f._safe(tid, lambda k: f.retry(k, "killed by hard stop", counted=False))
+                   for tid in sorted({rec["id"] for rec in killed})]
+        events += reap(f)
+    store.log(*events)
     return events
 
 
