@@ -75,6 +75,38 @@ class BoardTest(RepoFixture, unittest.TestCase):
         self.assertFalse(note.all_answered(section))
         self.assertIn("\\- [x] Yes", section)
 
+    def changes(self, tid, *ops):
+        sec = note.HEADINGS["changes"]
+        with self.f() as f:
+            f.set_section(tid, "changes", note.CHANGES_BOX)
+            board.answer(f, tid, [{"op": "notes", "section": sec, "block": 0, "text": o} if isinstance(o, str)
+                                  else {"op": "check", "section": sec, "block": 0, "checked": True} for o in ops])
+            return note.get_section(f.read(tid)[1], "changes")
+
+    def test_notes_and_a_tick_on_request_changes_reach_the_factory(self):
+        section = self.changes(self.idea(), "Rename foo\n\nAlso fix bar", True)
+        self.assertEqual(note.requested_changes(section), (True, "Rename foo\n\nAlso fix bar"))
+
+    def test_resending_request_changes_notes_replaces_them(self):
+        tid = self.idea()
+        self.assertEqual(note.requested_changes(self.changes(tid, "first", "second")), (False, "second"))
+        section = self.changes(tid, "")
+        self.assertEqual(note.requested_changes(section), (False, ""))
+        self.assertEqual(section, note.CHANGES_BOX)
+
+    def test_a_request_changes_note_that_looks_like_a_checkbox_stays_text(self):
+        tid = self.idea()
+        section = self.changes(tid, "- [ ] not a box\n## heading", True)
+        self.assertEqual(note.requested_changes(section), (True, "\\- [ ] not a box\n\\## heading"))
+        sec = next(s for s in self.card(tid)["sections"] if s["heading"] == note.HEADINGS["changes"])
+        self.assertEqual([b["type"] for b in sec["blocks"]].count("box"), 1)
+
+    def test_notes_on_another_box_are_refused(self):
+        tid = self.idea()
+        section, block = self.start_box(tid)
+        with self.f() as f, self.assertRaisesRegex(WonkaError, "notes go under a question"):
+            board.answer(f, tid, [{"op": "notes", "section": section, "block": block, "text": "x"}])
+
     def test_editing_the_idea_updates_the_ticket(self):
         tid = self.idea()
         with self.f() as f:

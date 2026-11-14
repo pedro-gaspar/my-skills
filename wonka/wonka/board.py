@@ -96,10 +96,13 @@ def _apply(t: ticket.Ticket, op: Op) -> None:
             raise WonkaError("check needs \"checked\": true or false")
         target["checked"] = op["checked"]
     elif kind == "notes":
-        block = _block(t, op)
-        if block["type"] != "question":
-            raise WonkaError("notes go under a question")
-        block["notes"] = [_escape(line) for line in _text(op, "text").splitlines() if line.strip()]
+        s, block = _section(t, str(op.get("section"))), _block(t, op)
+        if block["type"] == "question":
+            block["notes"] = [_escape(line) for line in _text(op, "text").splitlines() if line.strip()]
+        elif s["heading"] == note.HEADINGS["changes"]:
+            _set_box_notes(s, op["block"], _text(op, "text"))
+        else:
+            raise WonkaError("notes go under a question or the 🔁 Request changes box")
     else:
         raise WonkaError(f"unknown edit {kind!r}: idea, check or notes")
 
@@ -132,6 +135,21 @@ def _text(op: Op, key: str) -> str:
     if not isinstance(op.get(key), str):
         raise WonkaError(f"{op.get('op')} needs \"{key}\" as a string")
     return op[key]
+
+
+def _set_box_notes(section: dict[str, Any], i: int, text: str) -> None:
+    """The factory reads every line under the Request changes box as the change request, so replace them all."""
+    blocks = section["blocks"]
+    end = i + 1
+    while end < len(blocks) and blocks[end]["type"] == "text":
+        end += 1
+    lines = [_escape(line) if line.strip() else "" for line in text.splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    md = "\n" + "\n".join(lines) + "\n\n" if lines else "\n"
+    blocks[i + 1:end] = [{"type": "text", "md": md}]
 
 
 def _escape(line: str) -> str:
