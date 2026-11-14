@@ -1,7 +1,7 @@
 ---
 name: wonka
-description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor.
-argument-hint: "add \"idea\" | tick | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
+description: 🎩 Run the Wonka software factory. Add golden tickets, tick the factory (move cards, dispatch the Oompa-Loompas (triage, analyst, builder, fixer) and the squirrel reviewers), stop the session's tick loop, show status, run a retro, take a ticket into a hands-on Claude session (manual), find a ticket's worktree, archive finished tickets, open the board app, change settings, check the setup, or init the Obsidian factory. Use for /wonka add|tick|stop-factory|status|archive|sync-obsidian|board|session|worktree|retro|init|config|doctor.
+argument-hint: "add \"idea\" | tick | stop-factory | status | archive | sync-obsidian | board | session <id|JIRA> | worktree <id|JIRA> | retro [since] | init --vault <path> | config [key value] | doctor"
 model: sonnet
 ---
 
@@ -147,7 +147,19 @@ Look back over the recent tickets with the inspector. Follow the steps literally
    humour is one line, never in the way. Nothing happened? Say so in one line ("🍫 All quiet on the chocolate
    river.").
 
+## stop-factory
+Stop the factory loop in this session; the tickets and their state stay as they are.
+1. If this session runs `/loop /wonka tick` in dynamic mode, call `ScheduleWakeup` with only `stop: true`, which
+   ends the loop at once and cancels the pending wakeup. If it runs on a fixed interval, find the job with
+   `CronList` whose prompt is `/wonka tick` and remove it with `CronDelete`. Do both checks when unsure; no loop
+   found is fine.
+2. Run no tick and dispatch no agent. Background agents already running keep working: when one finishes, still
+   run `wonka finished` for it as in tick step 3, and schedule nothing after.
+3. Reply in one line, Wonka-style: the factory is stopped, how many agents are still finishing (if any), and
+   that `/loop /wonka tick` starts it again.
+
 ## Under /loop
 Run the factory continuously with `/loop /wonka tick`. Pace yourself: when agents are running you are woken when they
 finish, so schedule a long fallback (~1800s). When nothing is running, wake in ~1200s so ticked checkboxes and merged
 PRs are picked up.
+After `/wonka stop-factory`, never schedule another wakeup until the user starts the loop again.

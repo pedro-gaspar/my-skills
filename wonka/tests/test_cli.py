@@ -552,6 +552,18 @@ class CliTest(unittest.TestCase):
         hint = next(l for l in text.splitlines() if l.startswith("argument-hint"))
         self.assertIn("retro", hint)
 
+    def test_skill_documents_stop_factory(self):
+        root = Path(cli.__file__).resolve().parent.parent
+        text = (root / "skills/wonka/SKILL.md").read_text()
+        section = text.split("## stop-factory", 1)[1].split("\n## ", 1)[0]
+        for want in ("ScheduleWakeup", "stop: true", "CronList", "CronDelete", "wonka finished",
+                     "/loop /wonka tick"):
+            self.assertIn(want, section)
+        head = text.split("\n---\n", 1)[0]
+        for key in ("argument-hint", "description"):
+            self.assertIn("stop-factory", next(l for l in head.splitlines() if l.startswith(key)))
+        self.assertIn("/wonka stop-factory", (root / "README.md").read_text())
+
     def test_readme_documents_retro(self):
         text = (Path(cli.__file__).resolve().parent.parent / "README.md").read_text()
         self.assertIn("/wonka retro", text)
