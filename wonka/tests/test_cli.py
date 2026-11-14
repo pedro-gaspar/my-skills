@@ -41,6 +41,22 @@ class CliTest(unittest.TestCase):
             self.assertNotIn("Traceback", err)
         self.assertFalse((self.tmp / "home").exists())
 
+    def test_docs_prints_the_readme_without_a_config(self):
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.tmp)
+        code, out, err = self.run_cli("docs")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, (Path(cli.__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8"))
+        self.assertTrue(out.startswith("# 🎩 Wonka"))
+        self.assertFalse((self.tmp / "home" / "config.json").exists())
+
+    def test_docs_missing_readme_is_a_clean_error(self):
+        with mock.patch.object(cli, "ROOT", self.tmp / "nowhere"):
+            code, out, err = self.run_cli("docs")
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read the docs", err)
+        self.assertNotIn("Traceback", err)
+
     def test_init_writes_settings_board_and_link(self):
         code, out, _ = self.run_cli("init", "--vault", str(self.tmp / "vault"), "--drafting", "2", "--baking", "3",
                                     "--archive-days", "14", "--max-review-rounds", "4")

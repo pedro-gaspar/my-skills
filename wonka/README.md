@@ -73,7 +73,7 @@ inside a repo (say `~/Work/my-skills`) and that includes the main checkout, its 
          "wonka pr-comments *", "wonka tick *", "wonka finished *", "wonka retry *", "wonka worktree *", "wonka jira-synced *", "wonka jira-created *", "wonka pause *", "wonka hard-stop *",
          "wonka init *", "wonka config *", "wonka set *", "wonka move *", "wonka block *", "wonka unblock *",
          "wonka doctor *", "wonka session *", "wonka archive *", "wonka import-notes *", "wonka sync-obsidian *",
-         "wonka board *", "wonka board-data *", "wonka drag *", "wonka answer *", "wonka reap *", "wonka worker *", "wonka timer *"
+         "wonka board *", "wonka board-data *", "wonka drag *", "wonka answer *", "wonka reap *", "wonka worker *", "wonka timer *", "wonka docs *"
        ]
      }
    }
@@ -153,6 +153,7 @@ push.
 | `wonka ci-logs <id> --dispatch <n> <url>` | what builders use to fetch a failed CI log, only in a CI fix round and from the current dispatch: runs the project's `ci_log_command` on the URL, only when it is https on one of the project's `ci_hosts` |
 | `wonka pause` | finished workers only report back and start no new job; the next `wonka tick` you run resumes the factory (the timer's ticks do not). `/wonka stop-factory` runs it |
 | `wonka hard-stop` | pause the factory, kill every headless worker (its claude and what that runs) and put their jobs back in the queue without using up a try. `/wonka hard-stop-factory` runs it. A killed builder's edits stay in its worktree for the next builder |
+| `wonka docs` | print these docs (this README) as markdown on stdout; the board app's help panel shows them. Reads only the README next to the installed code, needs no config |
 | `wonka timer [install\|uninstall\|status]` | run `wonka tick --timer` every `timer_minutes` (default 15) with no Claude session: a systemd user timer on Linux, a launchd agent on macOS. See [Workers](#workers) |
 | `wonka reap` | record the workers whose claude has ended, one line each. Every tick does this first, so you rarely need it |
 | `wonka doctor` | check git, gh, `claude` on PATH (with `launcher: claude`), npx (markdownlint), the factory folder, the config and state files (valid JSON of the right shape), Claude Code permissions, the sandbox (on, with every wonka command but `test` excluded), `additionalDirectories` that would expose `~/.wonka`, open test_commands prefixes, CI log tool allow rules that bypass the host check, `worktree_files` sources (present and gitignored in your checkout) and notes with stray ## sections |
