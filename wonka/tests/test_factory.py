@@ -6217,6 +6217,31 @@ class FactoryTest(unittest.TestCase):
         self.assertNotIn("jira_sync", self.f_ticket(tid))
         self.assertEqual(res["jira"], [])
 
+    def ship_no_code(self, tid):
+        self.synced(tid, "assign")
+        job, _ = self.bake_job(tid)
+        self.synced(tid, "start")
+        with self.f() as f:
+            f.write_comments(tid, "Found X", job["dispatch"])
+            f.baked(tid, job["dispatch"])
+        self.assertEqual(self.state(tid), ("shipped", "ready"))
+        self.finished(tid, "wonka:oompa-loompa-builder", job["dispatch"])
+
+    def test_a_no_code_ship_offers_the_done_sync_once(self):
+        tid = self.add(jira="CALC-42")
+        self.ship_no_code(tid)
+        offer = {"id": tid, "key": "CALC-42", "action": "done", "status": "Done", "assign": False}
+        self.assertEqual(self.tick()["jira"], [offer])
+        self.assertEqual(self.synced(tid, "done"), "Jira CALC-42: moved to Done")
+        self.assertEqual(self.tick()["jira"], [])
+        self.assertNotIn("jira_sync", self.f_ticket(tid))
+
+    def test_a_no_code_ship_without_a_jira_key_queues_nothing(self):
+        tid = self.add()
+        self.ship_no_code(tid)
+        self.assertNotIn("jira_sync", self.f_ticket(tid))
+        self.assertEqual(self.tick()["jira"], [])
+
     def test_killing_a_ticket_drops_its_queued_jira_sync(self):
         tid = self.add(jira="CALC-42")
         self.assertIn("jira_sync", self.f_ticket(tid))

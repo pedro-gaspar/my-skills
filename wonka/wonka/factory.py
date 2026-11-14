@@ -26,7 +26,8 @@ CI_LOG_LINES = 150  # lines of each failed Actions log that go into the plan
 CI_LOG_RUNS = 3  # Actions runs whose logs are fetched per round
 JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
 # action -> (the Jira status it moves the issue to, or None to keep it, whether the issue is assigned to the user)
-JIRA_SYNCS = {"assign": (None, True), "start": ("In Progress", False), "review": ("In Review", False)}
+JIRA_SYNCS = {"assign": (None, True), "start": ("In Progress", False), "review": ("In Review", False),
+              "done": ("Done", False)}
 # the state a ticket is left in while each agent's job is unfinished
 JOB_AGENTS = {"oompa-loompa-triage": ("triage", "pending"), "oompa-loompa-analyst": ("drafting", "progress"),
               "oompa-loompa-builder": ("baking", "progress"), "oompa-loompa-fixer": ("shipped", "progress")}
@@ -1610,12 +1611,14 @@ class Factory:
         t = self.ticket(tid)
         if git("status", "--porcelain", cwd=t["worktree"]):
             raise WonkaError("the worktree has uncommitted changes: commit them first")
-        _, body = self.read(tid)
+        meta, body = self.read(tid)
         if not (note.get_section(body, "comments") or "").strip():
             raise WonkaError(f"no commits on {t['branch']} yet: commit the work, or, for an investigation or task "
                              f"with no code changes, write its outcome first with wonka comment {tid} "
                              f"--dispatch {t.get('dispatch')} --file <path>")
         self.move(tid, machine.MERGED, "builder", "No code changes: shipped with the outcome in 💬 Comments")
+        # after the move: moving to MERGED drops queued jira syncs
+        _queue_jira_sync(t, meta, "done")
         return f"{tid}: shipped with no code changes, no PR: see 💬 Comments"
 
     def _baked_flaky(self, tid, flaky):
