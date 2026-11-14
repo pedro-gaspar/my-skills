@@ -45,6 +45,13 @@ def _reviewers(t):
     return ", ".join(t.get("reviewers") or ["architect"])
 
 
+def _pr_link(t):
+    url = t.get("pr_url")
+    if not url:
+        return "the PR"
+    return f"[PR #{url.rstrip('/').rsplit('/', 1)[-1]}]({url})"
+
+
 def _archive_day(t, cfg):
     if not t.get("entered_done_at"):
         return ""
@@ -166,7 +173,7 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
         ("shipped", "pending"): ("info", "🚢 Opening the pull request: on the next tick", "Wonka pushes the branch and opens the PR. Nothing to do."),
         ("shipped", "progress"): ("info", "🚢 Opening the pull request: pushing the branch", "Pushing the branch and opening the PR. Nothing to do."),
         ("shipped", "awaiting"): ("question", "🙋 Your turn: merge the PR", (
-            f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree. "
+            f"Review and merge {_pr_link(t)}. Wonka sees the merge on the next tick and cleans up the worktree. "
             "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
         ("shipped", "ready"): ("success", "🎉 Shipped: nothing left to do", (
             f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}" if t.get("pr_url")
