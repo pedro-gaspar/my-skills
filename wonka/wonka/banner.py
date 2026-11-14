@@ -102,18 +102,20 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
             return "warning", f"🙋 Your turn: ⛓️ blocked by {', '.join(dead)}, which is Won't do", (
                 f"{', '.join(f'[[{b}]]' for b in dead)} will never merge, so this ticket would wait forever. "
                 f"Run `wonka unblock {tid} {dead[0]}` (or `wonka unblock {tid}` to clear all), or drag this card to Wont Do.")
-        return "info", f"⛓️ Blocked by {', '.join(waiting)}", (
+        return "info", (f"⛓️ Blocked by {', '.join(waiting)}: "
+                        f"waits until {'it merges' if len(waiting) == 1 else 'they merge'}"), (
             f"Waits until {', '.join(f'[[{b}]]' for b in waiting)} merge{'s' if len(waiting) == 1 else ''}, "
             "then moves on as usual. It uses no WIP slot meanwhile.")
     if t.get("conflicts") and s == ("shipped", "progress"):
-        return "info", "A fixer Oompa-Loompa is fixing merge conflicts", (
-            f"🔧 Rebasing `{t.get('branch')}` onto {t.get('merge_ref')} in `{t.get('worktree')}`. Nothing to do.")
+        return "info", "🔧 A fixer Oompa-Loompa is fixing merge conflicts: wait for the rebase", (
+            f"Rebasing `{t.get('branch')}` onto {t.get('merge_ref')} in `{t.get('worktree')}`. Nothing to do.")
     if t.get("conflicts") and s == ("shipped", "awaiting"):
         if t.get("conflict_error"):
-            return "warning", "The PR has merge conflicts", (
-                f"⚠️ The fixer Oompa-Loompa could not start ({t['conflict_error']}). Wonka tries again on the next "
+            return "warning", "⚠️ The PR has merge conflicts: the fixer could not start", (
+                f"The fixer Oompa-Loompa could not start ({t['conflict_error']}). Wonka tries again on the next "
                 "tick; after 3 failed tries it stops and asks you to tick Retry.")
-        return "info", "The PR has merge conflicts", "🔧 A fixer Oompa-Loompa picks it up on this tick."
+        return "info", "🔧 The PR has merge conflicts: a fixer is on its way", \
+            "A fixer Oompa-Loompa picks it up on this tick."
     if s == ("shipped", "awaiting") and t.get("ci_flaky"):
         f = t["ci_flaky"]
         return "question", "🙋 Your turn: re-run the flaky CI checks", (
@@ -127,49 +129,49 @@ def _story(tid, t, meta, cfg, waiting=(), dead=()):
         ("idea", "awaiting"): ("tip", "💡 Just an idea: start it when it's ready",
                               "No agent touches it yet. Refine the 💡 Idea, then tick **Start** in 💡 Start or drag the "
                               "card to 📏 Triage. Not worth doing? Drag it to 🗑️ Wont Do."),
-        ("triage", "pending"): ("abstract", "Waiting for triage",
-                               "📏 An Oompa-Loompa sizes this ticket as soon as triage has room "
-                               f"({wip.get('triage', 2)} at a time)."),
+        ("triage", "pending"): ("abstract", "📏 Waiting for triage: an Oompa-Loompa sizes it soon",
+                               "It starts as soon as triage has room "
+                               f"({wip.get('triage', 2)} at a time). Nothing to do."),
         ("triage", "awaiting"): ("question", "🙋 Your turn: approve it", (
             f"The triage Oompa-Loompa sized it **{size}**. Tick **Approve** and answer every question (⭐ is the recommendation) "
             "to send it to Drafting." if size not in machine.AUTO_READY else
             "The triage Oompa-Loompa needs answers first: tick one option per question (⭐ is the recommendation).")),
-        ("triage", "ready"): ("info", "Ready for the Inventing Room",
-                            f"🧪 The analyst picks it up as soon as Drafting has room ({wip['drafting']} at a time)."),
-        ("drafting", "pending"): ("info", "Next in line for the analyst", "🧪 Drafting starts on the next tick."),
-        ("drafting", "progress"): ("info", "The analyst is drafting",
-                                   "🧪 Studying the code and writing the 📜 Spec and the build plan. Nothing to do."),
+        ("triage", "ready"): ("info", "🧪 Ready for the Inventing Room: the analyst picks it up next",
+                            f"Drafting starts as soon as it has room ({wip['drafting']} at a time). Nothing to do."),
+        ("drafting", "pending"): ("info", "🧪 Next in line for the analyst: drafting starts on the next tick", "Nothing to do."),
+        ("drafting", "progress"): ("info", "🧪 The analyst is drafting: wait for the spec",
+                                   "Studying the code and writing the 📜 Spec and the build plan. Nothing to do."),
         ("drafting", "awaiting"): ("question", "🙋 Your turn: the analyst has questions", (
             "Tick one option per question in ❓ Questions (⭐ is the recommendation). Write under a question to add "
             "detail. Drafting resumes once every question has a tick.")),
-        ("planned", "pending"): ("info", "Spec done, waiting for an oven",
-                               f"🍫 Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
-        ("baking", "pending"): ("info", "Queued for baking", (
-            f"🍫 A fix round after {_round(t, cfg)}." if t.get("review_round") else
-            "🍫 A fix round for the changes you requested and the failing CI checks on the PR."
+        ("planned", "pending"): ("info", "🍫 Spec done: waiting for an oven",
+                               f"Baking starts when a builder Oompa-Loompa is free ({wip['baking']} at a time)."),
+        ("baking", "pending"): ("info", "🍫 Queued for baking: a builder starts soon", (
+            f"A fix round after {_round(t, cfg)}." if t.get("review_round") else
+            "A fix round for the changes you requested and the failing CI checks on the PR."
             if t.get("fixing_changes") and t.get("fixing_ci") else
-            "🍫 A fix round for the changes you requested on the PR." if t.get("fixing_changes") else
-            "🍫 A fix round for the failing CI checks on the PR." if t.get("fixing_ci") else
-            "🍫 Baking starts on the next tick.")),
-        ("baking", "progress"): ("info", "A builder Oompa-Loompa is baking",
-                                 f"🍫 Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),
-        ("baking", "ready"): ("info", "Baked", "🐿️ Off to the squirrels."),
-        ("reviewing", "pending"): ("info", "Waiting for the squirrels", f"🐿️ Squirrels: {_reviewers(t)}."),
-        ("reviewing", "progress"): ("info", "The squirrels are testing every nut",
-                                    f"🐿️ {_reviewers(t)} ({_round(t, cfg)}). Nothing to do."),
+            "A fix round for the changes you requested on the PR." if t.get("fixing_changes") else
+            "A fix round for the failing CI checks on the PR." if t.get("fixing_ci") else
+            "Baking starts on the next tick.")),
+        ("baking", "progress"): ("info", "🍫 A builder Oompa-Loompa is baking: wait for the squirrels",
+                                 f"Building in `{t.get('worktree')}` on `{t.get('branch')}`. Nothing to do."),
+        ("baking", "ready"): ("info", "🍫 Baked: off to the squirrels", "The squirrels review it on the next tick."),
+        ("reviewing", "pending"): ("info", "🐿️ Waiting for the squirrels: the review starts soon", f"Squirrels: {_reviewers(t)}."),
+        ("reviewing", "progress"): ("info", "🐿️ The squirrels are testing every nut: wait for their verdict",
+                                    f"{_reviewers(t)} ({_round(t, cfg)}). Nothing to do."),
         ("reviewing", "awaiting"): ("question", "🙋 Your turn: the squirrels have questions", (
             f"Tick one option per question in 🐿️ Review Questions ({_round(t, cfg)}). Then it goes back to baking, "
             "back to drafting, or is closed, as you choose.")),
-        ("reviewing", "ready"): ("success", "A good nut", "🚢 Off to ship."),
-        ("shipped", "pending"): ("info", "Opening the pull request", "🚢 On the next tick."),
-        ("shipped", "progress"): ("info", "Opening the pull request", "🚢 Pushing the branch and opening the PR."),
+        ("reviewing", "ready"): ("success", "🥜 A good nut: off to ship", "The pull request opens on the next tick."),
+        ("shipped", "pending"): ("info", "🚢 Opening the pull request: on the next tick", "Wonka pushes the branch and opens the PR. Nothing to do."),
+        ("shipped", "progress"): ("info", "🚢 Opening the pull request: pushing the branch", "Pushing the branch and opening the PR. Nothing to do."),
         ("shipped", "awaiting"): ("question", "🙋 Your turn: merge the PR", (
             f"Review and merge {t.get('pr_url')}. Wonka sees the merge on the next tick and cleans up the worktree. "
             "Want changes? Write them under 🔁 Request changes (PR review comments are read too) and tick it.")),
-        ("shipped", "ready"): ("success", "Shipped 🎉", (
+        ("shipped", "ready"): ("success", "🎉 Shipped: nothing left to do", (
             f"Merged: {t.get('pr_url')}.{_archive_day(t, cfg)}" if t.get("pr_url")
             else f"No code changes, nothing to merge: see 💬 Comments.{_archive_day(t, cfg)}")),
-        ("wontdo", "ready"): ("failure", "Down the chute 🗑️", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
+        ("wontdo", "ready"): ("failure", "🗑️ Down the chute: it will not be done", f"{_last_why(t) or 'Will not be done.'}{_archive_day(t, cfg)}"),
     }[s]
 
 
