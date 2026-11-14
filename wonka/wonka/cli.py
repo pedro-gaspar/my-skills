@@ -330,6 +330,8 @@ def run_floor(a, cfg):
         print("\n".join(launcher.reap_now(cfg)) or "Nothing to reap: every worker is still running")
     elif a.cmd == "pause":
         print(launcher.pause())
+    elif a.cmd == "hard-stop":
+        print("\n".join(launcher.hard_stop(cfg)))
     elif a.timer and launcher.paused():  # stop-factory paused it: only a tick someone runs resumes it
         print("\n".join(launcher.reap_now(cfg) + ["⏸️ factory paused: wonka tick resumes it"]))
     else:
@@ -383,7 +385,7 @@ def _key(value, table):
 
 FILE = "read the markdown from this file instead of stdin"
 DISPATCH = "the dispatch number from the job JSON (lets the factory ignore an agent whose job was re-dispatched)"
-FLOOR = ("tick", "reap", "worker", "pause")
+FLOOR = ("tick", "reap", "worker", "pause", "hard-stop")
 # read a snapshot of the state, so they never wait for a long tick
 READ_ONLY = ("status", "show", "board-data", "repos", "metrics", "pr-comments", "worktree")
 
@@ -543,6 +545,8 @@ def parser():
     s = sub.add_parser("timer", help="run wonka tick every timer_minutes with no Claude session (systemd on Linux, "
                                      "launchd on macOS)")
     s.add_argument("action", nargs="?", default="status", choices=("install", "uninstall", "status"))
+    sub.add_parser("hard-stop", help="manager: pause, kill every headless worker and put their jobs back in the queue "
+                                     "(no try used up)")
     sub.add_parser("pause", help="manager: finished workers only report back and start nothing; the next wonka tick "
                                  "resumes")
     sub.add_parser("reap", help="record the workers whose claude has ended (every tick does this first)")

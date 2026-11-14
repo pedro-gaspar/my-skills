@@ -3053,8 +3053,9 @@ class Factory:
             return f"{tid}: ⚠️ could not {what}, stuck: {err}"
         return f"{tid}: ⚠️ could not {what} (try {retries}/{MAX_RETRIES}), retried next tick: {err}"
 
-    def retry(self, tid, why="the last job did not finish", final=False):
-        """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help)."""
+    def retry(self, tid, why="the last job did not finish", final=False, counted=True):
+        """Put the job back in the queue, or stuck after MAX_RETRIES (at once when `final`: retrying cannot help).
+        An uncounted retry (a job a human stopped) never uses up a try."""
         t, s = self.ticket(tid), self.state(tid)
         if s[0] == "idea":
             raise WonkaError(f"{tid} is an Idea: no job runs for it")
@@ -3074,6 +3075,8 @@ class Factory:
             self.move(tid, (s[0], "pending"), "wonka",
                       f"Stuck: {why}" if final else f"Retry {retries}/{MAX_RETRIES}: {why}")
         t.pop("job_started_at", None)
+        if not counted:
+            return f"{tid}: back in the queue"
         retries, stuck = self._count_failure(tid, why, final=final)
         if stuck:
             return f"{tid}: stuck, needs a human" if final else f"{tid}: stuck after {retries} tries"
